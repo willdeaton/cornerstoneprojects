@@ -23,6 +23,8 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, SQLite
 - **Users & Auth** — email/password login, sign out, and user management
   (add users, set roles, reset passwords, deactivate). Roles: **admin**,
   **manager**, **worker**.
+- **Settings** — upload a company logo to replace the default across the
+  sign-in screen and sidebar (admins & managers).
 
 ## Getting started
 
@@ -52,11 +54,31 @@ npm start
 ```
 
 Runs as a normal Node server, so it can be deployed on any Node host (Railway,
-Render, Fly.io, a VPS, etc.). Because it uses a local SQLite file, deploy it
-somewhere with **persistent disk** — serverless platforms (e.g. Vercel) reset
-the filesystem, so for those, point it at a hosted database instead.
+Render, Fly.io, a VPS, etc.).
 
-To start fresh, stop the app and delete `data/tracker.db*`.
+### Docker / Railway
+
+A `Dockerfile` is included and is the recommended way to deploy. It installs a
+full build toolchain (python3/make/g++) so the native `better-sqlite3` module
+compiles reliably — the usual reason a plain buildpack (Nixpacks) build fails.
+
+Railway auto-detects the `Dockerfile` and uses it. The app listens on `$PORT`
+automatically.
+
+**Important — persist the database:** the SQLite file lives at `/app/data`.
+Container filesystems are wiped on every deploy, so add a **persistent volume**
+mounted at `/app/data` (Railway → service → *Variables/Settings → Volumes →
+mount path `/app/data`*). Without it, quotes/projects/time entries reset on each
+deploy. Serverless platforms (e.g. Vercel) can't keep a SQLite file at all — use
+a hosted database there instead.
+
+```bash
+# build & run locally with Docker
+docker build -t cornerstone .
+docker run -p 3000:3000 -v cornerstone-data:/app/data cornerstone
+```
+
+To start fresh, stop the app and delete `data/tracker.db*` (or the volume).
 
 ## Excel upload format
 

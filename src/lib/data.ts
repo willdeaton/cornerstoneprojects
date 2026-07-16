@@ -343,6 +343,29 @@ export function listActiveWorkers(): UserRow[] {
     .all() as UserRow[];
 }
 
+/* --------------------------------------------------------------- Settings */
+
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string | null }
+    | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string | null): void {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    )
+    .run(key, value);
+}
+
+/** The custom company logo as a data URL, or null if none uploaded. */
+export function getLogo(): string | null {
+  return getSetting('logo');
+}
+
 export function emailExists(email: string): boolean {
   const row = getDb()
     .prepare('SELECT 1 FROM users WHERE email = ?')

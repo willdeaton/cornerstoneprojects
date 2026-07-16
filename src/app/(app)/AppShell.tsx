@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { logoutAction } from '@/app/actions/auth';
 
@@ -22,16 +21,24 @@ const NAV = [
 export function AppShell({
   user,
   clockedInTo,
+  logoSrc,
   children,
 }: {
   user: NavUser;
   clockedInTo: { project: string; customer: string } | null;
+  logoSrc: string;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const canManageUsers = user.role === 'admin' || user.role === 'manager';
-  const nav = canManageUsers ? [...NAV, { href: '/users', label: 'Users', icon: UsersIcon }] : NAV;
+  const nav = canManageUsers
+    ? [
+        ...NAV,
+        { href: '/users', label: 'Users', icon: UsersIcon },
+        { href: '/settings', label: 'Settings', icon: SettingsIcon },
+      ]
+    : NAV;
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
@@ -60,7 +67,8 @@ export function AppShell({
       {/* Sidebar (desktop) */}
       <aside className="hidden w-64 shrink-0 flex-col bg-brand-ink p-4 lg:flex">
         <div className="mb-6 px-2 pt-2">
-          <Image src="/logo-onblack.png" alt="Cornerstone" width={200} height={47} priority />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={logoSrc} alt="Cornerstone" className="h-12 w-auto max-w-[200px] object-contain" />
         </div>
         <NavLinks />
         <div className="mt-auto space-y-3 pt-4">
@@ -81,7 +89,8 @@ export function AppShell({
 
       {/* Mobile top bar */}
       <header className="flex items-center justify-between bg-brand-ink px-4 py-3 lg:hidden">
-        <Image src="/logo-onblack.png" alt="Cornerstone" width={150} height={35} />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={logoSrc} alt="Cornerstone" className="h-9 w-auto max-w-[150px] object-contain" />
         <button
           onClick={() => setOpen((v) => !v)}
           className="rounded-lg p-2 text-white hover:bg-white/10"
@@ -184,6 +193,14 @@ function UsersIcon({ active }: { active?: boolean }) {
     <svg {...base(active)}>
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
       <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+function SettingsIcon({ active }: { active?: boolean }) {
+  return (
+    <svg {...base(active)}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }
