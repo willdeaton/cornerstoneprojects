@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  /* Brand type is Copperplate Gothic; fall back gracefully and lean on uppercase tracking. */
+  --font-display: 'Copperplate', 'Copperplate Gothic Bold', 'Copperplate Gothic', 'Big Caslon',
+    'Georgia', serif;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: #f4f6f4;
+  color: #1f2421;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .brand-heading {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .card {
+    @apply rounded-xl border border-black/5 bg-white shadow-card;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-brand-green text-brand-ink hover:bg-brand-green-dark hover:text-white;
+  }
+  .btn-secondary {
+    @apply btn border border-black/10 bg-white text-brand-ink hover:bg-black/5;
+  }
+  .btn-danger {
+    @apply btn border border-red-200 bg-white text-red-600 hover:bg-red-50;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-green focus:ring-2 focus:ring-brand-green/30;
+  }
+  .label {
+    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-brand-gray;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+}
