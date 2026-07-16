@@ -11,7 +11,7 @@ export default async function SettingsPage() {
   if (!me) redirect('/login');
   if (me.role !== 'admin' && me.role !== 'manager') redirect('/dashboard');
 
-  const logo = getLogo();
+  const logo = await getLogo();
 
   return (
     <div>

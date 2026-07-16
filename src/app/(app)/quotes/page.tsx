@@ -23,7 +23,7 @@ export default async function QuotesPage({
 }) {
   const { status } = await searchParams;
   const filter = (status ?? 'open') as string;
-  const quotes = listQuotes(filter === 'all' ? undefined : (filter as QuoteStatus));
+  const quotes = await listQuotes(filter === 'all' ? undefined : (filter as QuoteStatus));
   const total = quotes.reduce((s, q) => s + q.bid_value, 0);
 
   return (
@@ -64,6 +64,7 @@ export default async function QuotesPage({
             <table className="w-full min-w-[720px] text-sm">
               <thead>
                 <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
+                  <th className="px-4 py-3 font-semibold">Quote #</th>
                   <th className="px-4 py-3 font-semibold">Customer / Project</th>
                   <th className="px-4 py-3 font-semibold">Category</th>
                   <th className="px-4 py-3 font-semibold">Received</th>
@@ -75,6 +76,9 @@ export default async function QuotesPage({
               <tbody>
                 {quotes.map((q) => (
                   <tr key={q.id} className="border-b border-black/5 last:border-0 hover:bg-black/[0.015]">
+                    <td className="px-4 py-3 font-mono text-xs text-brand-gray">
+                      {q.quote_number ?? '—'}
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-semibold text-brand-ink">{q.customer}</p>
                       {q.project_name && <p className="text-xs text-brand-gray">{q.project_name}</p>}

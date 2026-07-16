@@ -19,7 +19,7 @@ export default async function UsersPage() {
   if (!me) redirect('/login');
   if (me.role !== 'admin' && me.role !== 'manager') redirect('/dashboard');
 
-  const users = listUsers();
+  const users = await listUsers();
 
   return (
     <div>

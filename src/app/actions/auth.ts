@@ -13,7 +13,7 @@ export async function loginAction(_prev: LoginState, formData: FormData): Promis
   if (!email || !password) {
     return { error: 'Enter your email and password.' };
   }
-  const user = authenticate(email, password);
+  const user = await authenticate(email, password);
   if (!user) {
     return { error: 'Incorrect email or password.' };
   }

@@ -1,102 +1,158 @@
-import Database from 'better-sqlite3';
-import path from 'node:path';
-import fs from 'node:fs';
+import 'server-only';
+import { Pool, types } from 'pg';
 import { ensureSeed } from './seed';
 
-// Cache the connection across hot-reloads in dev.
-const g = globalThis as unknown as { __csdb?: Database.Database };
+/*
+ * Postgres data layer.
+ *
+ * Connection string comes from DATABASE_URL. In local dev it falls back to a
+ * localhost Postgres so `npm run dev` works without extra setup. On hosted
+ * platforms (Railway, Render, Supabase, Neon, …) set DATABASE_URL and the
+ * app will use SSL automatically.
+ */
 
-function createConnection(): Database.Database {
-  const dataDir = path.join(process.cwd(), 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-  const db = new Database(path.join(dataDir, 'tracker.db'));
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  migrate(db);
-  ensureSeed(db);
-  return db;
+const DEFAULT_URL = 'postgresql://postgres:postgres@localhost:5432/cornerstone';
+
+// Keep dates/timestamps as strings so the existing string-based types and the
+// formatters in ./format.ts keep working unchanged.
+//   1082 = date               -> raw 'YYYY-MM-DD'
+//   1184 = timestamptz        -> ISO 8601 string ('…T…Z')
+//   20   = int8 / bigint      -> number (COUNT(*) etc. otherwise arrive as text)
+types.setTypeParser(1082, (v) => v);
+types.setTypeParser(1184, (v) => new Date(v).toISOString());
+types.setTypeParser(20, (v) => parseInt(v, 10));
+
+const g = globalThis as unknown as { __cspg?: Pool; __cspgInit?: Promise<void> };
+
+function needsSsl(url: string): boolean {
+  if (process.env.PGSSL === 'false') return false;
+  if (/sslmode=disable/.test(url)) return false;
+  // Local connections don't use SSL; hosted ones generally do.
+  return !/localhost|127\.0\.0\.1/.test(url) || process.env.PGSSL === 'true';
 }
 
-export function getDb(): Database.Database {
-  if (!g.__csdb) {
-    g.__csdb = createConnection();
+function createPool(): Pool {
+  const url = process.env.DATABASE_URL || DEFAULT_URL;
+  return new Pool({
+    connectionString: url,
+    ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined,
+    max: 10,
+  });
+}
+
+/** Get the shared pool, running migrations + seed exactly once per process. */
+export async function getDb(): Promise<Pool> {
+  if (!g.__cspg) {
+    const pool = createPool();
+    g.__cspg = pool;
+    g.__cspgInit = (async () => {
+      try {
+        await migrate(pool);
+        await ensureSeed(pool);
+      } catch (err) {
+        // If init fails (e.g. the DB wasn't reachable yet), reset so the next
+        // call retries instead of caching a permanently-rejected promise.
+        g.__cspg = undefined;
+        g.__cspgInit = undefined;
+        await pool.end().catch(() => {});
+        throw err;
+      }
+    })();
   }
-  return g.__csdb;
+  await g.__cspgInit;
+  return g.__cspg!;
 }
 
-function migrate(db: Database.Database) {
-  db.exec(`
+async function migrate(pool: Pool) {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      id            SERIAL PRIMARY KEY,
       name          TEXT NOT NULL,
       email         TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role          TEXT NOT NULL DEFAULT 'worker' CHECK (role IN ('admin','manager','worker')),
       active        INTEGER NOT NULL DEFAULT 1,
-      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
       token      TEXT PRIMARY KEY,
       user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      expires_at TEXT NOT NULL
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS quotes (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      id            SERIAL PRIMARY KEY,
+      quote_number  TEXT,
       customer      TEXT NOT NULL,
       project_name  TEXT,
       category      TEXT,
-      bid_value     REAL NOT NULL DEFAULT 0,
+      bid_value     DOUBLE PRECISION NOT NULL DEFAULT 0,
       status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','sold','lost')),
-      date_received TEXT,
-      week_of       TEXT,
+      date_received DATE,
+      week_of       DATE,
       source        TEXT NOT NULL DEFAULT 'manual',
       notes         TEXT,
-      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS projects (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      quote_id    INTEGER REFERENCES quotes(id) ON DELETE SET NULL,
-      customer    TEXT NOT NULL,
-      name        TEXT NOT NULL,
-      category    TEXT,
-      value       REAL NOT NULL DEFAULT 0,
-      status      TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','completed')),
-      progress    INTEGER NOT NULL DEFAULT 0,
-      location    TEXT,
-      start_date  TEXT,
-      due_date    TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      id              SERIAL PRIMARY KEY,
+      quote_id        INTEGER REFERENCES quotes(id) ON DELETE SET NULL,
+      quote_number    TEXT,
+      customer        TEXT NOT NULL,
+      name            TEXT NOT NULL,
+      category        TEXT,
+      value           DOUBLE PRECISION NOT NULL DEFAULT 0,
+      status          TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','completed')),
+      progress        INTEGER NOT NULL DEFAULT 0,
+      location        TEXT,
+      start_date      DATE,
+      end_date        DATE,
+      due_date        DATE,
+      invoice_numbers TEXT,
+      invoice_notes   TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS notes (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      id          SERIAL PRIMARY KEY,
       project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
       author_name TEXT NOT NULL,
       body        TEXT NOT NULL,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS time_entries (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      id          SERIAL PRIMARY KEY,
       project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      clock_in    TEXT NOT NULL,
-      clock_out   TEXT,
+      clock_in    TIMESTAMPTZ NOT NULL,
+      clock_out   TIMESTAMPTZ,
       note        TEXT,
-      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS project_files (
+      id            SERIAL PRIMARY KEY,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      filename      TEXT NOT NULL,
+      mime          TEXT,
+      size          INTEGER NOT NULL DEFAULT 0,
+      data          TEXT NOT NULL,
+      uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploader_name TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS settings (
       key        TEXT PRIMARY KEY,
       value      TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
@@ -104,5 +160,6 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id);
     CREATE INDEX IF NOT EXISTS idx_time_project ON time_entries(project_id);
     CREATE INDEX IF NOT EXISTS idx_time_user ON time_entries(user_id);
+    CREATE INDEX IF NOT EXISTS idx_files_project ON project_files(project_id);
   `);
 }

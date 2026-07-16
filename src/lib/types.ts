@@ -3,6 +3,7 @@ export type ProjectStatus = 'not_started' | 'in_progress' | 'completed';
 
 export interface Quote {
   id: number;
+  quote_number: string | null;
   customer: string;
   project_name: string | null;
   category: string | null;
@@ -19,6 +20,7 @@ export interface Quote {
 export interface Project {
   id: number;
   quote_id: number | null;
+  quote_number: string | null;
   customer: string;
   name: string;
   category: string | null;
@@ -27,9 +29,24 @@ export interface Project {
   progress: number;
   location: string | null;
   start_date: string | null;
+  end_date: string | null;
   due_date: string | null;
+  invoice_numbers: string | null;
+  invoice_notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectFile {
+  id: number;
+  project_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+  created_at: string;
+  data?: string;
 }
 
 export interface Note {

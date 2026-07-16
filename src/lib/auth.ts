@@ -27,11 +27,12 @@ export function verifyPassword(plain: string, hash: string): boolean {
 }
 
 /** Validate credentials; returns the user row (without hash) or null. */
-export function authenticate(email: string, password: string): User | null {
-  const db = getDb();
-  const row = db
-    .prepare('SELECT * FROM users WHERE email = ? AND active = 1')
-    .get(email.trim().toLowerCase()) as (User & { password_hash: string }) | undefined;
+export async function authenticate(email: string, password: string): Promise<User | null> {
+  const db = await getDb();
+  const { rows } = await db.query('SELECT * FROM users WHERE email = $1 AND active = 1', [
+    email.trim().toLowerCase(),
+  ]);
+  const row = rows[0] as (User & { password_hash: string }) | undefined;
   if (!row) return null;
   if (!verifyPassword(password, row.password_hash)) return null;
   const { password_hash, ...user } = row;
@@ -40,12 +41,14 @@ export function authenticate(email: string, password: string): User | null {
 
 /** Create a session row and set the cookie. */
 export async function createSession(userId: number): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const token = randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5);
-  db.prepare(
-    "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)"
-  ).run(token, userId, expires.toISOString());
+  await db.query('INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)', [
+    token,
+    userId,
+    expires.toISOString(),
+  ]);
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -60,7 +63,8 @@ export async function destroySession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (token) {
-    getDb().prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    const db = await getDb();
+    await db.query('DELETE FROM sessions WHERE token = $1', [token]);
     jar.delete(SESSION_COOKIE);
   }
 }
@@ -70,13 +74,12 @@ export async function getCurrentUser(): Promise<User | null> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT u.id, u.name, u.email, u.role, u.active, u.created_at
-       FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token = ? AND s.expires_at > datetime('now') AND u.active = 1`
-    )
-    .get(token) as User | undefined;
-  return row ?? null;
+  const db = await getDb();
+  const { rows } = await db.query(
+    `SELECT u.id, u.name, u.email, u.role, u.active, u.created_at
+     FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token = $1 AND s.expires_at > now() AND u.active = 1`,
+    [token]
+  );
+  return (rows[0] as User) ?? null;
 }

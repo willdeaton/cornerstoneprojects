@@ -7,8 +7,8 @@ export default async function AuthedLayout({ children }: { children: React.React
   const user = await getCurrentUser();
   if (!user) redirect('/login');
 
-  const active = activeEntry(user.id);
-  const logoSrc = getLogo() ?? '/logo-onblack.png';
+  const active = await activeEntry(user.id);
+  const logoSrc = (await getLogo()) ?? '/logo-onblack.png';
 
   return (
     <AppShell

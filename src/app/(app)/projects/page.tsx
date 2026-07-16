@@ -22,12 +22,15 @@ export default async function ProjectsPage({
 }) {
   const { status } = await searchParams;
   const filter = status ?? 'active';
-  let projects = listProjects(
+  let projects = await listProjects(
     filter === 'all' || filter === 'active' ? undefined : (filter as ProjectStatus)
   );
   if (filter === 'active') projects = projects.filter((p) => p.status !== 'completed');
 
   const total = projects.reduce((s, p) => s + p.value, 0);
+  const hoursById = new Map(
+    await Promise.all(projects.map(async (p) => [p.id, await projectHours(p.id)] as const))
+  );
 
   return (
     <div>
@@ -63,7 +66,7 @@ export default async function ProjectsPage({
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {projects.map((p) => {
-            const hrs = projectHours(p.id);
+            const hrs = hoursById.get(p.id) ?? 0;
             return (
               <Link
                 key={p.id}

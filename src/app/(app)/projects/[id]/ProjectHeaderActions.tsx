@@ -40,6 +40,16 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
 
       <Modal open={open} onClose={() => setOpen(false)} title="Edit Project">
         <form action={save} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Quote #</label>
+              <input name="quote_number" className="input" defaultValue={project.quote_number ?? ''} placeholder="e.g. Q-2601" />
+            </div>
+            <div>
+              <label className="label">Contract Value</label>
+              <input name="value" className="input" defaultValue={project.value} inputMode="decimal" />
+            </div>
+          </div>
           <div>
             <label className="label">Project Name</label>
             <input name="name" className="input" defaultValue={project.name} />
@@ -50,23 +60,31 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
               <input name="category" className="input" defaultValue={project.category ?? ''} />
             </div>
             <div>
-              <label className="label">Contract Value</label>
-              <input name="value" className="input" defaultValue={project.value} inputMode="decimal" />
+              <label className="label">Location</label>
+              <input name="location" className="input" defaultValue={project.location ?? ''} />
             </div>
           </div>
-          <div>
-            <label className="label">Location</label>
-            <input name="location" className="input" defaultValue={project.location ?? ''} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="label">Start Date</label>
               <input name="start_date" type="date" className="input" defaultValue={project.start_date ?? ''} />
             </div>
             <div>
+              <label className="label">End Date</label>
+              <input name="end_date" type="date" className="input" defaultValue={project.end_date ?? ''} />
+            </div>
+            <div>
               <label className="label">Due Date</label>
               <input name="due_date" type="date" className="input" defaultValue={project.due_date ?? ''} />
             </div>
+          </div>
+          <div>
+            <label className="label">Invoice Number(s)</label>
+            <input name="invoice_numbers" className="input" defaultValue={project.invoice_numbers ?? ''} placeholder="e.g. INV-1042, INV-1043" />
+          </div>
+          <div>
+            <label className="label">Invoice Notes</label>
+            <textarea name="invoice_notes" className="input min-h-[70px] resize-y" defaultValue={project.invoice_notes ?? ''} placeholder="Billing terms, PO numbers, partial-invoice status…" />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" className="btn-secondary" onClick={() => setOpen(false)}>

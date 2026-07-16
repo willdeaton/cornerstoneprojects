@@ -24,14 +24,16 @@ export async function createProjectAction(formData: FormData) {
   const name = String(formData.get('name') ?? '').trim();
   const value = parseFloat(String(formData.get('value') ?? '0').replace(/[$,]/g, ''));
   if (!customer || !name) return;
-  const id = createProject({
+  const id = await createProject({
     customer,
     name,
+    quote_number: String(formData.get('quote_number') ?? '').trim() || null,
     category: String(formData.get('category') ?? '').trim() || null,
     value: isNaN(value) ? 0 : value,
     status: (String(formData.get('status') ?? 'not_started') as ProjectStatus) || 'not_started',
     location: String(formData.get('location') ?? '').trim() || null,
     start_date: String(formData.get('start_date') ?? '') || null,
+    end_date: String(formData.get('end_date') ?? '') || null,
     due_date: String(formData.get('due_date') ?? '') || null,
   });
   revalidatePath('/projects');
@@ -42,7 +44,7 @@ export async function createProjectAction(formData: FormData) {
 export async function setProjectStatusAction(id: number, status: ProjectStatus) {
   await requireUser();
   const progress = status === 'completed' ? 100 : status === 'not_started' ? 0 : undefined;
-  updateProject(id, progress != null ? { status, progress } : { status });
+  await updateProject(id, progress != null ? { status, progress } : { status });
   revalidatePath(`/projects/${id}`);
   revalidatePath('/projects');
   revalidatePath('/dashboard');
@@ -50,7 +52,7 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
 
 export async function setProjectProgressAction(id: number, progress: number) {
   await requireUser();
-  updateProject(id, { progress: Math.max(0, Math.min(100, progress)) });
+  await updateProject(id, { progress: Math.max(0, Math.min(100, progress)) });
   revalidatePath(`/projects/${id}`);
   revalidatePath('/projects');
 }
@@ -58,13 +60,17 @@ export async function setProjectProgressAction(id: number, progress: number) {
 export async function updateProjectDetailsAction(id: number, formData: FormData) {
   await requireUser();
   const value = parseFloat(String(formData.get('value') ?? '0').replace(/[$,]/g, ''));
-  updateProject(id, {
+  await updateProject(id, {
     name: String(formData.get('name') ?? '').trim() || undefined,
+    quote_number: String(formData.get('quote_number') ?? '').trim() || null,
     category: String(formData.get('category') ?? '').trim() || null,
     value: isNaN(value) ? undefined : value,
     location: String(formData.get('location') ?? '').trim() || null,
     start_date: String(formData.get('start_date') ?? '') || null,
+    end_date: String(formData.get('end_date') ?? '') || null,
     due_date: String(formData.get('due_date') ?? '') || null,
+    invoice_numbers: String(formData.get('invoice_numbers') ?? '').trim() || null,
+    invoice_notes: String(formData.get('invoice_notes') ?? '').trim() || null,
   });
   revalidatePath(`/projects/${id}`);
   revalidatePath('/projects');
@@ -73,7 +79,7 @@ export async function updateProjectDetailsAction(id: number, formData: FormData)
 
 export async function deleteProjectAction(id: number) {
   await requireUser();
-  deleteProject(id);
+  await deleteProject(id);
   revalidatePath('/projects');
   revalidatePath('/dashboard');
   redirect('/projects');
@@ -83,12 +89,12 @@ export async function addNoteAction(projectId: number, formData: FormData) {
   const user = await requireUser();
   const body = String(formData.get('body') ?? '').trim();
   if (!body) return;
-  addNote(projectId, user.id, user.name, body);
+  await addNote(projectId, user.id, user.name, body);
   revalidatePath(`/projects/${projectId}`);
 }
 
 export async function deleteNoteAction(projectId: number, noteId: number) {
   await requireUser();
-  deleteNote(noteId);
+  await deleteNote(noteId);
   revalidatePath(`/projects/${projectId}`);
 }

@@ -3,8 +3,8 @@
 A project pipeline, active-jobs, notes, and time-tracking dashboard for
 **Cornerstone Facility Solutions** (DLOM Group).
 
-Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, SQLite
-(`better-sqlite3`), SheetJS for Excel import, and Recharts for the dashboard.
+Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
+(`pg`), SheetJS for Excel import, and Recharts for the dashboard.
 
 ## Features
 
@@ -28,13 +28,19 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, SQLite
 
 ## Getting started
 
+You need a PostgreSQL database. Point the app at it with `DATABASE_URL`:
+
 ```bash
 npm install
+export DATABASE_URL="postgresql://user:password@localhost:5432/cornerstone"
 npm run dev
 ```
 
-Open http://localhost:3000. The SQLite database is created and **seeded on
-first run** at `data/tracker.db` (the `data/` folder is git-ignored).
+Open http://localhost:3000. The tables are created and **seeded on first run**.
+If `DATABASE_URL` is unset, the app falls back to
+`postgresql://postgres:postgres@localhost:5432/cornerstone` for local dev.
+Connections to non-local hosts use SSL automatically (set `PGSSL=false` to
+disable, or `PGSSL=true` to force it).
 
 ### Default logins (change these!)
 
@@ -58,27 +64,25 @@ Render, Fly.io, a VPS, etc.).
 
 ### Docker / Railway
 
-A `Dockerfile` is included and is the recommended way to deploy. It installs a
-full build toolchain (python3/make/g++) so the native `better-sqlite3` module
-compiles reliably — the usual reason a plain buildpack (Nixpacks) build fails.
+A `Dockerfile` is included and is the recommended way to deploy. Since the app
+talks to PostgreSQL through the pure-JS `pg` driver, no native build toolchain
+is needed. Railway auto-detects the `Dockerfile` and uses it; the app listens on
+`$PORT` automatically.
 
-Railway auto-detects the `Dockerfile` and uses it. The app listens on `$PORT`
-automatically.
-
-**Important — persist the database:** the SQLite file lives at `/app/data`.
-Container filesystems are wiped on every deploy, so add a **persistent volume**
-mounted at `/app/data` (Railway → service → *Variables/Settings → Volumes →
-mount path `/app/data`*). Without it, quotes/projects/time entries reset on each
-deploy. Serverless platforms (e.g. Vercel) can't keep a SQLite file at all — use
-a hosted database there instead.
+**Set `DATABASE_URL`** to your Postgres connection string (Railway → add a
+PostgreSQL plugin, then reference its `DATABASE_URL` on the app service). The
+schema is created and seeded automatically on first connection, and the data
+lives in Postgres, so it survives redeploys with no volume to manage. Serverless
+platforms (e.g. Vercel) work too, as long as `DATABASE_URL` points at a hosted
+Postgres.
 
 ```bash
-# build & run locally with Docker
+# build & run locally with Docker (pointing at a Postgres you provide)
 docker build -t cornerstone .
-docker run -p 3000:3000 -v cornerstone-data:/app/data cornerstone
+docker run -p 3000:3000 -e DATABASE_URL="postgresql://user:pass@host:5432/cornerstone" cornerstone
 ```
 
-To start fresh, stop the app and delete `data/tracker.db*` (or the volume).
+To start fresh, drop and recreate the database (or `TRUNCATE` its tables).
 
 ## Excel upload format
 
