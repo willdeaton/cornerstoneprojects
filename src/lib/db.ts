@@ -102,10 +102,12 @@ async function migrate(pool: Pool) {
       id          SERIAL PRIMARY KEY,
       quote_id    INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
       position    INTEGER NOT NULL DEFAULT 0,
+      kind        TEXT NOT NULL DEFAULT 'display',
       description TEXT NOT NULL,
       quantity    DOUBLE PRECISION NOT NULL DEFAULT 1,
       unit        TEXT,
       unit_price  DOUBLE PRECISION NOT NULL DEFAULT 0,
+      amount      DOUBLE PRECISION,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
@@ -187,6 +189,14 @@ async function migrate(pool: Pool) {
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS tax_rate          DOUBLE PRECISION NOT NULL DEFAULT 0;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS terms             TEXT;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS prepared_by       TEXT;
+
+    -- Line items split into an internal pricing worksheet ('pricing', hidden
+    -- from the customer PDF) and customer-facing lines ('display', shown on the
+    -- PDF with a description and total price). Existing rows were customer-facing,
+    -- so they default to 'display'; amount is NULL for them and falls back to
+    -- quantity * unit_price when rendering.
+    ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'display';
+    ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS amount DOUBLE PRECISION;
 
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
     CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_line_items(quote_id);

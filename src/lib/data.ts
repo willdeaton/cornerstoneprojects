@@ -6,6 +6,7 @@ import type {
   QuoteLineItem,
   QuoteWithItems,
   QuoteDocInput,
+  QuoteItemKind,
   LineItemInput,
   Project,
   Note,
@@ -122,12 +123,34 @@ export async function convertQuoteToProject(id: number): Promise<number | null> 
 
 /* ------------------------------------------------- Quote documents (line items) */
 
-/** Subtotal / tax / total for a set of line items at a given tax rate. */
+/** Total price of one line: an explicit amount if set, else quantity × unit price. */
+export function lineAmount(it: {
+  amount?: number | null;
+  quantity?: number;
+  unit_price?: number;
+}): number {
+  if (it.amount != null) return it.amount;
+  return (it.quantity || 0) * (it.unit_price || 0);
+}
+
+/**
+ * Subtotal / tax / total for a quote. Only 'display' line items — the
+ * customer-facing lines — count toward the total; 'pricing' rows are an
+ * internal worksheet and are ignored. Items with no kind are treated as
+ * display for backward compatibility with quotes created before the split.
+ */
 export function quoteTotals(
-  items: Pick<LineItemInput, 'quantity' | 'unit_price'>[],
+  items: {
+    kind?: QuoteItemKind;
+    amount?: number | null;
+    quantity?: number;
+    unit_price?: number;
+  }[],
   taxRate: number
 ): { subtotal: number; tax: number; total: number } {
-  const subtotal = items.reduce((s, it) => s + (it.quantity || 0) * (it.unit_price || 0), 0);
+  const subtotal = items
+    .filter((it) => (it.kind ?? 'display') === 'display')
+    .reduce((s, it) => s + lineAmount(it), 0);
   const tax = subtotal * (taxRate || 0);
   return { subtotal, tax, total: subtotal + tax };
 }
@@ -147,9 +170,18 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
     const it = items[i];
     if (!it.description?.trim()) continue;
     await client.query(
-      `INSERT INTO quote_line_items (quote_id, position, description, quantity, unit, unit_price)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [quoteId, i, it.description.trim(), it.quantity || 0, it.unit?.trim() || null, it.unit_price || 0]
+      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        quoteId,
+        i,
+        it.kind === 'pricing' ? 'pricing' : 'display',
+        it.description.trim(),
+        it.quantity || 0,
+        it.unit?.trim() || null,
+        it.unit_price || 0,
+        it.amount == null ? null : it.amount,
+      ]
     );
   }
 }

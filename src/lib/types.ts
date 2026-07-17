@@ -28,14 +28,23 @@ export interface Quote {
   updated_at: string;
 }
 
+/**
+ * 'pricing' rows are an internal cost worksheet — never shown on the customer
+ * PDF. 'display' rows are the customer-facing lines printed on the quote, each
+ * with a description and a total price.
+ */
+export type QuoteItemKind = 'pricing' | 'display';
+
 export interface QuoteLineItem {
   id: number;
   quote_id: number;
   position: number;
+  kind: QuoteItemKind;
   description: string;
   quantity: number;
   unit: string | null;
   unit_price: number;
+  amount: number | null;
   created_at: string;
 }
 
@@ -43,10 +52,12 @@ export type QuoteWithItems = Quote & { line_items: QuoteLineItem[] };
 
 /** A single line-item row as submitted from the quote builder. */
 export interface LineItemInput {
+  kind: QuoteItemKind;
   description: string;
   quantity: number;
   unit: string | null;
   unit_price: number;
+  amount: number | null;
 }
 
 /** Full payload submitted when creating/updating a quote document. */
