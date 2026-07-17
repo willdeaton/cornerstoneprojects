@@ -13,8 +13,8 @@ interface NavUser {
 
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: DashIcon },
-  { href: '/quotes', label: 'Open Quotes', icon: QuoteIcon },
-  { href: '/projects', label: 'Active Projects', icon: ProjectIcon },
+  { href: '/quotes', label: 'Quotes', icon: QuoteIcon },
+  { href: '/projects', label: 'Projects', icon: ProjectIcon },
   { href: '/time', label: 'Time Clock', icon: ClockIcon },
 ];
 

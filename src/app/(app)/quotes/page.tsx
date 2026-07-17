@@ -28,7 +28,7 @@ export default async function QuotesPage({
 
   return (
     <div>
-      <PageHeader title="Open Quotes" subtitle="Prospective work in the pipeline">
+      <PageHeader title="Quotes" subtitle="Prospective work in the pipeline">
         <UploadButton />
         <AddQuoteButton />
         <Link href="/quotes/new" className="btn-primary">

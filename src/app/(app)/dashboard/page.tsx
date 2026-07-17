@@ -19,7 +19,7 @@ export default async function DashboardPage() {
           View Quotes
         </Link>
         <Link href="/projects" className="btn-primary">
-          Active Projects
+          Projects
         </Link>
       </PageHeader>
 
