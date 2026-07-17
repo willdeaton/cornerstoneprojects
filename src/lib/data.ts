@@ -529,26 +529,6 @@ export async function listActiveWorkers(): Promise<UserRow[]> {
   );
 }
 
-/* --------------------------------------------------------------- Settings */
-
-export async function getSetting(key: string): Promise<string | null> {
-  const row = await one<{ value: string | null }>('SELECT value FROM settings WHERE key = $1', [key]);
-  return row?.value ?? null;
-}
-
-export async function setSetting(key: string, value: string | null): Promise<void> {
-  await q(
-    `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())
-     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now()`,
-    [key, value]
-  );
-}
-
-/** The custom company logo as a data URL, or null if none uploaded. */
-export async function getLogo(): Promise<string | null> {
-  return getSetting('logo');
-}
-
 export async function emailExists(email: string): Promise<boolean> {
   const row = await one('SELECT 1 FROM users WHERE email = $1', [email.trim().toLowerCase()]);
   return !!row;
