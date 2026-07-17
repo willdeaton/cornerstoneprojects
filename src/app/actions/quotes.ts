@@ -115,26 +115,34 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
 }
 
 export interface ParsedQuote {
+  quote_number: string | null;
   customer: string;
   project_name: string | null;
   category: string | null;
   bid_value: number;
+  date_received: string | null;
+  notes: string | null;
 }
 
 /** Bulk-insert quotes parsed from an uploaded spreadsheet. */
 export async function importQuotesAction(rows: ParsedQuote[]) {
   await requireUser();
-  const weekOf = new Date().toISOString().slice(0, 10);
+  const thisWeek = new Date().toISOString().slice(0, 10);
   let imported = 0;
   for (const r of rows) {
     if (!r.customer) continue;
+    // Honor a date from the sheet when present; otherwise fall back to today
+    // so the quote still lands in the current week's pipeline.
+    const dateReceived = r.date_received || thisWeek;
     await createQuote({
+      quote_number: r.quote_number,
       customer: r.customer,
       project_name: r.project_name,
       category: r.category,
       bid_value: r.bid_value || 0,
-      date_received: weekOf,
-      week_of: weekOf,
+      date_received: dateReceived,
+      week_of: dateReceived,
+      notes: r.notes,
       source: 'import',
     });
     imported++;

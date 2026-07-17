@@ -5,25 +5,37 @@ import { getCurrentUser } from '@/lib/auth';
 export const runtime = 'nodejs';
 
 const COLUMN_HINTS: Record<string, string[]> = {
+  quote_number: ['quote number', 'quote #', 'quote no', 'proposal number', 'proposal #', 'proposal no', 'number', 'quote id', 'ref'],
   customer: ['customer', 'client', 'account', 'company', 'name of customer'],
   project_name: ['project', 'description', 'scope', 'job', 'work', 'proposal'],
   category: ['category', 'type', 'trade', 'division', 'service'],
   bid_value: ['bid', 'value', 'amount', 'total', 'price', 'quote', 'contract', 'estimate'],
+  date_received: ['date received', 'received', 'date', 'submitted', 'week of', 'quoted'],
+  notes: ['notes', 'note', 'comment', 'remarks', 'detail'],
 };
+
+// Fields checked first so a generic hint (e.g. "quote", "date") doesn't get
+// claimed by a broader field before its specific column is matched.
+const DETECT_ORDER = ['quote_number', 'date_received', 'customer', 'category', 'bid_value', 'project_name', 'notes'];
 
 function detect(headers: string[]): Record<string, string | null> {
   const map: Record<string, string | null> = {
+    quote_number: null,
     customer: null,
     project_name: null,
     category: null,
     bid_value: null,
+    date_received: null,
+    notes: null,
   };
   const lc = headers.map((h) => h.toLowerCase().trim());
-  for (const field of Object.keys(COLUMN_HINTS)) {
+  const taken = new Set<number>();
+  for (const field of DETECT_ORDER) {
     for (const hint of COLUMN_HINTS[field]) {
-      const idx = lc.findIndex((h) => h.includes(hint));
+      const idx = lc.findIndex((h, i) => !taken.has(i) && h.includes(hint));
       if (idx !== -1) {
         map[field] = headers[idx];
+        taken.add(idx);
         break;
       }
     }
@@ -38,6 +50,20 @@ function toNumber(v: unknown): number {
   return isNaN(n) ? 0 : n;
 }
 
+/** Coerce a cell into an ISO date string (YYYY-MM-DD), or null if unusable. */
+function toDate(v: unknown): string | null {
+  if (v == null || v === '') return null;
+  // xlsx returns real Date objects when cellDates is on.
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return v.toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return null;
+}
+
 export async function POST(req: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -50,7 +76,7 @@ export async function POST(req: Request) {
 
   try {
     const buf = Buffer.from(await file.arrayBuffer());
-    const wb = XLSX.read(buf, { type: 'buffer' });
+    const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     if (!sheet) return NextResponse.json({ error: 'The file has no sheets.' }, { status: 400 });
 
@@ -75,10 +101,13 @@ export async function POST(req: Request) {
 
     const rows = json
       .map((r) => ({
+        quote_number: map.quote_number ? String(r[map.quote_number] ?? '').trim() || null : null,
         customer: map.customer ? String(r[map.customer] ?? '').trim() : '',
         project_name: map.project_name ? String(r[map.project_name] ?? '').trim() || null : null,
         category: map.category ? String(r[map.category] ?? '').trim() || null : null,
         bid_value: map.bid_value ? toNumber(r[map.bid_value]) : 0,
+        date_received: map.date_received ? toDate(r[map.date_received]) : null,
+        notes: map.notes ? String(r[map.notes] ?? '').trim() || null : null,
       }))
       .filter((r) => r.customer || r.bid_value);
 
