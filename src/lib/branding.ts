@@ -1,11 +1,11 @@
 /**
- * Company logo.
+ * Default company logo.
  *
- * The logo shown across the app (sign-in screen and sidebar) is simply the
- * image file committed at `public/branding/logo.png`. To change the logo,
- * replace that file in GitHub — no code changes and no in-app upload needed.
+ * This is the built-in fallback served statically by Next.js from the
+ * `public/` folder (`public/branding/logo.png` → `/branding/logo.png`).
  *
- * This path is served statically by Next.js from the `public/` folder, so
- * `public/branding/logo.png` is reachable at `/branding/logo.png`.
+ * Logos can now also be uploaded in-app under **Settings → Company → Logos**
+ * (stored in the DB via `branding-store.ts`); any uploaded logo overrides this
+ * default. Replacing the committed file still changes the fallback.
  */
 export const DEFAULT_LOGO = '/branding/logo.png';

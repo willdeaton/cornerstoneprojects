@@ -1,18 +1,20 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { DEFAULT_LOGO } from '@/lib/branding';
+import { getBranding } from '@/lib/branding-store';
 import { LoginForm } from './LoginForm';
 
 export default async function LoginPage() {
   const user = await getCurrentUser();
   if (user) redirect('/dashboard');
 
+  const branding = await getBranding();
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-brand-ink px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex justify-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={DEFAULT_LOGO} alt="Cornerstone Facility Solutions" className="h-16 w-auto max-w-[280px] object-contain" />
+          <img src={branding.full} alt="Cornerstone Facility Solutions" className="h-16 w-auto max-w-[280px] object-contain" />
         </div>
         <div className="card p-6">
           <h1 className="brand-heading mb-1 text-lg text-brand-ink">Project Tracker</h1>

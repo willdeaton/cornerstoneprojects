@@ -1,10 +1,13 @@
+import { getBranding } from '@/lib/branding-store';
 import { CompanyInfo } from './CompanyInfo';
+import { LogoSettings } from './LogoSettings';
 
 export const dynamic = 'force-dynamic';
 
-export default function CompanySettingsPage() {
+export default async function CompanySettingsPage() {
+  const branding = await getBranding();
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-2xl space-y-6">
       <div className="card p-6">
         <h2 className="brand-heading mb-1 text-sm text-brand-gray">Company Info</h2>
         <p className="mb-5 text-sm text-brand-gray">
@@ -12,6 +15,14 @@ export default function CompanySettingsPage() {
           Changes apply to quotes generated after saving.
         </p>
         <CompanyInfo />
+      </div>
+
+      <div className="card p-6">
+        <h2 className="brand-heading mb-1 text-sm text-brand-gray">Logos</h2>
+        <p className="mb-5 text-sm text-brand-gray">
+          Upload the logos used across the app and on estimate PDFs.
+        </p>
+        <LogoSettings branding={branding} />
       </div>
     </div>
   );

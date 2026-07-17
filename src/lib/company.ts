@@ -1,6 +1,7 @@
 import 'server-only';
 import { getDb } from './db';
 import { DEFAULT_LOGO } from './branding';
+import { getBranding } from './branding-store';
 
 /**
  * Company details shown on the printable / customer-facing quote.
@@ -50,7 +51,7 @@ export async function getCompanySettings(): Promise<CompanySettingsRow> {
  * constants as a safety net for any blank field.
  */
 export async function getCompanyInfo(): Promise<CompanyInfo> {
-  const row = await getCompanySettings();
+  const [row, branding] = await Promise.all([getCompanySettings(), getBranding()]);
   const addressLines = (row.address ?? '')
     .split('\n')
     .map((l) => l.trim())
@@ -61,7 +62,8 @@ export async function getCompanyInfo(): Promise<CompanyInfo> {
     phone: row.phone || COMPANY.phone,
     email: row.email || COMPANY.email,
     website: row.website || COMPANY.website,
-    logo: DEFAULT_LOGO,
+    // Estimate PDFs use their own uploaded logo, falling back to the app logo.
+    logo: branding.estimate,
   };
 }
 

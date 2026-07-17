@@ -5,9 +5,8 @@
 :root {
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
     sans-serif;
-  /* Brand type is Copperplate Gothic; fall back gracefully and lean on uppercase tracking. */
-  --font-display: 'Copperplate', 'Copperplate Gothic Bold', 'Copperplate Gothic', 'Big Caslon',
-    'Georgia', serif;
+  /* Headings share the body sans-serif; distinction comes from uppercase tracking and weight. */
+  --font-display: var(--font-sans);
 }
 
 body {

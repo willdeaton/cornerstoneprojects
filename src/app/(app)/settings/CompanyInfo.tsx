@@ -116,11 +116,6 @@ export function CompanyInfo() {
         </div>
       </div>
 
-      <p className="text-xs text-brand-gray">
-        The logo on quotes comes from <code>public/branding/logo.png</code> — replace that file to
-        change it.
-      </p>
-
       {msg && (
         <p
           className={`rounded-lg px-3 py-2 text-sm ${

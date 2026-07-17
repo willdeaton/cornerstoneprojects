@@ -1,14 +1,14 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { activeEntry } from '@/lib/data';
-import { DEFAULT_LOGO } from '@/lib/branding';
+import { getBranding } from '@/lib/branding-store';
 import { AppShell } from './AppShell';
 
 export default async function AuthedLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
 
-  const active = await activeEntry(user.id);
+  const [active, branding] = await Promise.all([activeEntry(user.id), getBranding()]);
 
   return (
     <AppShell
@@ -23,7 +23,8 @@ export default async function AuthedLayout({ children }: { children: React.React
             }
           : null
       }
-      logoSrc={DEFAULT_LOGO}
+      logoSrc={branding.full}
+      iconSrc={branding.icon}
     >
       {children}
     </AppShell>
