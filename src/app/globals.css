@@ -52,3 +52,17 @@ body {
     @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
   }
 }
+
+/* Printable quote: hide app/toolbar chrome and print the document clean. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+}
