@@ -11,6 +11,7 @@ import {
   addNote,
   deleteNote,
 } from '@/lib/data';
+import { notifyScheduleChange } from '@/lib/email/send';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -45,6 +46,8 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
   await requireUser();
   const progress = status === 'completed' ? 100 : status === 'not_started' ? 0 : undefined;
   await updateProject(id, progress != null ? { status, progress } : { status });
+  // Best-effort schedule-change notification; must not block the status update.
+  await notifyScheduleChange(id);
   revalidatePath(`/projects/${id}`);
   revalidatePath('/projects');
   revalidatePath('/dashboard');
@@ -72,6 +75,9 @@ export async function updateProjectDetailsAction(id: number, formData: FormData)
     invoice_numbers: String(formData.get('invoice_numbers') ?? '').trim() || null,
     invoice_notes: String(formData.get('invoice_notes') ?? '').trim() || null,
   });
+  // Best-effort schedule-change notification; must not block the save. Only
+  // recipients whose schedule signature actually changed will be emailed.
+  await notifyScheduleChange(id);
   revalidatePath(`/projects/${id}`);
   revalidatePath('/projects');
   revalidatePath('/dashboard');

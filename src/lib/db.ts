@@ -196,6 +196,71 @@ async function migrate(pool: Pool) {
     CREATE INDEX IF NOT EXISTS idx_time_user ON time_entries(user_id);
     CREATE INDEX IF NOT EXISTS idx_files_project ON project_files(project_id);
     CREATE INDEX IF NOT EXISTS idx_breaks_entry ON time_breaks(time_entry_id);
+
+    /* ==================================================================
+     * Email settings + automated notifications
+     *
+     * Design:
+     *  - Sender identity lives in ONE singleton row (email_settings, id=1).
+     *  - WHO receives each email type is per-user boolean columns on users.
+     *  - Transport is an HTTP email API keyed by an env-var secret
+     *    (SENDGRID_API_KEY) — never stored in the DB. The legacy smtp_*
+     *    columns below are kept nullable/unused for backwards-compat only.
+     *  - Timing for scheduled emails is env-var + cron driven, not the DB.
+     *  - Singleton "run lock" tables debounce duplicate sends across workers.
+     * ================================================================== */
+
+    -- Singleton sender-identity row. CHECK (id = 1) enforces exactly one row.
+    CREATE TABLE IF NOT EXISTS email_settings (
+      id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      from_name     TEXT NOT NULL DEFAULT '',
+      from_email    TEXT NOT NULL DEFAULT '',
+      -- Legacy SMTP columns: retained but NOT used for delivery (HTTP API only).
+      smtp_host     TEXT,
+      smtp_port     INTEGER,
+      smtp_user     TEXT,
+      smtp_password TEXT,
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    INSERT INTO email_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+    -- Per-user subscription flags: one boolean column per subscribable email
+    -- type. Read/written through the normal user create/update endpoints.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_project_reminders     BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_completion_report     BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_schedule_change_emails BOOLEAN NOT NULL DEFAULT false;
+
+    -- Ordered email-resolution chain: personal_email -> work_email -> email.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS personal_email TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS work_email     TEXT;
+
+    -- One singleton run-lock table per SCHEDULED email. Atomic UPDATE ... WHERE
+    -- id=1 AND last_run_at < now()-gap is how multiple web workers avoid
+    -- double-sending.
+    CREATE TABLE IF NOT EXISTS project_reminder_run_lock (
+      id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      last_run_at TIMESTAMPTZ,
+      last_status TEXT
+    );
+    INSERT INTO project_reminder_run_lock (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+    CREATE TABLE IF NOT EXISTS completion_report_run_lock (
+      id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      last_run_at TIMESTAMPTZ,
+      last_status TEXT
+    );
+    INSERT INTO completion_report_run_lock (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+    -- Per-recipient snapshot for EVENT-DRIVEN "schedule changed" notifications.
+    -- Stores the last-notified signature per (project, recipient) so re-runs
+    -- only email people whose schedule data actually changed.
+    CREATE TABLE IF NOT EXISTS schedule_change_notifications (
+      project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      recipient_email TEXT NOT NULL,
+      signature       TEXT NOT NULL,
+      notified_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (project_id, recipient_email)
+    );
   `);
 
   // ---- Incremental migrations (safe to run repeatedly) ------------------

@@ -4,6 +4,7 @@ import { useState, useEffect, useActionState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/Modal';
 import { createUserAction, type UserFormState } from '@/app/actions/users';
+import { SubscriptionFields } from './SubscriptionFields';
 
 export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
   const [open, setOpen] = useState(false);
@@ -46,6 +47,9 @@ export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
           <p className="text-xs text-brand-gray">
             Workers can clock in/out and add notes. Managers &amp; admins can also manage users.
           </p>
+          <div className="border-t border-black/5 pt-4">
+            <SubscriptionFields />
+          </div>
           {state.error && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{state.error}</p>
           )}

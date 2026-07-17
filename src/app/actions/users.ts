@@ -6,15 +6,30 @@ import { getCurrentUser, hashPassword } from '@/lib/auth';
 import type { Role } from '@/lib/auth';
 import {
   createUserRow,
+  updateUserEmailFields,
   emailExists,
   setUserRole,
   setUserActive,
   setUserPassword,
   countAdmins,
   getUserRole,
+  USER_EMAIL_FLAGS,
 } from '@/lib/data';
 
 const ROLES: Role[] = ['admin', 'manager', 'worker'];
+
+/** Pull the per-user email fields + subscription flags out of a form payload.
+ *  Checkbox names map 1:1 to the DB boolean column names. */
+function readEmailFields(formData: FormData) {
+  const flags = Object.fromEntries(
+    USER_EMAIL_FLAGS.map((f) => [f, formData.get(f) != null])
+  ) as Record<(typeof USER_EMAIL_FLAGS)[number], boolean>;
+  return {
+    personal_email: String(formData.get('personal_email') ?? '').trim() || null,
+    work_email: String(formData.get('work_email') ?? '').trim() || null,
+    ...flags,
+  };
+}
 
 async function requireManager() {
   const user = await getCurrentUser();
@@ -45,9 +60,27 @@ export async function createUserAction(
   if (!ROLES.includes(role)) return { error: 'Invalid role.' };
   if (await emailExists(email)) return { error: 'A user with that email already exists.' };
 
-  await createUserRow({ name, email, password_hash: hashPassword(password), role });
+  await createUserRow({
+    name,
+    email,
+    password_hash: hashPassword(password),
+    role,
+    ...readEmailFields(formData),
+  });
   revalidatePath('/users');
   return { success: `Added ${name}.` };
+}
+
+export async function updateUserSubscriptionsAction(
+  _prev: UserFormState,
+  formData: FormData
+): Promise<UserFormState> {
+  await requireManager();
+  const id = Number(formData.get('id'));
+  if (!id) return { error: 'Missing user id.' };
+  await updateUserEmailFields(id, readEmailFields(formData));
+  revalidatePath('/users');
+  return { success: 'Subscriptions updated.' };
 }
 
 export async function changeRoleAction(id: number, role: Role) {
