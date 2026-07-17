@@ -13,7 +13,16 @@ export default async function AuthedLayout({ children }: { children: React.React
   return (
     <AppShell
       user={{ name: user.name, email: user.email, role: user.role }}
-      clockedInTo={active ? { project: active.project_name, customer: active.customer } : null}
+      clockedInTo={
+        active
+          ? {
+              project: active.on_break
+                ? 'On lunch break'
+                : active.project_name ?? 'General (no job)',
+              customer: active.customer ?? '',
+            }
+          : null
+      }
       logoSrc={DEFAULT_LOGO}
     >
       {children}

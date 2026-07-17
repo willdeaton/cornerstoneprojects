@@ -33,7 +33,11 @@ export function AppShell({
   const [open, setOpen] = useState(false);
   const canManageUsers = user.role === 'admin' || user.role === 'manager';
   const nav = canManageUsers
-    ? [...NAV, { href: '/users', label: 'Users', icon: UsersIcon }]
+    ? [
+        ...NAV,
+        { href: '/timesheets', label: 'Timesheets', icon: TimesheetIcon },
+        { href: '/users', label: 'Users', icon: UsersIcon },
+      ]
     : NAV;
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
@@ -181,6 +185,14 @@ function ClockIcon({ active }: { active?: boolean }) {
   return (
     <svg {...base(active)}>
       <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+function TimesheetIcon({ active }: { active?: boolean }) {
+  return (
+    <svg {...base(active)}>
+      <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" />
+      <path d="M8 14l2.5 2.5L15 12" />
     </svg>
   );
 }
