@@ -31,9 +31,15 @@ export function AddProjectButton() {
               <input name="category" className="input" placeholder="Flooring" />
             </div>
           </div>
-          <div>
-            <label className="label">Project Name *</label>
-            <input name="name" className="input" required placeholder="Scope of work" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Project Name *</label>
+              <input name="name" className="input" required placeholder="Scope of work" />
+            </div>
+            <div>
+              <label className="label">Quote #</label>
+              <input name="quote_number" className="input" placeholder="e.g. Q-2601" />
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
@@ -53,10 +59,14 @@ export function AddProjectButton() {
             <label className="label">Location</label>
             <input name="location" className="input" placeholder="City, KY" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="label">Start Date</label>
               <input name="start_date" type="date" className="input" />
+            </div>
+            <div>
+              <label className="label">End Date</label>
+              <input name="end_date" type="date" className="input" />
             </div>
             <div>
               <label className="label">Due Date</label>

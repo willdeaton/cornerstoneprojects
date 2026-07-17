@@ -1,14 +1,10 @@
 # ----------------------------------------------------------------------------
 # Cornerstone Project Tracker — production image.
-# Uses a full toolchain so the native better-sqlite3 module compiles reliably
-# (this is what typically fails on a default Nixpacks build).
+# The app uses PostgreSQL via the pure-JS `pg` driver, so no native build
+# toolchain is required. Set DATABASE_URL at runtime to point at your database.
 # ----------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS base
 WORKDIR /app
-# Build tools needed by node-gyp / better-sqlite3
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # ---- install dependencies (incl. dev deps, needed to build) ----
@@ -30,8 +26,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
-# Data dir for the SQLite database (mount a persistent volume here in prod).
-RUN mkdir -p /app/data/uploads
 EXPOSE 3000
 # Next reads $PORT; bind all interfaces so the platform can route to it.
+# Provide DATABASE_URL (Postgres connection string) via the platform's env vars.
 CMD ["sh", "-c", "npm start -- -H 0.0.0.0 -p ${PORT:-3000}"]

@@ -7,6 +7,7 @@ import {
   listProjectTime,
   projectHours,
   activeEntry,
+  listProjectFiles,
 } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
 import { ProjectStatusBadge } from '@/components/ui';
@@ -14,20 +15,22 @@ import { StatusProgress } from './StatusProgress';
 import { NotesSection } from './NotesSection';
 import { ProjectTime } from './ProjectTime';
 import { ProjectHeaderActions } from './ProjectHeaderActions';
+import { ProjectFiles } from './ProjectFiles';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ProjectDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await params;
   const id = Number(idStr);
-  const project = getProject(id);
+  const project = await getProject(id);
   if (!project) notFound();
 
   const user = (await getCurrentUser())!;
-  const notes = listNotes(id);
-  const timeEntries = listProjectTime(id);
-  const hours = projectHours(id);
-  const active = activeEntry(user.id);
+  const notes = await listNotes(id);
+  const timeEntries = await listProjectTime(id);
+  const hours = await projectHours(id);
+  const active = await activeEntry(user.id);
+  const files = await listProjectFiles(id);
   const clockedInHere = active?.project_id === id;
 
   return (
@@ -50,16 +53,18 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
           <p className="mt-1 text-sm text-brand-gray">
             {project.category ?? 'Uncategorized'}
             {project.location ? ` · ${project.location}` : ''}
+            {project.quote_number ? ` · Quote ${project.quote_number}` : ''}
           </p>
         </div>
         <ProjectHeaderActions project={project} />
       </div>
 
       {/* Summary strip */}
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
         <Stat label="Contract Value" value={money(project.value)} />
         <Stat label="Hours Logged" value={`${hours.toFixed(1)}h`} />
         <Stat label="Start" value={shortDate(project.start_date)} />
+        <Stat label="End" value={shortDate(project.end_date)} />
         <Stat label="Due" value={shortDate(project.due_date)} />
       </div>
 
@@ -74,11 +79,40 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
               progress={project.progress}
             />
           </div>
+
+          <div className="card p-5">
+            <h2 className="brand-heading mb-4 text-sm text-brand-gray">Invoicing</h2>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
+                  Invoice Number(s)
+                </p>
+                <p className="mt-1 text-sm text-brand-ink">
+                  {project.invoice_numbers ? project.invoice_numbers : <span className="text-brand-gray">—</span>}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">Quote #</p>
+                <p className="mt-1 text-sm text-brand-ink">
+                  {project.quote_number ? project.quote_number : <span className="text-brand-gray">—</span>}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">Invoice Notes</p>
+              {project.invoice_notes ? (
+                <p className="mt-1 whitespace-pre-wrap text-sm text-brand-ink/90">{project.invoice_notes}</p>
+              ) : (
+                <p className="mt-1 text-sm text-brand-gray">No invoice notes yet.</p>
+              )}
+            </div>
+          </div>
+
           <NotesSection projectId={project.id} notes={notes} currentUserId={user.id} />
         </div>
 
-        {/* Right: time clock */}
-        <div>
+        {/* Right: time clock + files */}
+        <div className="space-y-6">
           <ProjectTime
             projectId={project.id}
             entries={timeEntries}
@@ -86,6 +120,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             clockedInElsewhere={!!active && !clockedInHere}
             activeElsewhereName={active && !clockedInHere ? active.project_name : null}
           />
+          <ProjectFiles projectId={project.id} files={files} />
         </div>
       </div>
     </div>

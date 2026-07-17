@@ -8,10 +8,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function TimePage() {
   const user = (await getCurrentUser())!;
-  const active = activeEntry(user.id);
-  const projects = listProjects().filter((p) => p.status !== 'completed');
-  const myEntries = listUserTime(user.id, 25);
-  const crew = listActiveClockIns();
+  const active = await activeEntry(user.id);
+  const projects = (await listProjects()).filter((p) => p.status !== 'completed');
+  const myEntries = await listUserTime(user.id, 25);
+  const crew = await listActiveClockIns();
 
   // Total hours this week for the current user
   const weekAgo = Date.now() - 7 * 864e5;

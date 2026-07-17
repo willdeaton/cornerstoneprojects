@@ -6,7 +6,7 @@ import { LoginForm } from './LoginForm';
 export default async function LoginPage() {
   const user = await getCurrentUser();
   if (user) redirect('/dashboard');
-  const logoSrc = getLogo() ?? '/logo-onblack.png';
+  const logoSrc = (await getLogo()) ?? '/logo-onblack.png';
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-brand-ink px-4">

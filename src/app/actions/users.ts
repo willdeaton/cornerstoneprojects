@@ -43,9 +43,9 @@ export async function createUserAction(
   if (!name || !email || !password) return { error: 'All fields are required.' };
   if (password.length < 6) return { error: 'Password must be at least 6 characters.' };
   if (!ROLES.includes(role)) return { error: 'Invalid role.' };
-  if (emailExists(email)) return { error: 'A user with that email already exists.' };
+  if (await emailExists(email)) return { error: 'A user with that email already exists.' };
 
-  createUserRow({ name, email, password_hash: hashPassword(password), role });
+  await createUserRow({ name, email, password_hash: hashPassword(password), role });
   revalidatePath('/users');
   return { success: `Added ${name}.` };
 }
@@ -54,27 +54,27 @@ export async function changeRoleAction(id: number, role: Role) {
   const me = await requireManager();
   if (!ROLES.includes(role)) return;
   // Don't allow removing the last admin.
-  if (getUserRole(id) === 'admin' && role !== 'admin' && countAdmins() <= 1) {
+  if ((await getUserRole(id)) === 'admin' && role !== 'admin' && (await countAdmins()) <= 1) {
     return;
   }
   // Only admins can grant admin.
   if (role === 'admin' && me.role !== 'admin') return;
-  setUserRole(id, role);
+  await setUserRole(id, role);
   revalidatePath('/users');
 }
 
 export async function toggleActiveAction(id: number, active: boolean) {
   const me = await requireManager();
   if (id === me.id) return; // can't deactivate yourself
-  if (!active && getUserRole(id) === 'admin' && countAdmins() <= 1) return;
-  setUserActive(id, active);
+  if (!active && (await getUserRole(id)) === 'admin' && (await countAdmins()) <= 1) return;
+  await setUserActive(id, active);
   revalidatePath('/users');
 }
 
 export async function resetPasswordAction(id: number, password: string) {
   await requireManager();
   if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
-  setUserPassword(id, hashPassword(password));
+  await setUserPassword(id, hashPassword(password));
   revalidatePath('/users');
   return { ok: true };
 }

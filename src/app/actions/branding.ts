@@ -36,7 +36,7 @@ export async function uploadLogoAction(_prev: LogoState, formData: FormData): Pr
   }
   const buf = Buffer.from(await file.arrayBuffer());
   const dataUrl = `data:${file.type};base64,${buf.toString('base64')}`;
-  setSetting('logo', dataUrl);
+  await setSetting('logo', dataUrl);
   revalidatePath('/', 'layout');
   revalidatePath('/settings');
   revalidatePath('/login');
@@ -45,7 +45,7 @@ export async function uploadLogoAction(_prev: LogoState, formData: FormData): Pr
 
 export async function resetLogoAction() {
   await requireManager();
-  setSetting('logo', null);
+  await setSetting('logo', null);
   revalidatePath('/', 'layout');
   revalidatePath('/settings');
   revalidatePath('/login');

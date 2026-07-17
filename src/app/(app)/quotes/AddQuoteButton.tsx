@@ -25,6 +25,16 @@ export function AddQuoteButton() {
       </button>
       <Modal open={open} onClose={() => setOpen(false)} title="Add Quote">
         <form action={submit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Quote #</label>
+              <input name="quote_number" className="input" placeholder="e.g. Q-2601" />
+            </div>
+            <div>
+              <label className="label">Date Received</label>
+              <input name="date_received" type="date" className="input" />
+            </div>
+          </div>
           <div>
             <label className="label">Customer *</label>
             <input name="customer" className="input" required placeholder="e.g. ARH-Highlands" />
@@ -52,10 +62,6 @@ export function AddQuoteButton() {
               <label className="label">Bid Value *</label>
               <input name="bid_value" className="input" required inputMode="decimal" placeholder="25000" />
             </div>
-          </div>
-          <div>
-            <label className="label">Date Received</label>
-            <input name="date_received" type="date" className="input" />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" className="btn-secondary" onClick={() => setOpen(false)}>

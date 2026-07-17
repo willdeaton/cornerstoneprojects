@@ -13,7 +13,7 @@ async function requireUser() {
 
 export async function clockInAction(projectId: number) {
   const user = await requireUser();
-  const res = clockIn(user.id, projectId);
+  const res = await clockIn(user.id, projectId);
   revalidatePath('/time');
   revalidatePath(`/projects/${projectId}`);
   revalidatePath('/', 'layout');
@@ -22,7 +22,7 @@ export async function clockInAction(projectId: number) {
 
 export async function clockOutAction(note?: string) {
   const user = await requireUser();
-  const res = clockOut(user.id, note);
+  const res = await clockOut(user.id, note);
   revalidatePath('/time');
   revalidatePath('/projects');
   revalidatePath('/', 'layout');
