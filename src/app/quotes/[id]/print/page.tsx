@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { getQuoteWithItems, quoteTotals } from '@/lib/data';
+import { getQuoteWithItems, quoteTotals, lineAmount } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
 import { getCompanyInfo } from '@/lib/company';
 import { PrintToolbar } from './PrintButton';
@@ -19,10 +19,12 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
 
   const company = await getCompanyInfo();
 
-  // Quotes built from line items compute their totals from those items. A
-  // pipeline-only quote (imported / quick-added, no line items) has no items
-  // to sum, so fall back to its stored bid_value instead of printing $0.
-  const hasItems = quote.line_items.length > 0;
+  // Only customer-facing ('display') line items are printed; the pricing
+  // worksheet stays internal. A pipeline-only quote (imported / quick-added,
+  // no display items) has nothing to sum, so fall back to its stored bid_value
+  // instead of printing $0.
+  const displayItems = quote.line_items.filter((li) => li.kind !== 'pricing');
+  const hasItems = displayItems.length > 0;
   const computed = quoteTotals(quote.line_items, quote.tax_rate);
   const subtotal = hasItems ? computed.subtotal : quote.bid_value;
   const tax = hasItems ? computed.tax : 0;
@@ -93,10 +95,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
           <thead>
             <tr className="border-b-2 border-black/10 text-left text-xs uppercase tracking-wide text-brand-gray">
               <th className="py-2 pr-2 font-semibold">Description</th>
-              <th className="py-2 px-2 text-right font-semibold">Qty</th>
-              <th className="py-2 px-2 font-semibold">Unit</th>
-              <th className="py-2 px-2 text-right font-semibold">Unit Price</th>
-              <th className="py-2 pl-2 text-right font-semibold">Amount</th>
+              <th className="py-2 pl-2 text-right font-semibold">Price</th>
             </tr>
           </thead>
           <tbody>
@@ -105,20 +104,14 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
                 <td className="py-2 pr-2 text-brand-ink whitespace-pre-line">
                   {quote.project_name || quote.customer}
                 </td>
-                <td className="py-2 px-2 text-right text-brand-gray whitespace-nowrap">1</td>
-                <td className="py-2 px-2 text-brand-gray">ls</td>
-                <td className="py-2 px-2 text-right text-brand-gray whitespace-nowrap">{money(quote.bid_value, { cents: true })}</td>
                 <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">{money(quote.bid_value, { cents: true })}</td>
               </tr>
             ) : (
-              quote.line_items.map((li) => (
+              displayItems.map((li) => (
                 <tr key={li.id} className="border-b border-black/5 align-top">
                   <td className="py-2 pr-2 text-brand-ink whitespace-pre-line">{li.description}</td>
-                  <td className="py-2 px-2 text-right text-brand-gray whitespace-nowrap">{li.quantity}</td>
-                  <td className="py-2 px-2 text-brand-gray">{li.unit ?? ''}</td>
-                  <td className="py-2 px-2 text-right text-brand-gray whitespace-nowrap">{money(li.unit_price, { cents: true })}</td>
                   <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
-                    {money(li.quantity * li.unit_price, { cents: true })}
+                    {money(lineAmount(li), { cents: true })}
                   </td>
                 </tr>
               ))
