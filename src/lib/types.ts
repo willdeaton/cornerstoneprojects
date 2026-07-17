@@ -107,6 +107,14 @@ export interface CustomerContact {
 
 export type CustomerWithContacts = Customer & { contacts: CustomerContact[] };
 
+/** A unit of measure (ea, sf, hr, …) shared by the worksheet and price book. */
+export interface Unit {
+  id: number;
+  label: string;
+  position: number;
+  created_at: string;
+}
+
 /** A price-book entry: a line item with a default unit and unit price. */
 export interface PricingItem {
   id: number;

@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { getQuoteWithItems, quoteTotals, lineAmount } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
 import { getCompanyInfo } from '@/lib/company';
+import { sanitizeRichText } from '@/lib/richtext';
 import { PrintToolbar } from './PrintButton';
 
 export const dynamic = 'force-dynamic';
@@ -109,7 +110,10 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
             ) : (
               displayItems.map((li) => (
                 <tr key={li.id} className="border-b border-black/5 align-top">
-                  <td className="py-2 pr-2 text-brand-ink whitespace-pre-line">{li.description}</td>
+                  <td
+                    className="rich-text py-2 pr-2 text-brand-ink"
+                    dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
+                  />
                   <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
                     {money(lineAmount(li), { cents: true })}
                   </td>
