@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { listPricingItems } from '@/lib/data';
+import { listPricingItems, listUnits } from '@/lib/data';
 import { PricingManager } from './PricingManager';
 
 export const dynamic = 'force-dynamic';
@@ -10,7 +10,7 @@ export default async function PricingSettingsPage() {
   if (!me) redirect('/login');
   if (me.role !== 'admin' && me.role !== 'manager') redirect('/dashboard');
 
-  const items = await listPricingItems();
+  const [items, units] = await Promise.all([listPricingItems(), listUnits()]);
 
   return (
     <div>
@@ -21,7 +21,7 @@ export default async function PricingSettingsPage() {
           worksheet on the New Quote page to build a quote quickly.
         </p>
       </div>
-      <PricingManager items={items} />
+      <PricingManager items={items} units={units} />
     </div>
   );
 }

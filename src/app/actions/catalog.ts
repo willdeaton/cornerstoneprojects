@@ -11,9 +11,12 @@ import {
   updateContact,
   deleteContact,
   createPricingItem,
+  getPricingItem,
   updatePricingItem,
   deletePricingItem,
+  createUnit,
 } from '@/lib/data';
+import type { PricingItem, Unit } from '@/lib/types';
 
 /** Result of a save/delete action. */
 export interface ActionResult {
@@ -27,6 +30,12 @@ async function requireManager() {
   if (user.role !== 'admin' && user.role !== 'manager') {
     throw new Error('Not authorized.');
   }
+  return user;
+}
+
+async function requireUser() {
+  const user = await getCurrentUser();
+  if (!user) redirect('/login');
   return user;
 }
 
@@ -151,4 +160,44 @@ export async function deletePricingItemAction(id: number): Promise<ActionResult>
   await deletePricingItem(id);
   revalidatePath('/settings/pricing');
   return { ok: true };
+}
+
+/**
+ * Add a price-book entry from the quote builder (any signed-in user), used by
+ * the "add this to your pricing list?" prompt. Returns the saved item so the
+ * builder can drop it into its in-memory price book without a full refresh.
+ */
+export async function quickAddPricingItemAction(
+  input: PricingFields
+): Promise<ActionResult & { item?: PricingItem }> {
+  await requireUser();
+  const description = (input.description ?? '').trim();
+  if (!description) return { ok: false, error: 'Description is required.' };
+  const price = Number(input.unit_price);
+  const id = await createPricingItem({
+    description,
+    unit: clean(input.unit),
+    unit_price: Number.isFinite(price) ? Math.max(0, price) : 0,
+    category: clean(input.category),
+  });
+  const item = await getPricingItem(id);
+  revalidatePath('/settings/pricing');
+  return { ok: true, item };
+}
+
+/* --------------------------------------------------------------- Units */
+
+/**
+ * Add a unit of measure (from the quote view or the pricing list). Idempotent
+ * by label, so re-adding an existing unit just returns it. Returns the unit so
+ * callers can update their local list immediately.
+ */
+export async function addUnitAction(label: string): Promise<ActionResult & { unit?: Unit }> {
+  await requireUser();
+  const clean = (label ?? '').trim();
+  if (!clean) return { ok: false, error: 'Unit is required.' };
+  if (clean.length > 16) return { ok: false, error: 'Unit is too long.' };
+  const unit = await createUnit(clean);
+  revalidatePath('/settings/pricing');
+  return { ok: true, unit };
 }

@@ -360,5 +360,24 @@ Your City, ST 00000',
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Units of measure shared by the pricing worksheet and the price book. New
+    -- units can be added from the quote view or the pricing list, so they live
+    -- in a table (rather than a hard-coded array) and are shared everywhere.
+    CREATE TABLE IF NOT EXISTS units (
+      id         SERIAL PRIMARY KEY,
+      label      TEXT NOT NULL,
+      position   INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_units_label ON units(lower(label));
   `);
+
+  // Seed the default units once, on an empty table. ON CONFLICT keeps this safe
+  // to run repeatedly and against installs where an admin has edited the list.
+  await pool.query(
+    `INSERT INTO units (label, position)
+     VALUES ('ea',1),('sf',2),('lf',3),('sy',4),('hr',5),('day',6),('ls',7),('gal',8)
+     ON CONFLICT (lower(label)) DO NOTHING`
+  );
 }

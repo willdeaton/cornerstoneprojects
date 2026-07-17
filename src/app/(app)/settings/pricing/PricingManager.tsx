@@ -3,15 +3,15 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/Modal';
+import { UnitSelect } from '@/components/UnitSelect';
 import { money } from '@/lib/format';
-import type { PricingItem } from '@/lib/types';
+import type { PricingItem, Unit } from '@/lib/types';
 import { savePricingItemAction, deletePricingItemAction } from '@/app/actions/catalog';
 
-const UNITS = ['ea', 'sf', 'lf', 'sy', 'hr', 'day', 'ls', 'gal'];
-
-export function PricingManager({ items }: { items: PricingItem[] }) {
+export function PricingManager({ items, units: unitsProp }: { items: PricingItem[]; units: Unit[] }) {
   const router = useRouter();
   const [modal, setModal] = useState<{ item?: PricingItem } | null>(null);
+  const [units, setUnits] = useState<Unit[]>(unitsProp);
   const [pending, start] = useTransition();
 
   function remove(item: PricingItem) {
@@ -86,6 +86,8 @@ export function PricingManager({ items }: { items: PricingItem[] }) {
       {modal && (
         <PricingFormModal
           item={modal.item}
+          units={units}
+          onUnitAdded={(u) => setUnits((us) => [...us, u])}
           onClose={() => setModal(null)}
           onSaved={() => {
             setModal(null);
@@ -99,10 +101,14 @@ export function PricingManager({ items }: { items: PricingItem[] }) {
 
 function PricingFormModal({
   item,
+  units,
+  onUnitAdded,
   onClose,
   onSaved,
 }: {
   item?: PricingItem;
+  units: Unit[];
+  onUnitAdded: (unit: Unit) => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -150,12 +156,7 @@ function PricingFormModal({
           </div>
           <div>
             <label className="label">Unit</label>
-            <input className="input" value={unit} onChange={(e) => setUnit(e.target.value)} list="pricing-units" placeholder="ea" />
-            <datalist id="pricing-units">
-              {UNITS.map((u) => (
-                <option key={u} value={u} />
-              ))}
-            </datalist>
+            <UnitSelect units={units} value={unit} onChange={setUnit} onUnitAdded={onUnitAdded} />
           </div>
           <div>
             <label className="label">Unit Price</label>
