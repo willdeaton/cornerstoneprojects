@@ -810,7 +810,7 @@ export async function getDashboard(): Promise<DashboardData> {
     allProjects,
     categoryBreakdown,
     weekStarts,
-    windowQuotes,
+    allQuotes,
     recentDecisions,
   ] = await Promise.all([
     one<{
@@ -848,10 +848,8 @@ export async function getDashboard(): Promise<DashboardData> {
     ),
     q<QuoteLite & { week_start: string }>(
       `SELECT id, quote_number, customer, project_name, bid_value, status,
-              to_char(date_trunc('week', COALESCE(date_received, created_at::date)), 'YYYY-MM-DD') AS week_start
+              to_char(date_trunc('week', created_at::date), 'YYYY-MM-DD') AS week_start
        FROM quotes
-       WHERE COALESCE(date_received, created_at::date)
-             >= (date_trunc('week', CURRENT_DATE) - INTERVAL '7 weeks')::date
        ORDER BY bid_value DESC`
     ),
     q<DecisionRow>(
@@ -897,9 +895,11 @@ export async function getDashboard(): Promise<DashboardData> {
     };
   });
 
-  // Quotes by week for the past 8 weeks (bucketed on when the quote came in).
+  // Cumulative total quotes created as of the end of each of the past 8 weeks.
+  // A quote counts toward every week on or after the week it was created in, so
+  // each bar reflects the running total of all quotes created up to that point.
   const quotesByWeek: WeekBucket[] = weekStarts.map((w) => {
-    const quotes = windowQuotes.filter((qt) => qt.week_start === w.week_start);
+    const quotes = allQuotes.filter((qt) => qt.week_start <= w.week_start);
     return {
       week_start: w.week_start,
       count: quotes.length,
@@ -1130,6 +1130,10 @@ export async function createContact(input: ContactInput): Promise<number> {
     [input.customer_id, input.name, input.title ?? null, input.email ?? null, input.phone ?? null]
   );
   return row!.id;
+}
+
+export async function getContact(id: number): Promise<CustomerContact | undefined> {
+  return one<CustomerContact>('SELECT * FROM customer_contacts WHERE id = $1', [id]);
 }
 
 export async function updateContact(
