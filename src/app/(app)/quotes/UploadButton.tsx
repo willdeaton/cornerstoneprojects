@@ -75,8 +75,9 @@ export function UploadButton() {
           <div className="space-y-4">
             <p className="text-sm text-brand-gray">
               Upload an <strong>.xlsx</strong> or <strong>.csv</strong> file of this week&apos;s new
-              quotes. We&apos;ll match columns for <em>Customer</em>, <em>Project</em>,{' '}
-              <em>Category</em> and <em>Bid Value</em> automatically.
+              quotes. We&apos;ll match columns for <em>Quote Number</em>, <em>Customer</em>,{' '}
+              <em>Project</em>, <em>Category</em>, <em>Bid Value</em>, <em>Date Received</em> and{' '}
+              <em>Notes</em> automatically.
             </p>
             <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-black/15 bg-black/[0.02] px-6 py-10 text-center transition hover:border-brand-green hover:bg-brand-green/5">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#98C73A" strokeWidth="2">
@@ -117,21 +118,27 @@ export function UploadButton() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-gray-50 text-left text-xs uppercase text-brand-gray">
                   <tr>
+                    <th className="px-3 py-2 font-semibold">Quote #</th>
                     <th className="px-3 py-2 font-semibold">Customer</th>
                     <th className="px-3 py-2 font-semibold">Project</th>
                     <th className="px-3 py-2 font-semibold">Category</th>
                     <th className="px-3 py-2 text-right font-semibold">Bid Value</th>
+                    <th className="px-3 py-2 font-semibold">Received</th>
+                    <th className="px-3 py-2 font-semibold">Notes</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r, i) => (
                     <tr key={i} className="border-t border-black/5">
+                      <td className="px-3 py-2 text-brand-gray">{r.quote_number || '—'}</td>
                       <td className="px-3 py-2 font-medium text-brand-ink">{r.customer || '—'}</td>
                       <td className="px-3 py-2 text-brand-gray">{r.project_name || '—'}</td>
                       <td className="px-3 py-2 text-brand-gray">{r.category || '—'}</td>
                       <td className="px-3 py-2 text-right font-semibold text-brand-ink">
                         {money(r.bid_value || 0)}
                       </td>
+                      <td className="px-3 py-2 text-brand-gray">{r.date_received || '—'}</td>
+                      <td className="px-3 py-2 text-brand-gray">{r.notes || '—'}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -59,10 +59,11 @@ export async function createQuote(quote: {
   date_received?: string | null;
   week_of?: string | null;
   source?: string;
+  notes?: string | null;
 }): Promise<number> {
   const row = await one<{ id: number }>(
-    `INSERT INTO quotes (quote_number, customer, project_name, category, bid_value, date_received, week_of, source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    `INSERT INTO quotes (quote_number, customer, project_name, category, bid_value, date_received, week_of, source, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [
       quote.quote_number ?? null,
       quote.customer,
@@ -72,6 +73,7 @@ export async function createQuote(quote: {
       quote.date_received ?? null,
       quote.week_of ?? null,
       quote.source ?? 'manual',
+      quote.notes ?? null,
     ]
   );
   return row!.id;
