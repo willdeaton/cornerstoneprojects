@@ -313,4 +313,52 @@ Your City, ST 00000',
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
   `);
+
+  /* ==================================================================
+   * Saved catalogs, editable under Settings:
+   *   - customers            : reusable customer records (address, contact
+   *                            details) that feed the New Quote customer picker.
+   *   - customer_contacts    : named people at a customer, each with their own
+   *                            email + phone; selecting one on a quote fills the
+   *                            contact fields.
+   *   - pricing_items        : a price book of line items with a default unit
+   *                            and unit price, droppable into the quote pricing
+   *                            worksheet.
+   * All three are safe to create repeatedly (IF NOT EXISTS).
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      address    TEXT,
+      phone      TEXT,
+      email      TEXT,
+      notes      TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    -- One record per customer name (case-insensitive) so the picker stays clean.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_name ON customers(lower(name));
+
+    CREATE TABLE IF NOT EXISTS customer_contacts (
+      id          SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      title       TEXT,
+      email       TEXT,
+      phone       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_contacts_customer ON customer_contacts(customer_id);
+
+    CREATE TABLE IF NOT EXISTS pricing_items (
+      id          SERIAL PRIMARY KEY,
+      description TEXT NOT NULL,
+      unit        TEXT,
+      unit_price  DOUBLE PRECISION NOT NULL DEFAULT 0,
+      category    TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
