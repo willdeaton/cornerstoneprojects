@@ -62,6 +62,7 @@ export function QuoteBuilder({
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pricingOpen, setPricingOpen] = useState(true);
 
   const [header, setHeader] = useState({
     quote_number: quote?.quote_number ?? '',
@@ -395,103 +396,6 @@ export function QuoteBuilder({
         </div>
       </div>
 
-      {/* Internal pricing worksheet — not shown on the PDF */}
-      <div className="card p-5">
-        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
-          <div className="flex items-center gap-2">
-            {pricingItems.length > 0 && (
-              <select
-                className="input w-auto py-2 text-sm"
-                value=""
-                onChange={(e) => {
-                  addFromCatalog(e.target.value);
-                  e.currentTarget.value = '';
-                }}
-              >
-                <option value="">+ From price book…</option>
-                {pricingItems.map((p) => (
-                  <option key={p.id} value={String(p.id)}>
-                    {p.description}
-                    {p.unit_price ? ` — ${money(p.unit_price, { cents: true })}${p.unit ? `/${p.unit}` : ''}` : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button type="button" className="btn-secondary" onClick={addPricing}>
-              + Add Item
-            </button>
-          </div>
-        </div>
-        <p className="mb-4 text-xs text-brand-gray">
-          Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Use it to work out
-          your numbers, then enter what the customer sees in Line Items below.
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead>
-              <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
-                <th className="px-2 py-2 font-semibold">Description</th>
-                <th className="px-2 py-2 font-semibold w-20">Qty</th>
-                <th className="px-2 py-2 font-semibold w-24">Unit</th>
-                <th className="px-2 py-2 font-semibold w-32">Unit Price</th>
-                <th className="px-2 py-2 text-right font-semibold w-28">Amount</th>
-                <th className="px-2 py-2 w-24" />
-              </tr>
-            </thead>
-            <tbody>
-              {pricingRows.map((r, i) => (
-                <tr key={i} className="border-b border-black/5 last:border-0 align-top">
-                  <td className="px-2 py-2">
-                    <textarea
-                      className="input"
-                      rows={1}
-                      value={r.description}
-                      onChange={(e) => updatePricing(i, { description: e.target.value })}
-                      placeholder="Carpet tile, adhesive, labor …"
-                    />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updatePricing(i, { quantity: e.target.value })} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input className="input" value={r.unit} onChange={(e) => updatePricing(i, { unit: e.target.value })} list="qb-units" />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input className="input" inputMode="decimal" value={r.unit_price} onChange={(e) => updatePricing(i, { unit_price: e.target.value })} placeholder="0.00" />
-                  </td>
-                  <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
-                    {money(num(r.quantity) * num(r.unit_price), { cents: true })}
-                  </td>
-                  <td className="px-2 py-2">
-                    <div className="flex items-center justify-end gap-1 text-brand-gray">
-                      <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => movePricing(i, -1)} disabled={i === 0}>↑</button>
-                      <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => movePricing(i, 1)} disabled={i === pricingRows.length - 1}>↓</button>
-                      <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removePricing(i)} disabled={pricingRows.length === 1}>✕</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <datalist id="qb-units">
-            {UNITS.map((u) => (
-              <option key={u} value={u} />
-            ))}
-          </datalist>
-        </div>
-
-        <div className="mt-4 flex items-center justify-end gap-4">
-          <button type="button" className="btn-secondary" onClick={pricingToLine}>
-            Add subtotal as a line item →
-          </button>
-          <div className="flex items-baseline gap-3 text-sm">
-            <span className="text-brand-gray">Internal subtotal</span>
-            <span className="font-semibold text-brand-ink">{money(pricingSubtotal, { cents: true })}</span>
-          </div>
-        </div>
-      </div>
-
       {/* Customer-facing line items — shown on the PDF */}
       <div className="card p-5">
         <div className="mb-1 flex items-center justify-between">
@@ -572,6 +476,122 @@ export function QuoteBuilder({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Internal pricing worksheet — not shown on the PDF */}
+      <div className="card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-left"
+            onClick={() => setPricingOpen((o) => !o)}
+            aria-expanded={pricingOpen}
+          >
+            <span className="text-brand-gray transition-transform">{pricingOpen ? '▾' : '▸'}</span>
+            <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
+          </button>
+          {pricingOpen && (
+            <div className="flex items-center gap-2">
+              {pricingItems.length > 0 && (
+                <select
+                  className="input w-auto py-2 text-sm"
+                  value=""
+                  onChange={(e) => {
+                    addFromCatalog(e.target.value);
+                    e.currentTarget.value = '';
+                  }}
+                >
+                  <option value="">+ From price book…</option>
+                  {pricingItems.map((p) => (
+                    <option key={p.id} value={String(p.id)}>
+                      {p.description}
+                      {p.unit_price ? ` — ${money(p.unit_price, { cents: true })}${p.unit ? `/${p.unit}` : ''}` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button type="button" className="btn-secondary" onClick={addPricing}>
+                + Add Item
+              </button>
+            </div>
+          )}
+        </div>
+        {pricingOpen ? (
+          <>
+            <p className="mb-4 mt-1 text-xs text-brand-gray">
+              Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Use it to work out
+              your numbers, then enter what the customer sees in Line Items above.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
+                    <th className="px-2 py-2 font-semibold">Description</th>
+                    <th className="px-2 py-2 font-semibold w-20">Qty</th>
+                    <th className="px-2 py-2 font-semibold w-24">Unit</th>
+                    <th className="px-2 py-2 font-semibold w-32">Unit Price</th>
+                    <th className="px-2 py-2 text-right font-semibold w-28">Amount</th>
+                    <th className="px-2 py-2 w-24" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {pricingRows.map((r, i) => (
+                    <tr key={i} className="border-b border-black/5 last:border-0 align-top">
+                      <td className="px-2 py-2">
+                        <textarea
+                          className="input"
+                          rows={1}
+                          value={r.description}
+                          onChange={(e) => updatePricing(i, { description: e.target.value })}
+                          placeholder="Carpet tile, adhesive, labor …"
+                        />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updatePricing(i, { quantity: e.target.value })} />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input className="input" value={r.unit} onChange={(e) => updatePricing(i, { unit: e.target.value })} list="qb-units" />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input className="input" inputMode="decimal" value={r.unit_price} onChange={(e) => updatePricing(i, { unit_price: e.target.value })} placeholder="0.00" />
+                      </td>
+                      <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                        {money(num(r.quantity) * num(r.unit_price), { cents: true })}
+                      </td>
+                      <td className="px-2 py-2">
+                        <div className="flex items-center justify-end gap-1 text-brand-gray">
+                          <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => movePricing(i, -1)} disabled={i === 0}>↑</button>
+                          <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => movePricing(i, 1)} disabled={i === pricingRows.length - 1}>↓</button>
+                          <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removePricing(i)} disabled={pricingRows.length === 1}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <datalist id="qb-units">
+                {UNITS.map((u) => (
+                  <option key={u} value={u} />
+                ))}
+              </datalist>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-4">
+              <button type="button" className="btn-secondary" onClick={pricingToLine}>
+                Add subtotal as a line item ↑
+              </button>
+              <div className="flex items-baseline gap-3 text-sm">
+                <span className="text-brand-gray">Internal subtotal</span>
+                <span className="font-semibold text-brand-ink">{money(pricingSubtotal, { cents: true })}</span>
+              </div>
+            </div>
+          </>
+        ) : (
+          <p className="mt-1 text-xs text-brand-gray">
+            Collapsed · Internal subtotal{' '}
+            <span className="font-semibold text-brand-ink">{money(pricingSubtotal, { cents: true })}</span>
+          </p>
+        )}
       </div>
 
       {/* Terms & notes */}
