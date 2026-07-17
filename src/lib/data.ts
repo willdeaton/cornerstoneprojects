@@ -18,6 +18,7 @@ import type {
   CustomerContact,
   CustomerWithContacts,
   PricingItem,
+  Unit,
 } from './types';
 import { hoursBetween } from './format';
 
@@ -1152,6 +1153,10 @@ export async function listPricingItems(): Promise<PricingItem[]> {
   return q<PricingItem>('SELECT * FROM pricing_items ORDER BY category NULLS FIRST, description');
 }
 
+export async function getPricingItem(id: number): Promise<PricingItem | undefined> {
+  return one<PricingItem>('SELECT * FROM pricing_items WHERE id = $1', [id]);
+}
+
 export async function createPricingItem(input: PricingItemInput): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO pricing_items (description, unit, unit_price, category)
@@ -1172,4 +1177,28 @@ export async function updatePricingItem(id: number, input: PricingItemInput): Pr
 
 export async function deletePricingItem(id: number): Promise<void> {
   await q('DELETE FROM pricing_items WHERE id = $1', [id]);
+}
+
+/* ------------------------------------------------------------------ Units */
+
+export async function listUnits(): Promise<Unit[]> {
+  return q<Unit>('SELECT * FROM units ORDER BY position, lower(label)');
+}
+
+/**
+ * Add a unit of measure. Idempotent by (case-insensitive) label: if it already
+ * exists the existing row is returned rather than erroring, so quick-adds from
+ * the quote view never fail on a duplicate. New units sort after the defaults.
+ */
+export async function createUnit(label: string): Promise<Unit> {
+  const clean = label.trim();
+  const existing = await one<Unit>('SELECT * FROM units WHERE lower(label) = lower($1)', [clean]);
+  if (existing) return existing;
+  const row = await one<Unit>(
+    `INSERT INTO units (label, position)
+     VALUES ($1, COALESCE((SELECT MAX(position) FROM units), 0) + 1)
+     RETURNING *`,
+    [clean]
+  );
+  return row!;
 }

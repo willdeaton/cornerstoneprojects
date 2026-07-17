@@ -3,14 +3,20 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { money } from '@/lib/format';
+import { sanitizeRichText, isRichTextEmpty } from '@/lib/richtext';
+import { Modal } from '@/components/Modal';
+import { RichTextEditor } from '@/components/RichTextEditor';
+import { UnitSelect } from '@/components/UnitSelect';
 import type {
   LineItemInput,
   QuoteDocInput,
   QuoteWithItems,
   CustomerWithContacts,
   PricingItem,
+  Unit,
 } from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
+import { quickAddPricingItemAction } from '@/app/actions/catalog';
 
 /** Internal cost worksheet row — never printed on the customer PDF. */
 interface PricingRow {
@@ -26,7 +32,6 @@ interface DisplayRow {
   amount: string;
 }
 
-const UNITS = ['ea', 'sf', 'lf', 'sy', 'hr', 'day', 'ls', 'gal'];
 const CATEGORIES = [
   'Flooring',
   'Painting',
@@ -43,6 +48,8 @@ function num(v: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+const normDesc = (v: string) => v.trim().toLowerCase();
+
 function blankPricingRow(): PricingRow {
   return { description: '', quantity: '1', unit: 'ea', unit_price: '' };
 }
@@ -53,16 +60,29 @@ function blankDisplayRow(): DisplayRow {
 export function QuoteBuilder({
   quote,
   customers = [],
-  pricingItems = [],
+  pricingItems: pricingItemsProp = [],
+  units: unitsProp = [],
 }: {
   quote?: QuoteWithItems;
   customers?: CustomerWithContacts[];
   pricingItems?: PricingItem[];
+  units?: Unit[];
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pricingOpen, setPricingOpen] = useState(true);
+
+  // Price book and unit list are held in state so quick-adds from the worksheet
+  // (a new price-book entry, a new unit) show up immediately without a reload.
+  const [pricingItems, setPricingItems] = useState<PricingItem[]>(pricingItemsProp);
+  const [units, setUnits] = useState<Unit[]>(unitsProp);
+
+  // Row targeted by the "add this to your pricing list?" prompt, plus the set of
+  // descriptions the user chose to skip so we don't keep re-asking.
+  const [pricePrompt, setPricePrompt] = useState<number | null>(null);
+  const [dismissedPrices, setDismissedPrices] = useState<Set<string>>(new Set());
+  const [addingToBook, setAddingToBook] = useState(false);
 
   const [header, setHeader] = useState({
     quote_number: quote?.quote_number ?? '',
@@ -130,20 +150,70 @@ export function QuoteBuilder({
     }));
   }
 
-  /** Append a pricing-worksheet row prefilled from a saved price-book item. */
-  function addFromCatalog(value: string) {
-    const item = pricingItems.find((p) => String(p.id) === value);
-    if (!item) return;
-    const row: PricingRow = {
+  /**
+   * When a pricing-row description matches a saved price-book entry, pull its
+   * unit and unit price in. Called as the description changes so picking from
+   * the dropdown fills the rest of the row.
+   */
+  function applyPriceBook(i: number, description: string) {
+    const item = pricingItems.find((p) => normDesc(p.description) === normDesc(description));
+    if (!item) {
+      updatePricing(i, { description });
+      return;
+    }
+    updatePricing(i, {
       description: item.description,
-      quantity: '1',
-      unit: item.unit ?? 'ea',
+      unit: item.unit ?? '',
       unit_price: String(item.unit_price),
-    };
-    setPricingRows((rs) => {
-      const onlyBlank = rs.length === 1 && !rs[0].description.trim() && !rs[0].unit_price.trim();
-      return onlyBlank ? [row] : [...rs, row];
     });
+  }
+
+  /**
+   * On blur of a pricing row, offer to save a new price to the book: only when
+   * it has a description and a price, isn't already in the book, and wasn't
+   * skipped before.
+   */
+  function maybePromptAddToBook(i: number) {
+    const row = pricingRows[i];
+    if (!row) return;
+    const desc = row.description.trim();
+    if (!desc || num(row.unit_price) <= 0) return;
+    if (pricingItems.some((p) => normDesc(p.description) === normDesc(desc))) return;
+    if (dismissedPrices.has(normDesc(desc))) return;
+    if (pricePrompt !== null || addingToBook) return;
+    setPricePrompt(i);
+  }
+
+  function skipAddToBook() {
+    if (pricePrompt !== null) {
+      const desc = pricingRows[pricePrompt]?.description.trim();
+      if (desc) setDismissedPrices((s) => new Set(s).add(normDesc(desc)));
+    }
+    setPricePrompt(null);
+  }
+
+  async function confirmAddToBook() {
+    if (pricePrompt === null) return;
+    const row = pricingRows[pricePrompt];
+    if (!row) {
+      setPricePrompt(null);
+      return;
+    }
+    setAddingToBook(true);
+    const res = await quickAddPricingItemAction({
+      description: row.description.trim(),
+      unit: row.unit || null,
+      unit_price: num(row.unit_price),
+      category: header.category || null,
+    });
+    if (res.ok && res.item) {
+      setPricingItems((items) => [...items, res.item!]);
+    } else {
+      // Don't block quoting on a price-book save failing; just stop re-asking.
+      setDismissedPrices((s) => new Set(s).add(normDesc(row.description)));
+    }
+    setAddingToBook(false);
+    setPricePrompt(null);
   }
 
   // Existing quotes store both kinds in one list; split them for editing. Rows
@@ -164,7 +234,9 @@ export function QuoteBuilder({
   const [displayRows, setDisplayRows] = useState<DisplayRow[]>(
     existingDisplay.length
       ? existingDisplay.map((li) => ({
-          description: li.description,
+          // Normalize to editor HTML so legacy plain-text (with newlines) and
+          // any stored formatting both load into the rich-text editor cleanly.
+          description: sanitizeRichText(li.description),
           // Fall back to quantity × unit price for pre-split quotes with no amount.
           amount: String(li.amount ?? li.quantity * li.unit_price),
         }))
@@ -244,7 +316,7 @@ export function QuoteBuilder({
           amount: null,
         })),
       ...displayRows
-        .filter((r) => r.description.trim())
+        .filter((r) => !isRichTextEmpty(r.description))
         .map<LineItemInput>((r) => ({
           kind: 'display',
           description: r.description,
@@ -420,11 +492,9 @@ export function QuoteBuilder({
               {displayRows.map((r, i) => (
                 <tr key={i} className="border-b border-black/5 last:border-0 align-top">
                   <td className="px-2 py-2">
-                    <textarea
-                      className="input"
-                      rows={2}
+                    <RichTextEditor
                       value={r.description}
-                      onChange={(e) => updateDisplay(i, { description: e.target.value })}
+                      onChange={(html) => updateDisplay(i, { description: html })}
                       placeholder="Furnish and install new carpet tile throughout corridor …"
                     />
                   </td>
@@ -491,36 +561,17 @@ export function QuoteBuilder({
             <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
           </button>
           {pricingOpen && (
-            <div className="flex items-center gap-2">
-              {pricingItems.length > 0 && (
-                <select
-                  className="input w-auto py-2 text-sm"
-                  value=""
-                  onChange={(e) => {
-                    addFromCatalog(e.target.value);
-                    e.currentTarget.value = '';
-                  }}
-                >
-                  <option value="">+ From price book…</option>
-                  {pricingItems.map((p) => (
-                    <option key={p.id} value={String(p.id)}>
-                      {p.description}
-                      {p.unit_price ? ` — ${money(p.unit_price, { cents: true })}${p.unit ? `/${p.unit}` : ''}` : ''}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <button type="button" className="btn-secondary" onClick={addPricing}>
-                + Add Item
-              </button>
-            </div>
+            <button type="button" className="btn-secondary" onClick={addPricing}>
+              + Add Item
+            </button>
           )}
         </div>
         {pricingOpen ? (
           <>
             <p className="mb-4 mt-1 text-xs text-brand-gray">
-              Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Use it to work out
-              your numbers, then enter what the customer sees in Line Items above.
+              Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Pick a saved
+              price from the Description dropdown, or type your own — you&apos;ll be asked whether to save new prices to your
+              pricing list. Then enter what the customer sees in Line Items above.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-sm">
@@ -538,11 +589,12 @@ export function QuoteBuilder({
                   {pricingRows.map((r, i) => (
                     <tr key={i} className="border-b border-black/5 last:border-0 align-top">
                       <td className="px-2 py-2">
-                        <textarea
+                        <input
                           className="input"
-                          rows={1}
+                          list="qb-pricebook"
                           value={r.description}
-                          onChange={(e) => updatePricing(i, { description: e.target.value })}
+                          onChange={(e) => applyPriceBook(i, e.target.value)}
+                          onBlur={() => maybePromptAddToBook(i)}
                           placeholder="Carpet tile, adhesive, labor …"
                         />
                       </td>
@@ -550,10 +602,22 @@ export function QuoteBuilder({
                         <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updatePricing(i, { quantity: e.target.value })} />
                       </td>
                       <td className="px-2 py-2">
-                        <input className="input" value={r.unit} onChange={(e) => updatePricing(i, { unit: e.target.value })} list="qb-units" />
+                        <UnitSelect
+                          units={units}
+                          value={r.unit}
+                          onChange={(label) => updatePricing(i, { unit: label })}
+                          onUnitAdded={(u) => setUnits((us) => [...us, u])}
+                        />
                       </td>
                       <td className="px-2 py-2">
-                        <input className="input" inputMode="decimal" value={r.unit_price} onChange={(e) => updatePricing(i, { unit_price: e.target.value })} placeholder="0.00" />
+                        <input
+                          className="input"
+                          inputMode="decimal"
+                          value={r.unit_price}
+                          onChange={(e) => updatePricing(i, { unit_price: e.target.value })}
+                          onBlur={() => maybePromptAddToBook(i)}
+                          placeholder="0.00"
+                        />
                       </td>
                       <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
                         {money(num(r.quantity) * num(r.unit_price), { cents: true })}
@@ -569,9 +633,13 @@ export function QuoteBuilder({
                   ))}
                 </tbody>
               </table>
-              <datalist id="qb-units">
-                {UNITS.map((u) => (
-                  <option key={u} value={u} />
+              <datalist id="qb-pricebook">
+                {pricingItems.map((p) => (
+                  <option key={p.id} value={p.description}>
+                    {p.unit_price
+                      ? `${money(p.unit_price, { cents: true })}${p.unit ? `/${p.unit}` : ''}`
+                      : ''}
+                  </option>
                 ))}
               </datalist>
             </div>
@@ -608,6 +676,32 @@ export function QuoteBuilder({
           </div>
         </div>
       </div>
+
+      {pricePrompt !== null && pricingRows[pricePrompt] && (
+        <Modal open onClose={skipAddToBook} title="Add to pricing list?">
+          <div className="space-y-4">
+            <p className="text-sm text-brand-ink">
+              <span className="font-semibold">{pricingRows[pricePrompt].description.trim()}</span>{' '}
+              <span className="text-brand-gray">
+                at {money(num(pricingRows[pricePrompt].unit_price), { cents: true })}
+                {pricingRows[pricePrompt].unit ? `/${pricingRows[pricePrompt].unit}` : ''}
+              </span>{' '}
+              isn&apos;t in your pricing list yet.
+            </p>
+            <p className="text-sm text-brand-gray">
+              Add it so you can reuse it on future quotes?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={skipAddToBook} disabled={addingToBook}>
+                Not now
+              </button>
+              <button type="button" className="btn-primary" onClick={confirmAddToBook} disabled={addingToBook}>
+                {addingToBook ? 'Adding…' : 'Add to list'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 

@@ -99,7 +99,7 @@ function QuoteList({ quotes }: { quotes: QuoteLite[] }) {
       ))}
       <li className="pt-3 text-right">
         <Link href="/quotes" className="text-xs font-semibold text-brand-green-dark hover:underline">
-          Go to Open Quotes →
+          Go to Quotes →
         </Link>
       </li>
     </ul>

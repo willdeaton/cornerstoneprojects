@@ -20,8 +20,8 @@ type NavEntry = LinkEntry | GroupEntry;
 
 const BASE_NAV: LinkEntry[] = [
   { kind: 'link', href: '/dashboard', label: 'Dashboard', icon: DashIcon },
-  { kind: 'link', href: '/quotes', label: 'Open Quotes', icon: QuoteIcon },
-  { kind: 'link', href: '/projects', label: 'Active Projects', icon: ProjectIcon },
+  { kind: 'link', href: '/quotes', label: 'Quotes', icon: QuoteIcon },
+  { kind: 'link', href: '/projects', label: 'Projects', icon: ProjectIcon },
 ];
 
 export function AppShell({
