@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { adminTimeByWeek } from '@/lib/data';
 import { PageHeader, StatCard } from '@/components/ui';
 import { TimesheetReview } from './TimesheetReview';
+import { TimeTabs } from '../TimeTabs';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +24,7 @@ export default async function TimesheetsPage() {
         title="Timesheets"
         subtitle="Review clocked hours by week and mark shifts as paid"
       />
+      <TimeTabs canManage />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Hours (8 weeks)" value={`${totalHours.toFixed(1)}h`} accent="gray" />
