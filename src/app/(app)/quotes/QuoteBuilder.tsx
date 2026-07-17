@@ -12,11 +12,12 @@ import type {
   QuoteDocInput,
   QuoteWithItems,
   CustomerWithContacts,
+  CustomerContact,
   PricingItem,
   Unit,
 } from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
-import { quickAddPricingItemAction } from '@/app/actions/catalog';
+import { quickAddPricingItemAction, quickAddCustomerAction, quickAddContactAction } from '@/app/actions/catalog';
 
 /** Internal cost worksheet row — never printed on the customer PDF. */
 interface PricingRow {
@@ -59,7 +60,7 @@ function blankDisplayRow(): DisplayRow {
 
 export function QuoteBuilder({
   quote,
-  customers = [],
+  customers: customersProp = [],
   pricingItems: pricingItemsProp = [],
   units: unitsProp = [],
 }: {
@@ -104,50 +105,130 @@ export function QuoteBuilder({
     quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
   );
 
-  // Customer picker. A saved customer is chosen by its id; '__other__' means a
-  // one-off customer typed by hand. When editing, preselect the saved customer
-  // (and contact) whose name matches the stored quote.
+  // Saved customers are held in state so a quick-add from the picker below shows
+  // up immediately (and can be auto-selected) without a full page reload.
+  const [customers, setCustomers] = useState<CustomerWithContacts[]>(customersProp);
+
+  // Customer + contact are chosen from a single combined picker. When editing,
+  // preselect the saved customer (and contact) whose name matches the stored
+  // quote. A quote whose customer isn't in the saved list keeps its stored value
+  // (see the "current" option below) until the user picks or adds a saved one.
   const norm = (v: string | null | undefined) => (v ?? '').trim().toLowerCase();
   const matchedCustomer = customers.find((c) => norm(c.name) === norm(quote?.customer));
-  const [customerId, setCustomerId] = useState<string>(
-    matchedCustomer ? String(matchedCustomer.id) : quote?.customer ? '__other__' : customers.length ? '' : '__other__'
-  );
   const matchedContact = matchedCustomer?.contacts.find(
     (ct) => norm(ct.name) === norm(quote?.customer_contact)
   );
+  const [customerId, setCustomerId] = useState<string>(matchedCustomer ? String(matchedCustomer.id) : '');
   const [contactId, setContactId] = useState<string>(matchedContact ? String(matchedContact.id) : '');
 
   const selectedCustomer = customers.find((c) => String(c.id) === customerId);
 
-  function onSelectCustomer(value: string) {
-    setCustomerId(value);
-    setContactId('');
-    if (value === '__other__' || value === '') return;
-    const c = customers.find((x) => String(x.id) === value);
-    if (!c) return;
-    // Fill from the saved record; clear contact fields so a prior customer's
-    // contact info doesn't linger.
+  // The stored customer isn't one of the saved records — offer it as a "current"
+  // option so editing an older one-off quote doesn't silently drop the name.
+  const hasUnsavedCurrent = !matchedCustomer && !!quote?.customer;
+  const selKey = customerId ? `${customerId}:${contactId}` : hasUnsavedCurrent ? '__current__' : '';
+
+  // Add-customer / add-contact modal state.
+  const [addMode, setAddMode] = useState<null | 'customer' | 'contact'>(null);
+  const blankAddForm = { name: '', title: '', email: '', phone: '', address: '', contactName: '' };
+  const [addForm, setAddForm] = useState(blankAddForm);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  /** Fill header fields from a chosen customer + optional contact. */
+  function applyCustomerContact(c: CustomerWithContacts | undefined, ct: CustomerContact | undefined) {
+    if (!c) {
+      setHeader((h) => ({
+        ...h,
+        customer: '',
+        customer_contact: '',
+        customer_email: '',
+        customer_phone: '',
+        customer_address: '',
+      }));
+      return;
+    }
     setHeader((h) => ({
       ...h,
       customer: c.name,
       customer_address: c.address ?? '',
-      customer_contact: '',
-      customer_email: '',
-      customer_phone: '',
+      customer_contact: ct?.name ?? '',
+      customer_email: ct?.email ?? '',
+      customer_phone: ct?.phone ?? '',
     }));
   }
 
-  function onSelectContact(value: string) {
-    setContactId(value);
-    if (value === '__other__' || value === '') return;
-    const ct = selectedCustomer?.contacts.find((x) => String(x.id) === value);
-    if (!ct) return;
-    setHeader((h) => ({
-      ...h,
-      customer_contact: ct.name,
-      customer_email: ct.email ?? '',
-      customer_phone: ct.phone ?? '',
-    }));
+  function onSelectCustomerContact(value: string) {
+    // Keep the stored one-off value untouched.
+    if (value === '__current__') return;
+    const [cid, ctid] = value.split(':');
+    setCustomerId(cid ?? '');
+    setContactId(ctid ?? '');
+    const c = customers.find((x) => String(x.id) === cid);
+    const ct = ctid ? c?.contacts.find((x) => String(x.id) === ctid) : undefined;
+    applyCustomerContact(c, ct);
+  }
+
+  function openAdd(mode: 'customer' | 'contact') {
+    setAddError(null);
+    setAddForm(blankAddForm);
+    setAddMode(mode);
+  }
+
+  async function confirmAdd() {
+    setAddError(null);
+    setAddSaving(true);
+    try {
+      if (addMode === 'customer') {
+        const res = await quickAddCustomerAction({
+          name: addForm.name,
+          address: addForm.address || null,
+          contact: addForm.contactName
+            ? { name: addForm.contactName, title: addForm.title, email: addForm.email, phone: addForm.phone }
+            : null,
+        });
+        if (!res.ok || !res.customer) {
+          setAddError(res.error ?? 'Could not add the customer.');
+          setAddSaving(false);
+          return;
+        }
+        const created = res.customer;
+        setCustomers((cs) => [...cs, created].sort((a, b) => a.name.localeCompare(b.name)));
+        const newContact = created.contacts[0];
+        setCustomerId(String(created.id));
+        setContactId(newContact ? String(newContact.id) : '');
+        applyCustomerContact(created, newContact);
+      } else if (addMode === 'contact') {
+        if (!selectedCustomer) {
+          setAddError('Select a customer first.');
+          setAddSaving(false);
+          return;
+        }
+        const res = await quickAddContactAction({
+          customer_id: selectedCustomer.id,
+          name: addForm.contactName,
+          title: addForm.title,
+          email: addForm.email,
+          phone: addForm.phone,
+        });
+        if (!res.ok || !res.contact) {
+          setAddError(res.error ?? 'Could not add the contact.');
+          setAddSaving(false);
+          return;
+        }
+        const created = res.contact;
+        setCustomers((cs) =>
+          cs.map((c) => (c.id === created.customer_id ? { ...c, contacts: [...c.contacts, created] } : c))
+        );
+        setContactId(String(created.id));
+        applyCustomerContact(selectedCustomer, created);
+      }
+      setAddMode(null);
+      setAddSaving(false);
+    } catch {
+      setAddError('Could not save. You may not have permission to add customers.');
+      setAddSaving(false);
+    }
   }
 
   /**
@@ -370,48 +451,49 @@ export function QuoteBuilder({
       <div className="card p-5">
         <h2 className="brand-heading mb-4 text-sm text-brand-ink">Customer &amp; Project</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className="label">Customer *</label>
-            {customers.length > 0 && (
-              <select className="input" value={customerId} onChange={(e) => onSelectCustomer(e.target.value)}>
-                <option value="">Select a saved customer…</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={String(c.id)}>
-                    {c.name}
-                  </option>
-                ))}
-                <option value="__other__">Other / one-off…</option>
-              </select>
-            )}
-            {(customers.length === 0 || customerId === '__other__') && (
-              <input
-                className={`input ${customers.length > 0 ? 'mt-2' : ''}`}
-                value={header.customer}
-                onChange={set('customer')}
-                placeholder="ARH-Highlands"
-              />
-            )}
-            {customers.length > 0 && (
-              <p className="mt-1 text-xs text-brand-gray">
-                Manage saved customers under Settings → Customers.
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="label">Contact Name</label>
-            {selectedCustomer && selectedCustomer.contacts.length > 0 && (
-              <select className="input mb-2" value={contactId} onChange={(e) => onSelectContact(e.target.value)}>
-                <option value="">Select a saved contact…</option>
-                {selectedCustomer.contacts.map((ct) => (
-                  <option key={ct.id} value={String(ct.id)}>
-                    {ct.name}
-                    {ct.title ? ` — ${ct.title}` : ''}
-                  </option>
-                ))}
-                <option value="__other__">Other…</option>
-              </select>
-            )}
-            <input className="input" value={header.customer_contact} onChange={set('customer_contact')} placeholder="Jane Doe" />
+          <div className="sm:col-span-2">
+            <label className="label">Customer &amp; Contact *</label>
+            <select className="input" value={selKey} onChange={(e) => onSelectCustomerContact(e.target.value)}>
+              <option value="">Select a customer &amp; contact…</option>
+              {hasUnsavedCurrent && (
+                <option value="__current__">
+                  {quote?.customer}
+                  {quote?.customer_contact ? ` — ${quote.customer_contact}` : ''} (current — not saved)
+                </option>
+              )}
+              {customers.map((c) => (
+                <optgroup key={c.id} label={c.name}>
+                  <option value={`${c.id}:`}>{c.name} — (no contact)</option>
+                  {c.contacts.map((ct) => (
+                    <option key={ct.id} value={`${c.id}:${ct.id}`}>
+                      {c.name} — {ct.name}
+                      {ct.title ? ` (${ct.title})` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              <button
+                type="button"
+                className="font-semibold text-brand-green-dark hover:underline"
+                onClick={() => openAdd('customer')}
+              >
+                + Add new customer
+              </button>
+              {selectedCustomer && (
+                <button
+                  type="button"
+                  className="font-semibold text-brand-green-dark hover:underline"
+                  onClick={() => openAdd('contact')}
+                >
+                  + Add contact to {selectedCustomer.name}
+                </button>
+              )}
+              <span className="text-brand-gray">
+                Not listed? Add a new customer or contact — free-typed names aren&apos;t saved.
+              </span>
+            </div>
           </div>
           <div>
             <label className="label">Contact Email</label>
@@ -697,6 +779,89 @@ export function QuoteBuilder({
               </button>
               <button type="button" className="btn-primary" onClick={confirmAddToBook} disabled={addingToBook}>
                 {addingToBook ? 'Adding…' : 'Add to list'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {addMode && (
+        <Modal
+          open
+          onClose={() => setAddMode(null)}
+          title={addMode === 'customer' ? 'Add new customer' : `Add contact to ${selectedCustomer?.name ?? 'customer'}`}
+        >
+          <div className="space-y-4">
+            {addMode === 'customer' && (
+              <div>
+                <label className="label">Customer Name *</label>
+                <input
+                  className="input"
+                  value={addForm.name}
+                  onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="ARH-Highlands"
+                  autoFocus
+                />
+              </div>
+            )}
+            <div>
+              <label className="label">Contact Name{addMode === 'contact' ? ' *' : ''}</label>
+              <input
+                className="input"
+                value={addForm.contactName}
+                onChange={(e) => setAddForm((f) => ({ ...f, contactName: e.target.value }))}
+                placeholder="Jane Doe"
+                autoFocus={addMode === 'contact'}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label">Title</label>
+                <input
+                  className="input"
+                  value={addForm.title}
+                  onChange={(e) => setAddForm((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="Facilities Manager"
+                />
+              </div>
+              <div>
+                <label className="label">Contact Email</label>
+                <input
+                  className="input"
+                  type="email"
+                  value={addForm.email}
+                  onChange={(e) => setAddForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="jane@example.com"
+                />
+              </div>
+              <div>
+                <label className="label">Contact Phone</label>
+                <input
+                  className="input"
+                  value={addForm.phone}
+                  onChange={(e) => setAddForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="(555) 555-0123"
+                />
+              </div>
+              {addMode === 'customer' && (
+                <div>
+                  <label className="label">Customer Address</label>
+                  <input
+                    className="input"
+                    value={addForm.address}
+                    onChange={(e) => setAddForm((f) => ({ ...f, address: e.target.value }))}
+                    placeholder="Street, City, ST ZIP"
+                  />
+                </div>
+              )}
+            </div>
+            {addError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{addError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={() => setAddMode(null)} disabled={addSaving}>
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={confirmAdd} disabled={addSaving}>
+                {addSaving ? 'Saving…' : addMode === 'customer' ? 'Add customer' : 'Add contact'}
               </button>
             </div>
           </div>

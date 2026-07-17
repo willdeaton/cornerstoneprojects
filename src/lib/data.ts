@@ -1126,6 +1126,10 @@ export async function createContact(input: ContactInput): Promise<number> {
   return row!.id;
 }
 
+export async function getContact(id: number): Promise<CustomerContact | undefined> {
+  return one<CustomerContact>('SELECT * FROM customer_contacts WHERE id = $1', [id]);
+}
+
 export async function updateContact(
   id: number,
   input: Omit<ContactInput, 'customer_id'>

@@ -7,7 +7,9 @@ import {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  getCustomer,
   createContact,
+  getContact,
   updateContact,
   deleteContact,
   createPricingItem,
@@ -16,7 +18,7 @@ import {
   deletePricingItem,
   createUnit,
 } from '@/lib/data';
-import type { PricingItem, Unit } from '@/lib/types';
+import type { CustomerContact, CustomerWithContacts, PricingItem, Unit } from '@/lib/types';
 
 /** Result of a save/delete action. */
 export interface ActionResult {
@@ -126,6 +128,76 @@ export async function deleteContactAction(id: number): Promise<ActionResult> {
   await deleteContact(id);
   revalidatePath('/settings/customers');
   return { ok: true };
+}
+
+/**
+ * Add a customer (and an optional first contact) from the quote builder — any
+ * signed-in user, mirroring the price-book quick-add. Returns the saved record
+ * with its contacts so the builder can drop it into its in-memory list and
+ * select it without a full page reload.
+ */
+export async function quickAddCustomerAction(input: {
+  name: string;
+  address?: string | null;
+  contact?: { name?: string | null; title?: string | null; email?: string | null; phone?: string | null } | null;
+}): Promise<ActionResult & { customer?: CustomerWithContacts }> {
+  await requireUser();
+  const name = (input.name ?? '').trim();
+  if (!name) return { ok: false, error: 'Customer name is required.' };
+  let customerId: number;
+  try {
+    customerId = await createCustomer({
+      name,
+      address: clean(input.address),
+      phone: null,
+      email: null,
+      notes: null,
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) return { ok: false, error: 'A customer with that name already exists.' };
+    throw err;
+  }
+  const contacts: CustomerContact[] = [];
+  const contactName = clean(input.contact?.name);
+  if (contactName) {
+    const contactId = await createContact({
+      customer_id: customerId,
+      name: contactName,
+      title: clean(input.contact?.title),
+      email: clean(input.contact?.email),
+      phone: clean(input.contact?.phone),
+    });
+    const ct = await getContact(contactId);
+    if (ct) contacts.push(ct);
+  }
+  const customer = await getCustomer(customerId);
+  if (!customer) return { ok: false, error: 'Could not load the new customer.' };
+  revalidatePath('/settings/customers');
+  return { ok: true, customer: { ...customer, contacts } };
+}
+
+/**
+ * Add a contact to an existing customer from the quote builder — any signed-in
+ * user. Returns the saved contact so the builder can update its list in place.
+ */
+export async function quickAddContactAction(
+  input: ContactFields
+): Promise<ActionResult & { contact?: CustomerContact }> {
+  await requireUser();
+  const name = (input.name ?? '').trim();
+  if (!name) return { ok: false, error: 'Contact name is required.' };
+  if (!input.customer_id) return { ok: false, error: 'Missing customer.' };
+  const contactId = await createContact({
+    customer_id: input.customer_id,
+    name,
+    title: clean(input.title),
+    email: clean(input.email),
+    phone: clean(input.phone),
+  });
+  const contact = await getContact(contactId);
+  if (!contact) return { ok: false, error: 'Could not load the new contact.' };
+  revalidatePath('/settings/customers');
+  return { ok: true, contact };
 }
 
 /* --------------------------------------------------------- Pricing items */
