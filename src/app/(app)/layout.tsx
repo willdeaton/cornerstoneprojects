@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { activeEntry, getLogo } from '@/lib/data';
+import { activeEntry } from '@/lib/data';
+import { DEFAULT_LOGO } from '@/lib/branding';
 import { AppShell } from './AppShell';
 
 export default async function AuthedLayout({ children }: { children: React.ReactNode }) {
@@ -8,13 +9,12 @@ export default async function AuthedLayout({ children }: { children: React.React
   if (!user) redirect('/login');
 
   const active = await activeEntry(user.id);
-  const logoSrc = (await getLogo()) ?? '/logo-onblack.png';
 
   return (
     <AppShell
       user={{ name: user.name, email: user.email, role: user.role }}
       clockedInTo={active ? { project: active.project_name, customer: active.customer } : null}
-      logoSrc={logoSrc}
+      logoSrc={DEFAULT_LOGO}
     >
       {children}
     </AppShell>
