@@ -36,6 +36,7 @@ export interface CompanySettingsRow {
   phone: string;
   email: string;
   website: string;
+  default_terms: string; // pre-filled Terms & Conditions on every new quote
   updated_at: string;
 }
 
@@ -73,6 +74,7 @@ export interface CompanySettingsInput {
   phone?: string;
   email?: string;
   website?: string;
+  default_terms?: string;
 }
 
 /** Upsert the singleton settings row. Undefined fields are left unchanged. */
@@ -82,11 +84,12 @@ export async function saveCompanySettings(
   const db = await getDb();
   const { rows } = await db.query(
     `UPDATE company_settings
-        SET name    = COALESCE($1, name),
-            address = COALESCE($2, address),
-            phone   = COALESCE($3, phone),
-            email   = COALESCE($4, email),
-            website = COALESCE($5, website),
+        SET name          = COALESCE($1, name),
+            address       = COALESCE($2, address),
+            phone         = COALESCE($3, phone),
+            email         = COALESCE($4, email),
+            website       = COALESCE($5, website),
+            default_terms = COALESCE($6, default_terms),
             updated_at = now()
       WHERE id = 1
       RETURNING *`,
@@ -96,6 +99,7 @@ export async function saveCompanySettings(
       input.phone ?? null,
       input.email ?? null,
       input.website ?? null,
+      input.default_terms ?? null,
     ]
   );
   return rows[0] as CompanySettingsRow;

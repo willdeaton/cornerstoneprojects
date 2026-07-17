@@ -22,6 +22,8 @@ export interface Quote {
   issue_date: string | null;
   valid_until: string | null;
   tax_rate: number;
+  /** Optional overall markup applied to the subtotal (before tax), as a fraction. */
+  markup_rate: number;
   terms: string | null;
   prepared_by: string | null;
   created_at: string;
@@ -74,6 +76,7 @@ export interface QuoteDocInput {
   issue_date: string | null;
   valid_until: string | null;
   tax_rate: number;
+  markup_rate: number;
   terms: string | null;
   notes: string | null;
   prepared_by: string | null;

@@ -1,6 +1,7 @@
 import { getBranding } from '@/lib/branding-store';
 import { CompanyInfo } from './CompanyInfo';
 import { LogoSettings } from './LogoSettings';
+import { QuoteDefaults } from './QuoteDefaults';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +16,15 @@ export default async function CompanySettingsPage() {
           Changes apply to quotes generated after saving.
         </p>
         <CompanyInfo />
+      </div>
+
+      <div className="card p-6">
+        <h2 className="brand-heading mb-1 text-sm text-brand-gray">Quote Terms &amp; Conditions</h2>
+        <p className="mb-5 text-sm text-brand-gray">
+          The default Terms &amp; Conditions added to every new quote. Set them once here so they
+          appear on each quote PDF without retyping.
+        </p>
+        <QuoteDefaults />
       </div>
 
       <div className="card p-6">
