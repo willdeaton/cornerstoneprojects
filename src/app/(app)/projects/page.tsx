@@ -34,7 +34,7 @@ export default async function ProjectsPage({
 
   return (
     <div>
-      <PageHeader title="Active Projects" subtitle="Sold work and where it stands">
+      <PageHeader title="Projects" subtitle="Sold work and where it stands">
         <AddProjectButton />
       </PageHeader>
 
@@ -61,7 +61,7 @@ export default async function ProjectsPage({
       {projects.length === 0 ? (
         <EmptyState
           title="No projects here yet"
-          hint="Sell a quote from the Open Quotes tab, or add a project directly."
+          hint="Sell a quote from the Quotes tab, or add a project directly."
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
