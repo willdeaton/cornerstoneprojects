@@ -98,6 +98,7 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
     issue_date: clean(input.issue_date),
     valid_until: clean(input.valid_until),
     tax_rate: Number.isFinite(input.tax_rate) ? Math.max(0, input.tax_rate) : 0,
+    markup_rate: Number.isFinite(input.markup_rate) ? Math.max(0, input.markup_rate) : 0,
     terms: clean(input.terms),
     notes: clean(input.notes),
     prepared_by: clean(input.prepared_by),

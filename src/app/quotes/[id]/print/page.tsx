@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { getQuoteWithItems, quoteTotals, lineAmount } from '@/lib/data';
+import { getQuoteWithItems, lineAmount } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
 import { getCompanyInfo } from '@/lib/company';
 import { sanitizeRichText } from '@/lib/richtext';
@@ -26,10 +26,17 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
   // instead of printing $0.
   const displayItems = quote.line_items.filter((li) => li.kind !== 'pricing');
   const hasItems = displayItems.length > 0;
-  const computed = quoteTotals(quote.line_items, quote.tax_rate);
-  const subtotal = hasItems ? computed.subtotal : quote.bid_value;
-  const tax = hasItems ? computed.tax : 0;
-  const total = hasItems ? computed.total : quote.bid_value;
+
+  // Markup is hidden from the customer: fold it into each printed line price so
+  // the numbers still add up (lines -> subtotal -> tax -> total) with no
+  // separate "Markup" row. Rounding each line to cents and summing those keeps
+  // the shown subtotal exactly equal to the sum of the shown line prices.
+  const markupRate = quote.markup_rate || 0;
+  const roundCents = (n: number) => Math.round(n * 100) / 100;
+  const shownAmounts = displayItems.map((li) => roundCents(lineAmount(li) * (1 + markupRate)));
+  const subtotal = hasItems ? shownAmounts.reduce((s, a) => s + a, 0) : quote.bid_value;
+  const tax = hasItems ? roundCents(subtotal * (quote.tax_rate || 0)) : 0;
+  const total = hasItems ? roundCents(subtotal + tax) : quote.bid_value;
   const taxPct = +(quote.tax_rate * 100).toFixed(4);
 
   return (
@@ -108,14 +115,14 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
                 <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">{money(quote.bid_value, { cents: true })}</td>
               </tr>
             ) : (
-              displayItems.map((li) => (
+              displayItems.map((li, idx) => (
                 <tr key={li.id} className="border-b border-black/5 align-top">
                   <td
                     className="rich-text py-2 pr-2 text-brand-ink"
                     dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
                   />
                   <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
-                    {money(lineAmount(li), { cents: true })}
+                    {money(shownAmounts[idx], { cents: true })}
                   </td>
                 </tr>
               ))

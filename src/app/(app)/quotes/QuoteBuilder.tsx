@@ -32,6 +32,13 @@ interface DisplayRow {
   amount: string;
 }
 
+/** A worksheet row not yet in the price book, offered for saving on save. */
+interface NewPriceItem {
+  description: string;
+  unit: string | null;
+  unit_price: number;
+}
+
 const CATEGORIES = [
   'Flooring',
   'Painting',
@@ -62,11 +69,13 @@ export function QuoteBuilder({
   customers = [],
   pricingItems: pricingItemsProp = [],
   units: unitsProp = [],
+  defaultTerms = '',
 }: {
   quote?: QuoteWithItems;
   customers?: CustomerWithContacts[];
   pricingItems?: PricingItem[];
   units?: Unit[];
+  defaultTerms?: string;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -78,10 +87,12 @@ export function QuoteBuilder({
   const [pricingItems, setPricingItems] = useState<PricingItem[]>(pricingItemsProp);
   const [units, setUnits] = useState<Unit[]>(unitsProp);
 
-  // Row targeted by the "add this to your pricing list?" prompt, plus the set of
-  // descriptions the user chose to skip so we don't keep re-asking.
-  const [pricePrompt, setPricePrompt] = useState<number | null>(null);
-  const [dismissedPrices, setDismissedPrices] = useState<Set<string>>(new Set());
+  // Save-time prompt: on save we gather every worksheet row that isn't in the
+  // price book yet and offer them all at once as checkboxes, instead of nagging
+  // per row. `savePrompt` also remembers whether the pending save should open
+  // the PDF, so we can resume the save after the user answers.
+  const [savePrompt, setSavePrompt] = useState<{ items: NewPriceItem[]; viewPdf: boolean } | null>(null);
+  const [selectedNew, setSelectedNew] = useState<Set<number>>(new Set());
   const [addingToBook, setAddingToBook] = useState(false);
 
   const [header, setHeader] = useState({
@@ -96,12 +107,17 @@ export function QuoteBuilder({
     category: quote?.category ?? '',
     issue_date: quote?.issue_date ?? new Date().toISOString().slice(0, 10),
     valid_until: quote?.valid_until ?? '',
-    terms: quote?.terms ?? '',
+    // New quotes pre-fill the company-wide default terms; existing quotes keep
+    // whatever was saved on them (including an intentionally blank value).
+    terms: quote ? quote.terms ?? '' : defaultTerms,
     notes: quote?.notes ?? '',
     prepared_by: quote?.prepared_by ?? '',
   });
   const [taxPercent, setTaxPercent] = useState<string>(
     quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
+  );
+  const [markupPercent, setMarkupPercent] = useState<string>(
+    quote ? String(+(quote.markup_rate * 100).toFixed(4)) : '0'
   );
 
   // Customer picker. A saved customer is chosen by its id; '__other__' means a
@@ -169,51 +185,54 @@ export function QuoteBuilder({
   }
 
   /**
-   * On blur of a pricing row, offer to save a new price to the book: only when
-   * it has a description and a price, isn't already in the book, and wasn't
-   * skipped before.
+   * Gather every worksheet row that has a description and price but isn't in the
+   * price book yet — the candidates offered (once, on save) for saving to the
+   * pricing list. De-duplicated by description so repeats aren't offered twice.
    */
-  function maybePromptAddToBook(i: number) {
-    const row = pricingRows[i];
-    if (!row) return;
-    const desc = row.description.trim();
-    if (!desc || num(row.unit_price) <= 0) return;
-    if (pricingItems.some((p) => normDesc(p.description) === normDesc(desc))) return;
-    if (dismissedPrices.has(normDesc(desc))) return;
-    if (pricePrompt !== null || addingToBook) return;
-    setPricePrompt(i);
+  function collectNewPricingItems(): NewPriceItem[] {
+    const seen = new Set<string>();
+    const out: NewPriceItem[] = [];
+    for (const row of pricingRows) {
+      const desc = row.description.trim();
+      const price = num(row.unit_price);
+      if (!desc || price <= 0) continue;
+      const key = normDesc(desc);
+      if (seen.has(key)) continue;
+      if (pricingItems.some((p) => normDesc(p.description) === key)) continue;
+      seen.add(key);
+      out.push({ description: desc, unit: row.unit || null, unit_price: price });
+    }
+    return out;
   }
 
-  function skipAddToBook() {
-    if (pricePrompt !== null) {
-      const desc = pricingRows[pricePrompt]?.description.trim();
-      if (desc) setDismissedPrices((s) => new Set(s).add(normDesc(desc)));
+  /** Persist the checked price-book candidates, then return to finish the save. */
+  async function confirmSavePrompt() {
+    if (!savePrompt) return;
+    const { items, viewPdf } = savePrompt;
+    const chosen = items.filter((_, i) => selectedNew.has(i));
+    if (chosen.length) {
+      setAddingToBook(true);
+      for (const it of chosen) {
+        const res = await quickAddPricingItemAction({
+          description: it.description,
+          unit: it.unit,
+          unit_price: it.unit_price,
+          category: header.category || null,
+        });
+        if (res.ok && res.item) setPricingItems((prev) => [...prev, res.item!]);
+      }
+      setAddingToBook(false);
     }
-    setPricePrompt(null);
+    setSavePrompt(null);
+    await doSave(viewPdf);
   }
 
-  async function confirmAddToBook() {
-    if (pricePrompt === null) return;
-    const row = pricingRows[pricePrompt];
-    if (!row) {
-      setPricePrompt(null);
-      return;
-    }
-    setAddingToBook(true);
-    const res = await quickAddPricingItemAction({
-      description: row.description.trim(),
-      unit: row.unit || null,
-      unit_price: num(row.unit_price),
-      category: header.category || null,
-    });
-    if (res.ok && res.item) {
-      setPricingItems((items) => [...items, res.item!]);
-    } else {
-      // Don't block quoting on a price-book save failing; just stop re-asking.
-      setDismissedPrices((s) => new Set(s).add(normDesc(row.description)));
-    }
-    setAddingToBook(false);
-    setPricePrompt(null);
+  /** Dismiss the prompt without saving any prices, then finish the save. */
+  async function skipSavePrompt() {
+    if (!savePrompt) return;
+    const { viewPdf } = savePrompt;
+    setSavePrompt(null);
+    await doSave(viewPdf);
   }
 
   // Existing quotes store both kinds in one list; split them for editing. Rows
@@ -253,9 +272,14 @@ export function QuoteBuilder({
 
   const totals = useMemo(() => {
     const subtotal = displayRows.reduce((s, r) => s + num(r.amount), 0);
-    const tax = subtotal * (num(taxPercent) / 100);
-    return { subtotal, tax, total: subtotal + tax };
-  }, [displayRows, taxPercent]);
+    // Markup is applied to the subtotal first; tax is charged on the marked-up
+    // amount. Markup is folded into line prices on the PDF, so it never shows as
+    // its own line to the customer even though it raises the total.
+    const markup = subtotal * (num(markupPercent) / 100);
+    const taxable = subtotal + markup;
+    const tax = taxable * (num(taxPercent) / 100);
+    return { subtotal, markup, taxable, tax, total: taxable + tax };
+  }, [displayRows, taxPercent, markupPercent]);
 
   /* ---- pricing rows ---- */
   function updatePricing(i: number, patch: Partial<PricingRow>) {
@@ -298,7 +322,28 @@ export function QuoteBuilder({
     });
   }
 
-  async function save(viewPdf: boolean) {
+  /**
+   * Save entry point. Validates, then — if the worksheet has prices not yet in
+   * the book — opens the single "add to pricing list?" prompt before saving.
+   * Otherwise it saves straight away.
+   */
+  function save(viewPdf: boolean) {
+    setError(null);
+    if (!header.customer.trim()) {
+      setError('Customer is required.');
+      return;
+    }
+    const newItems = collectNewPricingItems();
+    if (newItems.length > 0) {
+      // Default every candidate to checked — the common case is "yes, save these".
+      setSelectedNew(new Set(newItems.map((_, i) => i)));
+      setSavePrompt({ items: newItems, viewPdf });
+      return;
+    }
+    void doSave(viewPdf);
+  }
+
+  async function doSave(viewPdf: boolean) {
     setError(null);
     if (!header.customer.trim()) {
       setError('Customer is required.');
@@ -339,6 +384,7 @@ export function QuoteBuilder({
       issue_date: header.issue_date || null,
       valid_until: header.valid_until || null,
       tax_rate: num(taxPercent) / 100,
+      markup_rate: num(markupPercent) / 100,
       terms: header.terms || null,
       notes: header.notes || null,
       prepared_by: header.prepared_by || null,
@@ -470,12 +516,7 @@ export function QuoteBuilder({
 
       {/* Customer-facing line items — shown on the PDF */}
       <div className="card p-5">
-        <div className="mb-1 flex items-center justify-between">
-          <h2 className="brand-heading text-sm text-brand-ink">Line Items</h2>
-          <button type="button" className="btn-secondary" onClick={addDisplay}>
-            + Add Line
-          </button>
-        </div>
+        <h2 className="brand-heading mb-1 text-sm text-brand-ink">Line Items</h2>
         <p className="mb-4 text-xs text-brand-gray">
           What the customer sees on the quote — a description and a total price per line.
         </p>
@@ -520,12 +561,33 @@ export function QuoteBuilder({
           </table>
         </div>
 
+        <button
+          type="button"
+          className="mt-2 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
+          onClick={addDisplay}
+        >
+          + Add Line
+        </button>
+
         {/* Totals */}
         <div className="mt-4 flex justify-end">
           <div className="w-full max-w-xs space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-brand-gray">Subtotal</span>
               <span className="font-semibold text-brand-ink">{money(totals.subtotal, { cents: true })}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-brand-gray">
+                Markup
+                <input
+                  className="input ml-2 inline-block w-16 px-2 py-1"
+                  inputMode="decimal"
+                  value={markupPercent}
+                  onChange={(e) => setMarkupPercent(e.target.value)}
+                />
+                <span className="ml-1">%</span>
+              </span>
+              <span className="font-semibold text-brand-ink">{money(totals.markup, { cents: true })}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-brand-gray">
@@ -544,34 +606,33 @@ export function QuoteBuilder({
               <span className="font-semibold text-brand-ink">Total</span>
               <span className="font-bold text-brand-ink">{money(totals.total, { cents: true })}</span>
             </div>
+            {num(markupPercent) > 0 && (
+              <p className="pt-1 text-xs text-brand-gray">
+                Markup is spread across line prices on the customer PDF — it raises the total but
+                isn&apos;t shown as its own line.
+              </p>
+            )}
           </div>
         </div>
       </div>
 
       {/* Internal pricing worksheet — not shown on the PDF */}
       <div className="card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <button
-            type="button"
-            className="flex items-center gap-2 text-left"
-            onClick={() => setPricingOpen((o) => !o)}
-            aria-expanded={pricingOpen}
-          >
-            <span className="text-brand-gray transition-transform">{pricingOpen ? '▾' : '▸'}</span>
-            <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
-          </button>
-          {pricingOpen && (
-            <button type="button" className="btn-secondary" onClick={addPricing}>
-              + Add Item
-            </button>
-          )}
-        </div>
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left"
+          onClick={() => setPricingOpen((o) => !o)}
+          aria-expanded={pricingOpen}
+        >
+          <span className="text-brand-gray transition-transform">{pricingOpen ? '▾' : '▸'}</span>
+          <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
+        </button>
         {pricingOpen ? (
           <>
             <p className="mb-4 mt-1 text-xs text-brand-gray">
               Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Pick a saved
-              price from the Description dropdown, or type your own — you&apos;ll be asked whether to save new prices to your
-              pricing list. Then enter what the customer sees in Line Items above.
+              price from the Description dropdown, or type your own — when you save the quote you&apos;ll be asked whether
+              to add any new prices to your pricing list. Then enter what the customer sees in Line Items above.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-sm">
@@ -594,7 +655,6 @@ export function QuoteBuilder({
                           list="qb-pricebook"
                           value={r.description}
                           onChange={(e) => applyPriceBook(i, e.target.value)}
-                          onBlur={() => maybePromptAddToBook(i)}
                           placeholder="Carpet tile, adhesive, labor …"
                         />
                       </td>
@@ -615,7 +675,6 @@ export function QuoteBuilder({
                           inputMode="decimal"
                           value={r.unit_price}
                           onChange={(e) => updatePricing(i, { unit_price: e.target.value })}
-                          onBlur={() => maybePromptAddToBook(i)}
                           placeholder="0.00"
                         />
                       </td>
@@ -643,6 +702,14 @@ export function QuoteBuilder({
                 ))}
               </datalist>
             </div>
+
+            <button
+              type="button"
+              className="mt-2 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
+              onClick={addPricing}
+            >
+              + Add Item
+            </button>
 
             <div className="mt-4 flex items-center justify-end gap-4">
               <button type="button" className="btn-secondary" onClick={pricingToLine}>
@@ -677,26 +744,49 @@ export function QuoteBuilder({
         </div>
       </div>
 
-      {pricePrompt !== null && pricingRows[pricePrompt] && (
-        <Modal open onClose={skipAddToBook} title="Add to pricing list?">
+      {savePrompt && (
+        <Modal open onClose={skipSavePrompt} title="Add to your pricing list?">
           <div className="space-y-4">
-            <p className="text-sm text-brand-ink">
-              <span className="font-semibold">{pricingRows[pricePrompt].description.trim()}</span>{' '}
-              <span className="text-brand-gray">
-                at {money(num(pricingRows[pricePrompt].unit_price), { cents: true })}
-                {pricingRows[pricePrompt].unit ? `/${pricingRows[pricePrompt].unit}` : ''}
-              </span>{' '}
-              isn&apos;t in your pricing list yet.
-            </p>
             <p className="text-sm text-brand-gray">
-              Add it so you can reuse it on future quotes?
+              These worksheet items aren&apos;t in your pricing list yet. Check the ones you&apos;d like to
+              save so you can reuse them on future quotes.
             </p>
+            <ul className="max-h-64 space-y-1 overflow-y-auto">
+              {savePrompt.items.map((it, i) => (
+                <li key={`${normDesc(it.description)}-${i}`}>
+                  <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-black/5">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={selectedNew.has(i)}
+                      onChange={(e) =>
+                        setSelectedNew((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(i);
+                          else next.delete(i);
+                          return next;
+                        })
+                      }
+                    />
+                    <span className="flex-1 text-sm text-brand-ink">{it.description}</span>
+                    <span className="text-sm text-brand-gray whitespace-nowrap">
+                      {money(it.unit_price, { cents: true })}
+                      {it.unit ? `/${it.unit}` : ''}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
             <div className="flex justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={skipAddToBook} disabled={addingToBook}>
-                Not now
+              <button type="button" className="btn-secondary" onClick={skipSavePrompt} disabled={addingToBook || saving}>
+                Skip &amp; save quote
               </button>
-              <button type="button" className="btn-primary" onClick={confirmAddToBook} disabled={addingToBook}>
-                {addingToBook ? 'Adding…' : 'Add to list'}
+              <button type="button" className="btn-primary" onClick={confirmSavePrompt} disabled={addingToBook || saving}>
+                {addingToBook
+                  ? 'Adding…'
+                  : selectedNew.size > 0
+                    ? `Add ${selectedNew.size} & save quote`
+                    : 'Save quote'}
               </button>
             </div>
           </div>

@@ -153,13 +153,18 @@ export function quoteTotals(
     quantity?: number;
     unit_price?: number;
   }[],
-  taxRate: number
-): { subtotal: number; tax: number; total: number } {
+  taxRate: number,
+  markupRate = 0
+): { subtotal: number; markup: number; tax: number; total: number } {
   const subtotal = items
     .filter((it) => (it.kind ?? 'display') === 'display')
     .reduce((s, it) => s + lineAmount(it), 0);
-  const tax = subtotal * (taxRate || 0);
-  return { subtotal, tax, total: subtotal + tax };
+  // Markup is applied to the subtotal first; tax is then charged on the
+  // marked-up amount so the stored total matches the customer-facing PDF.
+  const markup = subtotal * (markupRate || 0);
+  const taxable = subtotal + markup;
+  const tax = taxable * (taxRate || 0);
+  return { subtotal, markup, tax, total: taxable + tax };
 }
 
 export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | undefined> {
@@ -212,6 +217,7 @@ function headerValues(input: QuoteDocInput, total: number): unknown[] {
     input.issue_date ?? null,
     input.valid_until ?? null,
     input.tax_rate ?? 0,
+    input.markup_rate ?? 0,
     input.terms ?? null,
     input.notes ?? null,
     input.prepared_by ?? null,
@@ -223,14 +229,14 @@ export async function createQuoteWithItems(input: QuoteDocInput): Promise<number
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const { total } = quoteTotals(input.items, input.tax_rate);
+    const { total } = quoteTotals(input.items, input.tax_rate, input.markup_rate);
     const res = await client.query(
       `INSERT INTO quotes
          (quote_number, customer, project_name, category, bid_value, date_received,
           customer_contact, customer_email, customer_phone, customer_address,
-          project_location, issue_date, valid_until, tax_rate, terms, notes,
+          project_location, issue_date, valid_until, tax_rate, markup_rate, terms, notes,
           prepared_by, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'manual')
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'manual')
        RETURNING id`,
       headerValues(input, total)
     );
@@ -256,7 +262,7 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
     // quote (imported / quick-added, no line items) doesn't zero its total.
     let total: number;
     if (input.items.length > 0) {
-      total = quoteTotals(input.items, input.tax_rate).total;
+      total = quoteTotals(input.items, input.tax_rate, input.markup_rate).total;
     } else {
       const existing = await client.query('SELECT bid_value FROM quotes WHERE id = $1', [id]);
       total = (existing.rows[0]?.bid_value as number | undefined) ?? 0;
@@ -266,8 +272,8 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
          quote_number=$1, customer=$2, project_name=$3, category=$4, bid_value=$5,
          date_received=$6, customer_contact=$7, customer_email=$8, customer_phone=$9,
          customer_address=$10, project_location=$11, issue_date=$12, valid_until=$13,
-         tax_rate=$14, terms=$15, notes=$16, prepared_by=$17, updated_at=now()
-       WHERE id=$18`,
+         tax_rate=$14, markup_rate=$15, terms=$16, notes=$17, prepared_by=$18, updated_at=now()
+       WHERE id=$19`,
       [...headerValues(input, total), id]
     );
     await client.query('DELETE FROM quote_line_items WHERE quote_id = $1', [id]);

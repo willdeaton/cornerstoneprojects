@@ -187,6 +187,10 @@ async function migrate(pool: Pool) {
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS issue_date        DATE;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS valid_until       DATE;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS tax_rate          DOUBLE PRECISION NOT NULL DEFAULT 0;
+    -- Optional overall markup applied to the subtotal (before tax). Stored as a
+    -- fraction (0.15 = 15%). Hidden from the customer PDF — it's folded into the
+    -- printed line prices so the shown subtotal/tax/total stay consistent.
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS markup_rate       DOUBLE PRECISION NOT NULL DEFAULT 0;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS terms             TEXT;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS prepared_by       TEXT;
 
@@ -237,6 +241,10 @@ async function migrate(pool: Pool) {
       website    TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Default Terms & Conditions pre-filled on every new quote, editable under
+    -- Settings -> Company. Kept here (alongside the other quote-document defaults)
+    -- so one singleton row drives what appears on customer-facing quotes.
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_terms TEXT NOT NULL DEFAULT '';
     INSERT INTO company_settings (id, name, address, phone, email, website)
     VALUES (
       1,

@@ -41,6 +41,8 @@ export async function PUT(req: Request) {
     phone: str(body.phone),
     email: str(body.email),
     website: str(body.website),
+    // Terms are multi-line too: preserve internal line breaks.
+    default_terms: typeof body.default_terms === 'string' ? body.default_terms.trim() : undefined,
   });
   return NextResponse.json({ settings: saved });
 }
