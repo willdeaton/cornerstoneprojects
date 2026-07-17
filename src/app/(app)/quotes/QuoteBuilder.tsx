@@ -3,14 +3,21 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { money } from '@/lib/format';
-import type { QuoteDocInput, QuoteWithItems } from '@/lib/types';
+import type { LineItemInput, QuoteDocInput, QuoteWithItems } from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
 
-interface Row {
+/** Internal cost worksheet row — never printed on the customer PDF. */
+interface PricingRow {
   description: string;
   quantity: string;
   unit: string;
   unit_price: string;
+}
+
+/** Customer-facing line printed on the PDF: a description and a total price. */
+interface DisplayRow {
+  description: string;
+  amount: string;
 }
 
 const UNITS = ['ea', 'sf', 'lf', 'sy', 'hr', 'day', 'ls', 'gal'];
@@ -30,8 +37,11 @@ function num(v: string): number {
   return isNaN(n) ? 0 : n;
 }
 
-function blankRow(): Row {
+function blankPricingRow(): PricingRow {
   return { description: '', quantity: '1', unit: 'ea', unit_price: '' };
+}
+function blankDisplayRow(): DisplayRow {
+  return { description: '', amount: '' };
 }
 
 export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
@@ -58,37 +68,79 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
   const [taxPercent, setTaxPercent] = useState<string>(
     quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
   );
-  const [rows, setRows] = useState<Row[]>(
-    quote && quote.line_items.length
-      ? quote.line_items.map((li) => ({
+
+  // Existing quotes store both kinds in one list; split them for editing. Rows
+  // without an explicit kind predate the split and were customer-facing.
+  const existingPricing = (quote?.line_items ?? []).filter((li) => li.kind === 'pricing');
+  const existingDisplay = (quote?.line_items ?? []).filter((li) => li.kind !== 'pricing');
+
+  const [pricingRows, setPricingRows] = useState<PricingRow[]>(
+    existingPricing.length
+      ? existingPricing.map((li) => ({
           description: li.description,
           quantity: String(li.quantity),
           unit: li.unit ?? '',
           unit_price: String(li.unit_price),
         }))
-      : [blankRow()]
+      : [blankPricingRow()]
+  );
+  const [displayRows, setDisplayRows] = useState<DisplayRow[]>(
+    existingDisplay.length
+      ? existingDisplay.map((li) => ({
+          description: li.description,
+          // Fall back to quantity × unit price for pre-split quotes with no amount.
+          amount: String(li.amount ?? li.quantity * li.unit_price),
+        }))
+      : [blankDisplayRow()]
   );
 
   const set = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setHeader((h) => ({ ...h, [k]: e.target.value }));
 
+  const pricingSubtotal = useMemo(
+    () => pricingRows.reduce((s, r) => s + num(r.quantity) * num(r.unit_price), 0),
+    [pricingRows]
+  );
+
   const totals = useMemo(() => {
-    const subtotal = rows.reduce((s, r) => s + num(r.quantity) * num(r.unit_price), 0);
+    const subtotal = displayRows.reduce((s, r) => s + num(r.amount), 0);
     const tax = subtotal * (num(taxPercent) / 100);
     return { subtotal, tax, total: subtotal + tax };
-  }, [rows, taxPercent]);
+  }, [displayRows, taxPercent]);
 
-  function updateRow(i: number, patch: Partial<Row>) {
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  /* ---- pricing rows ---- */
+  function updatePricing(i: number, patch: Partial<PricingRow>) {
+    setPricingRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
-  function addRow() {
-    setRows((rs) => [...rs, blankRow()]);
+  const addPricing = () => setPricingRows((rs) => [...rs, blankPricingRow()]);
+  const removePricing = (i: number) =>
+    setPricingRows((rs) => (rs.length === 1 ? rs : rs.filter((_, idx) => idx !== i)));
+  function movePricing(i: number, dir: -1 | 1) {
+    setPricingRows((rs) => {
+      const j = i + dir;
+      if (j < 0 || j >= rs.length) return rs;
+      const copy = [...rs];
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+      return copy;
+    });
   }
-  function removeRow(i: number) {
-    setRows((rs) => (rs.length === 1 ? rs : rs.filter((_, idx) => idx !== i)));
+  /** Copy the internal pricing subtotal into a new customer line. */
+  function pricingToLine() {
+    setDisplayRows((rs) => [
+      ...rs.filter((r) => r.description.trim() || r.amount.trim()),
+      { description: header.project_name || 'Project total', amount: pricingSubtotal.toFixed(2) },
+    ]);
   }
-  function moveRow(i: number, dir: -1 | 1) {
-    setRows((rs) => {
+
+  /* ---- display rows ---- */
+  function updateDisplay(i: number, patch: Partial<DisplayRow>) {
+    setDisplayRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  const addDisplay = () => setDisplayRows((rs) => [...rs, blankDisplayRow()]);
+  const removeDisplay = (i: number) =>
+    setDisplayRows((rs) => (rs.length === 1 ? rs : rs.filter((_, idx) => idx !== i)));
+  function moveDisplay(i: number, dir: -1 | 1) {
+    setDisplayRows((rs) => {
       const j = i + dir;
       if (j < 0 || j >= rs.length) return rs;
       const copy = [...rs];
@@ -97,12 +149,34 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
     });
   }
 
-  async function save() {
+  async function save(viewPdf: boolean) {
     setError(null);
     if (!header.customer.trim()) {
       setError('Customer is required.');
       return;
     }
+    const items: LineItemInput[] = [
+      ...pricingRows
+        .filter((r) => r.description.trim())
+        .map<LineItemInput>((r) => ({
+          kind: 'pricing',
+          description: r.description,
+          quantity: num(r.quantity),
+          unit: r.unit || null,
+          unit_price: num(r.unit_price),
+          amount: null,
+        })),
+      ...displayRows
+        .filter((r) => r.description.trim())
+        .map<LineItemInput>((r) => ({
+          kind: 'display',
+          description: r.description,
+          quantity: 1,
+          unit: null,
+          unit_price: 0,
+          amount: num(r.amount),
+        })),
+    ];
     const payload: QuoteDocInput = {
       quote_number: header.quote_number || null,
       customer: header.customer,
@@ -119,20 +193,13 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
       terms: header.terms || null,
       notes: header.notes || null,
       prepared_by: header.prepared_by || null,
-      items: rows
-        .filter((r) => r.description.trim())
-        .map((r) => ({
-          description: r.description,
-          quantity: num(r.quantity),
-          unit: r.unit || null,
-          unit_price: num(r.unit_price),
-        })),
+      items,
     };
     setSaving(true);
     try {
       const res = quote
-        ? await updateQuoteDocAction(quote.id, payload)
-        : await createQuoteDocAction(payload);
+        ? await updateQuoteDocAction(quote.id, payload, viewPdf)
+        : await createQuoteDocAction(payload, viewPdf);
       // A successful action redirects server-side; only errors return here.
       if (res?.error) {
         setError(res.error);
@@ -217,14 +284,18 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
         </div>
       </div>
 
-      {/* Line items */}
+      {/* Internal pricing worksheet — not shown on the PDF */}
       <div className="card p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="brand-heading text-sm text-brand-ink">Line Items</h2>
-          <button type="button" className="btn-secondary" onClick={addRow}>
-            + Add Line
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
+          <button type="button" className="btn-secondary" onClick={addPricing}>
+            + Add Item
           </button>
         </div>
+        <p className="mb-4 text-xs text-brand-gray">
+          Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Use it to work out
+          your numbers, then enter what the customer sees in Line Items below.
+        </p>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
             <thead>
@@ -238,34 +309,34 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {pricingRows.map((r, i) => (
                 <tr key={i} className="border-b border-black/5 last:border-0 align-top">
                   <td className="px-2 py-2">
                     <textarea
                       className="input"
                       rows={1}
                       value={r.description}
-                      onChange={(e) => updateRow(i, { description: e.target.value })}
-                      placeholder="Furnish and install …"
+                      onChange={(e) => updatePricing(i, { description: e.target.value })}
+                      placeholder="Carpet tile, adhesive, labor …"
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updateRow(i, { quantity: e.target.value })} />
+                    <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updatePricing(i, { quantity: e.target.value })} />
                   </td>
                   <td className="px-2 py-2">
-                    <input className="input" value={r.unit} onChange={(e) => updateRow(i, { unit: e.target.value })} list="qb-units" />
+                    <input className="input" value={r.unit} onChange={(e) => updatePricing(i, { unit: e.target.value })} list="qb-units" />
                   </td>
                   <td className="px-2 py-2">
-                    <input className="input" inputMode="decimal" value={r.unit_price} onChange={(e) => updateRow(i, { unit_price: e.target.value })} placeholder="0.00" />
+                    <input className="input" inputMode="decimal" value={r.unit_price} onChange={(e) => updatePricing(i, { unit_price: e.target.value })} placeholder="0.00" />
                   </td>
                   <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
                     {money(num(r.quantity) * num(r.unit_price), { cents: true })}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-end gap-1 text-brand-gray">
-                      <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveRow(i, -1)} disabled={i === 0}>↑</button>
-                      <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveRow(i, 1)} disabled={i === rows.length - 1}>↓</button>
-                      <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removeRow(i)} disabled={rows.length === 1}>✕</button>
+                      <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => movePricing(i, -1)} disabled={i === 0}>↑</button>
+                      <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => movePricing(i, 1)} disabled={i === pricingRows.length - 1}>↓</button>
+                      <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removePricing(i)} disabled={pricingRows.length === 1}>✕</button>
                     </div>
                   </td>
                 </tr>
@@ -277,6 +348,71 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
               <option key={u} value={u} />
             ))}
           </datalist>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-4">
+          <button type="button" className="btn-secondary" onClick={pricingToLine}>
+            Add subtotal as a line item →
+          </button>
+          <div className="flex items-baseline gap-3 text-sm">
+            <span className="text-brand-gray">Internal subtotal</span>
+            <span className="font-semibold text-brand-ink">{money(pricingSubtotal, { cents: true })}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Customer-facing line items — shown on the PDF */}
+      <div className="card p-5">
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="brand-heading text-sm text-brand-ink">Line Items</h2>
+          <button type="button" className="btn-secondary" onClick={addDisplay}>
+            + Add Line
+          </button>
+        </div>
+        <p className="mb-4 text-xs text-brand-gray">
+          What the customer sees on the quote — a description and a total price per line.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] text-sm">
+            <thead>
+              <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
+                <th className="px-2 py-2 font-semibold">Description</th>
+                <th className="px-2 py-2 text-right font-semibold w-40">Price</th>
+                <th className="px-2 py-2 w-24" />
+              </tr>
+            </thead>
+            <tbody>
+              {displayRows.map((r, i) => (
+                <tr key={i} className="border-b border-black/5 last:border-0 align-top">
+                  <td className="px-2 py-2">
+                    <textarea
+                      className="input"
+                      rows={2}
+                      value={r.description}
+                      onChange={(e) => updateDisplay(i, { description: e.target.value })}
+                      placeholder="Furnish and install new carpet tile throughout corridor …"
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input text-right"
+                      inputMode="decimal"
+                      value={r.amount}
+                      onChange={(e) => updateDisplay(i, { amount: e.target.value })}
+                      placeholder="0.00"
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <div className="flex items-center justify-end gap-1 text-brand-gray">
+                      <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveDisplay(i, -1)} disabled={i === 0}>↑</button>
+                      <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveDisplay(i, 1)} disabled={i === displayRows.length - 1}>↓</button>
+                      <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removeDisplay(i)} disabled={displayRows.length === 1}>✕</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
         {/* Totals */}
@@ -324,11 +460,14 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         <button type="button" className="btn-secondary" onClick={() => router.push('/quotes')} disabled={saving}>
           Cancel
         </button>
-        <button type="button" className="btn-primary" onClick={save} disabled={saving}>
+        <button type="button" className="btn-secondary" onClick={() => save(false)} disabled={saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" className="btn-primary" onClick={() => save(true)} disabled={saving}>
           {saving ? 'Saving…' : quote ? 'Save & View PDF' : 'Create & View PDF'}
         </button>
       </div>

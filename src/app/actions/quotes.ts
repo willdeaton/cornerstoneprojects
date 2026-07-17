@@ -54,25 +54,29 @@ export async function updateQuoteAction(id: number, formData: FormData) {
   revalidatePath('/dashboard');
 }
 
-/** Create a full quote document (header + line items) and go to its printable page. */
-export async function createQuoteDocAction(input: QuoteDocInput) {
+/**
+ * Create a full quote document (header + line items). When `viewPdf` is true
+ * the user is taken to the printable page; otherwise they return to the quotes
+ * list so the quote can be saved without downloading a PDF.
+ */
+export async function createQuoteDocAction(input: QuoteDocInput, viewPdf = true) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
   const id = await createQuoteWithItems(sanitizeDoc(input));
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
-  redirect(`/quotes/${id}/print`);
+  redirect(viewPdf ? `/quotes/${id}/print` : '/quotes');
 }
 
-/** Update an existing quote document, then return to its printable page. */
-export async function updateQuoteDocAction(id: number, input: QuoteDocInput) {
+/** Update an existing quote document, optionally viewing its printable page. */
+export async function updateQuoteDocAction(id: number, input: QuoteDocInput, viewPdf = true) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
   await updateQuoteWithItems(id, sanitizeDoc(input));
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
   revalidatePath(`/quotes/${id}/print`);
-  redirect(`/quotes/${id}/print`);
+  redirect(viewPdf ? `/quotes/${id}/print` : '/quotes');
 }
 
 /** Trim strings, coerce numbers, and drop blank line items before persisting. */
@@ -100,10 +104,12 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
     items: (input.items ?? [])
       .filter((it) => (it.description ?? '').trim() !== '')
       .map((it) => ({
+        kind: it.kind === 'pricing' ? ('pricing' as const) : ('display' as const),
         description: it.description.trim(),
         quantity: Number.isFinite(it.quantity) ? it.quantity : 0,
         unit: clean(it.unit),
         unit_price: Number.isFinite(it.unit_price) ? it.unit_price : 0,
+        amount: it.amount != null && Number.isFinite(it.amount) ? it.amount : null,
       })),
   };
 }
