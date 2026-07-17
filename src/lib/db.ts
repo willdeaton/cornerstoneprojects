@@ -155,11 +155,31 @@ async function migrate(pool: Pool) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS time_breaks (
+      id            SERIAL PRIMARY KEY,
+      time_entry_id INTEGER NOT NULL REFERENCES time_entries(id) ON DELETE CASCADE,
+      break_start   TIMESTAMPTZ NOT NULL,
+      break_end     TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
     CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
     CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id);
     CREATE INDEX IF NOT EXISTS idx_time_project ON time_entries(project_id);
     CREATE INDEX IF NOT EXISTS idx_time_user ON time_entries(user_id);
     CREATE INDEX IF NOT EXISTS idx_files_project ON project_files(project_id);
+    CREATE INDEX IF NOT EXISTS idx_breaks_entry ON time_breaks(time_entry_id);
+  `);
+
+  // ---- Incremental migrations (safe to run repeatedly) ------------------
+  // Workers can now clock in without picking a specific job, and admins can
+  // mark each shift as paid, so time_entries needs a nullable project and a
+  // few payroll columns.
+  await pool.query(`
+    ALTER TABLE time_entries ALTER COLUMN project_id DROP NOT NULL;
+    ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+    ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
   `);
 }

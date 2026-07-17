@@ -118,7 +118,9 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             entries={timeEntries}
             clockedInHere={clockedInHere}
             clockedInElsewhere={!!active && !clockedInHere}
-            activeElsewhereName={active && !clockedInHere ? active.project_name : null}
+            activeElsewhereName={
+              active && !clockedInHere ? active.project_name ?? 'a general shift' : null
+            }
           />
           <ProjectFiles projectId={project.id} files={files} />
         </div>
