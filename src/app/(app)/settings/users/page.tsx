@@ -2,7 +2,6 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listUsers } from '@/lib/data';
 import { shortDate } from '@/lib/format';
-import { PageHeader } from '@/components/ui';
 import { AddUserButton } from './AddUserButton';
 import { UserRowActions } from './UserRowActions';
 
@@ -23,9 +22,13 @@ export default async function UsersPage() {
 
   return (
     <div>
-      <PageHeader title="Users" subtitle="Manage who can access the tracker and clock in">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="brand-heading text-sm text-brand-gray">Users</h2>
+          <p className="text-sm text-brand-gray">Manage who can access the tracker and clock in.</p>
+        </div>
         <AddUserButton canGrantAdmin={me.role === 'admin'} />
-      </PageHeader>
+      </div>
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">

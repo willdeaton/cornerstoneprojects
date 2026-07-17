@@ -22,9 +22,10 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   recent time," and a live "on the clock now" panel.
 - **Users & Auth** — email/password login, sign out, and user management
   (add users, set roles, reset passwords, deactivate). Roles: **admin**,
-  **manager**, **worker**.
-- **Settings** — upload a company logo to replace the default across the
-  sign-in screen and sidebar (admins & managers).
+  **manager**, **worker**. User management lives under **Settings → Users**.
+- **Settings** (admins & managers) — a tabbed area with **Company** (name,
+  address, phone, email, and website shown on customer-facing quote PDFs),
+  **Email** (sender identity for automated notifications), and **Users**.
 
 ## Getting started
 

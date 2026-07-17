@@ -2,7 +2,7 @@ import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { getQuoteWithItems, quoteTotals, lineAmount } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
-import { COMPANY } from '@/lib/company';
+import { getCompanyInfo } from '@/lib/company';
 import { PrintToolbar } from './PrintButton';
 
 export const dynamic = 'force-dynamic';
@@ -16,6 +16,8 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
   if (!Number.isFinite(numId)) notFound();
   const quote = await getQuoteWithItems(numId);
   if (!quote) notFound();
+
+  const company = await getCompanyInfo();
 
   // Only customer-facing ('display') line items are printed; the pricing
   // worksheet stays internal. A pipeline-only quote (imported / quick-added,
@@ -38,12 +40,14 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
         <div className="flex items-start justify-between gap-6 border-b-2 border-brand-green pb-5">
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={COMPANY.logo} alt={COMPANY.name} className="mb-3 h-14 w-auto max-w-[220px] object-contain" />
-            <p className="text-sm font-semibold text-brand-ink">{COMPANY.name}</p>
-            {COMPANY.addressLines.map((l) => (
+            <img src={company.logo} alt={company.name} className="mb-3 h-14 w-auto max-w-[220px] object-contain" />
+            <p className="text-sm font-semibold text-brand-ink">{company.name}</p>
+            {company.addressLines.map((l) => (
               <p key={l} className="text-xs text-brand-gray">{l}</p>
             ))}
-            <p className="text-xs text-brand-gray">{COMPANY.phone} · {COMPANY.email}</p>
+            <p className="text-xs text-brand-gray">
+              {[company.phone, company.email, company.website].filter(Boolean).join(' · ')}
+            </p>
           </div>
           <div className="text-right">
             <h1 className="brand-heading text-3xl text-brand-ink">Quote</h1>
@@ -152,7 +156,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
         )}
 
         <p className="mt-10 text-center text-xs text-brand-gray">
-          Thank you for the opportunity to earn your business. — {COMPANY.name}
+          Thank you for the opportunity to earn your business. — {company.name}
         </p>
       </div>
     </div>
