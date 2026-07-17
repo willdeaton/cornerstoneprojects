@@ -3,11 +3,13 @@ import { listProjects, listUserTime, activeEntry, listActiveClockIns, weekNetHou
 import { PageHeader } from '@/components/ui';
 import { dateTime, duration } from '@/lib/format';
 import { TimeClock } from './TimeClock';
+import { TimeTabs } from '../TimeTabs';
 
 export const dynamic = 'force-dynamic';
 
 export default async function TimePage() {
   const user = (await getCurrentUser())!;
+  const canManage = user.role === 'admin' || user.role === 'manager';
   const active = await activeEntry(user.id);
   const projects = (await listProjects()).filter((p) => p.status !== 'completed');
   const myEntries = await listUserTime(user.id, 25);
@@ -17,6 +19,7 @@ export default async function TimePage() {
   return (
     <div>
       <PageHeader title="Time Clock" subtitle="Clock in and out to track your time" />
+      <TimeTabs canManage={canManage} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">

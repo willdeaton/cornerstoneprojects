@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logoutAction } from '@/app/actions/auth';
+import { SETTINGS_GROUPS, TIME_GROUP, itemActive, groupActive } from './nav-config';
 
 interface NavUser {
   name: string;
@@ -11,11 +12,16 @@ interface NavUser {
   role: 'admin' | 'manager' | 'worker';
 }
 
-const NAV = [
-  { href: '/dashboard', label: 'Dashboard', icon: DashIcon },
-  { href: '/quotes', label: 'Quotes', icon: QuoteIcon },
-  { href: '/projects', label: 'Projects', icon: ProjectIcon },
-  { href: '/time', label: 'Time Clock', icon: ClockIcon },
+type IconComp = () => React.ReactElement;
+type GroupItem = { href: string; label: string; isActive: (pathname: string) => boolean };
+type LinkEntry = { kind: 'link'; href: string; label: string; icon: IconComp };
+type GroupEntry = { kind: 'group'; label: string; icon: IconComp; items: GroupItem[] };
+type NavEntry = LinkEntry | GroupEntry;
+
+const BASE_NAV: LinkEntry[] = [
+  { kind: 'link', href: '/dashboard', label: 'Dashboard', icon: DashIcon },
+  { kind: 'link', href: '/quotes', label: 'Quotes', icon: QuoteIcon },
+  { kind: 'link', href: '/projects', label: 'Projects', icon: ProjectIcon },
 ];
 
 export function AppShell({
@@ -50,37 +56,78 @@ export function AppShell({
   }
 
   const canManageUsers = user.role === 'admin' || user.role === 'manager';
-  const nav = canManageUsers
-    ? [
-        ...NAV,
-        { href: '/timesheets', label: 'Timesheets', icon: TimesheetIcon },
-        { href: '/settings', label: 'Settings', icon: SettingsIcon },
-      ]
-    : NAV;
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
-  const NavLinks = ({ rail = false }: { rail?: boolean }) => (
+  // "Time" groups the Time Clock + Timesheets pages. Workers only have the
+  // Time Clock, so for them it stays a plain link.
+  const timeItems = canManageUsers
+    ? TIME_GROUP.items
+    : TIME_GROUP.items.filter((it) => it.href === '/time');
+  const timeEntry: NavEntry =
+    timeItems.length > 1
+      ? {
+          kind: 'group',
+          label: TIME_GROUP.label,
+          icon: ClockIcon,
+          items: timeItems.map((it) => ({
+            href: it.href,
+            label: it.label,
+            isActive: (p) => itemActive(it, p),
+          })),
+        }
+      : { kind: 'link', href: '/time', label: 'Time Clock', icon: ClockIcon };
+
+  // "Settings" opens the two page groups (System Settings / Data) as a flyout.
+  const settingsEntry: GroupEntry = {
+    kind: 'group',
+    label: 'Settings',
+    icon: SettingsIcon,
+    items: SETTINGS_GROUPS.map((g) => ({
+      href: g.items[0].href,
+      label: g.label,
+      isActive: (p) => groupActive(g, p),
+    })),
+  };
+
+  const nav: NavEntry[] = [
+    ...BASE_NAV,
+    timeEntry,
+    ...(canManageUsers ? [settingsEntry] : []),
+  ];
+
+  const NavLinks = ({ rail = false, mobile = false }: { rail?: boolean; mobile?: boolean }) => (
     <nav className="flex flex-col gap-1">
-      {nav.map(({ href, label, icon: Icon }) => (
-        <Link
-          key={href}
-          href={href}
-          onClick={() => setOpen(false)}
-          title={rail ? label : undefined}
-          aria-label={label}
-          className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
-            rail ? 'justify-center px-0' : 'px-3'
-          } ${
-            isActive(href)
-              ? 'bg-brand-green text-white hover:bg-brand-green'
-              : 'text-white hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          <Icon />
-          {!rail && label}
-        </Link>
-      ))}
+      {nav.map((entry) =>
+        entry.kind === 'link' ? (
+          <Link
+            key={entry.href}
+            href={entry.href}
+            onClick={() => setOpen(false)}
+            title={rail ? entry.label : undefined}
+            aria-label={entry.label}
+            className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+              rail ? 'justify-center px-0' : 'px-3'
+            } ${
+              isActive(entry.href)
+                ? 'bg-brand-green text-white hover:bg-brand-green'
+                : 'text-white hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <entry.icon />
+            {!rail && entry.label}
+          </Link>
+        ) : (
+          <NavGroup
+            key={entry.label}
+            group={entry}
+            rail={rail}
+            mobile={mobile}
+            pathname={pathname}
+            onNavigate={() => setOpen(false)}
+          />
+        )
+      )}
     </nav>
   );
 
@@ -155,7 +202,7 @@ export function AppShell({
       </header>
       {open && (
         <div className="bg-black px-4 pb-4 lg:hidden">
-          <NavLinks />
+          <NavLinks mobile />
           <div className="mt-4">
             <UserCard user={user} collapsed={false} />
           </div>
@@ -166,6 +213,110 @@ export function AppShell({
       <main className="flex-1 px-4 py-6 sm:px-8 lg:px-10 lg:py-8">
         <div className="mx-auto max-w-7xl">{children}</div>
       </main>
+    </div>
+  );
+}
+
+/**
+ * A sidebar nav entry that reveals its sub-pages. On desktop the pages fly out
+ * to the right on hover; in the mobile drawer they render inline underneath.
+ */
+function NavGroup({
+  group,
+  rail,
+  mobile,
+  pathname,
+  onNavigate,
+}: {
+  group: GroupEntry;
+  rail: boolean;
+  mobile: boolean;
+  pathname: string;
+  onNavigate: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const Icon = group.icon;
+  const active = group.items.some((it) => it.isActive(pathname));
+
+  if (mobile) {
+    return (
+      <div>
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-white">
+          <Icon />
+          {group.label}
+        </div>
+        <div className="ml-9 flex flex-col gap-1 border-l border-white/10 pl-2">
+          {group.items.map((it) => (
+            <Link
+              key={it.href}
+              href={it.href}
+              onClick={onNavigate}
+              className={`rounded-lg px-3 py-2 text-sm transition-colors ${
+                it.isActive(pathname)
+                  ? 'bg-brand-green text-white'
+                  : 'text-white/70 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              {it.label}
+            </Link>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title={rail ? group.label : undefined}
+        aria-label={group.label}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={`w-full flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+          rail ? 'justify-center px-0' : 'px-3'
+        } ${
+          active
+            ? 'bg-brand-green text-white hover:bg-brand-green'
+            : 'text-white hover:bg-white/10 hover:text-white'
+        }`}
+      >
+        <Icon />
+        {!rail && <span className="flex-1 text-left">{group.label}</span>}
+        {!rail && <ChevronRightIcon />}
+      </button>
+      {open && (
+        // pl-2 bridges the gap so moving the pointer to the flyout keeps it open.
+        <div className="absolute left-full top-0 z-30 pl-2">
+          <div className="min-w-[12rem] rounded-lg border border-black/10 bg-white py-1 shadow-lg">
+            {group.items.map((it) => {
+              const on = it.isActive(pathname);
+              return (
+                <Link
+                  key={it.href}
+                  href={it.href}
+                  onClick={() => {
+                    setOpen(false);
+                    onNavigate();
+                  }}
+                  className={`block px-4 py-2 text-sm transition-colors ${
+                    on
+                      ? 'bg-brand-green/10 font-medium text-brand-ink'
+                      : 'text-brand-gray hover:bg-black/5 hover:text-brand-ink'
+                  }`}
+                >
+                  {it.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -262,6 +413,13 @@ function SignOutIcon() {
     </svg>
   );
 }
+function ChevronRightIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 18l6-6-6-6" />
+    </svg>
+  );
+}
 function DashIcon() {
   return (
     <svg {...base()}>
@@ -289,14 +447,6 @@ function ClockIcon() {
   return (
     <svg {...base()}>
       <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-function TimesheetIcon() {
-  return (
-    <svg {...base()}>
-      <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" />
-      <path d="M8 14l2.5 2.5L15 12" />
     </svg>
   );
 }
