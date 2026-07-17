@@ -80,6 +80,44 @@ export interface QuoteDocInput {
   items: LineItemInput[];
 }
 
+/* ------------------------------------------------------------- Catalogs */
+
+/** A reusable customer record that feeds the New Quote customer picker. */
+export interface Customer {
+  id: number;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A named person at a customer, with their own email + phone. */
+export interface CustomerContact {
+  id: number;
+  customer_id: number;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  created_at: string;
+}
+
+export type CustomerWithContacts = Customer & { contacts: CustomerContact[] };
+
+/** A price-book entry: a line item with a default unit and unit price. */
+export interface PricingItem {
+  id: number;
+  description: string;
+  unit: string | null;
+  unit_price: number;
+  category: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Project {
   id: number;
   quote_id: number | null;

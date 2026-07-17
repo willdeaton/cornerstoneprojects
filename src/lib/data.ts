@@ -14,6 +14,10 @@ import type {
   ProjectFile,
   QuoteStatus,
   ProjectStatus,
+  Customer,
+  CustomerContact,
+  CustomerWithContacts,
+  PricingItem,
 } from './types';
 import { hoursBetween } from './format';
 
@@ -1042,4 +1046,128 @@ export async function countAdmins(): Promise<number> {
 export async function getUserRole(id: number): Promise<string | undefined> {
   const row = await one<{ role: string }>('SELECT role FROM users WHERE id = $1', [id]);
   return row?.role;
+}
+
+/* -------------------------------------------------------------- Customers */
+
+export interface CustomerInput {
+  name: string;
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  notes?: string | null;
+}
+
+export async function listCustomers(): Promise<Customer[]> {
+  return q<Customer>('SELECT * FROM customers ORDER BY name');
+}
+
+export async function getCustomer(id: number): Promise<Customer | undefined> {
+  return one<Customer>('SELECT * FROM customers WHERE id = $1', [id]);
+}
+
+/** Every customer with its contacts, for the quote builder + settings editor. */
+export async function listCustomersWithContacts(): Promise<CustomerWithContacts[]> {
+  const customers = await listCustomers();
+  if (customers.length === 0) return [];
+  const contacts = await q<CustomerContact>(
+    'SELECT * FROM customer_contacts ORDER BY name'
+  );
+  const byCustomer = new Map<number, CustomerContact[]>();
+  for (const c of contacts) {
+    const list = byCustomer.get(c.customer_id) ?? [];
+    list.push(c);
+    byCustomer.set(c.customer_id, list);
+  }
+  return customers.map((cust) => ({ ...cust, contacts: byCustomer.get(cust.id) ?? [] }));
+}
+
+export async function createCustomer(input: CustomerInput): Promise<number> {
+  const row = await one<{ id: number }>(
+    `INSERT INTO customers (name, address, phone, email, notes)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [input.name, input.address ?? null, input.phone ?? null, input.email ?? null, input.notes ?? null]
+  );
+  return row!.id;
+}
+
+export async function updateCustomer(id: number, input: CustomerInput): Promise<void> {
+  await q(
+    `UPDATE customers
+        SET name = $1, address = $2, phone = $3, email = $4, notes = $5, updated_at = now()
+      WHERE id = $6`,
+    [input.name, input.address ?? null, input.phone ?? null, input.email ?? null, input.notes ?? null, id]
+  );
+}
+
+export async function deleteCustomer(id: number): Promise<void> {
+  await q('DELETE FROM customers WHERE id = $1', [id]);
+}
+
+/* ------------------------------------------------------- Customer contacts */
+
+export interface ContactInput {
+  customer_id: number;
+  name: string;
+  title?: string | null;
+  email?: string | null;
+  phone?: string | null;
+}
+
+export async function createContact(input: ContactInput): Promise<number> {
+  const row = await one<{ id: number }>(
+    `INSERT INTO customer_contacts (customer_id, name, title, email, phone)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [input.customer_id, input.name, input.title ?? null, input.email ?? null, input.phone ?? null]
+  );
+  return row!.id;
+}
+
+export async function updateContact(
+  id: number,
+  input: Omit<ContactInput, 'customer_id'>
+): Promise<void> {
+  await q(
+    `UPDATE customer_contacts SET name = $1, title = $2, email = $3, phone = $4 WHERE id = $5`,
+    [input.name, input.title ?? null, input.email ?? null, input.phone ?? null, id]
+  );
+}
+
+export async function deleteContact(id: number): Promise<void> {
+  await q('DELETE FROM customer_contacts WHERE id = $1', [id]);
+}
+
+/* --------------------------------------------------------- Pricing items */
+
+export interface PricingItemInput {
+  description: string;
+  unit?: string | null;
+  unit_price: number;
+  category?: string | null;
+}
+
+export async function listPricingItems(): Promise<PricingItem[]> {
+  return q<PricingItem>('SELECT * FROM pricing_items ORDER BY category NULLS FIRST, description');
+}
+
+export async function createPricingItem(input: PricingItemInput): Promise<number> {
+  const row = await one<{ id: number }>(
+    `INSERT INTO pricing_items (description, unit, unit_price, category)
+     VALUES ($1,$2,$3,$4) RETURNING id`,
+    [input.description, input.unit ?? null, input.unit_price, input.category ?? null]
+  );
+  return row!.id;
+}
+
+export async function updatePricingItem(id: number, input: PricingItemInput): Promise<void> {
+  await q(
+    `UPDATE pricing_items
+        SET description = $1, unit = $2, unit_price = $3, category = $4, updated_at = now()
+      WHERE id = $5`,
+    [input.description, input.unit ?? null, input.unit_price, input.category ?? null, id]
+  );
+}
+
+export async function deletePricingItem(id: number): Promise<void> {
+  await q('DELETE FROM pricing_items WHERE id = $1', [id]);
 }

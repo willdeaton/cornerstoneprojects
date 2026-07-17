@@ -3,7 +3,13 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { money } from '@/lib/format';
-import type { LineItemInput, QuoteDocInput, QuoteWithItems } from '@/lib/types';
+import type {
+  LineItemInput,
+  QuoteDocInput,
+  QuoteWithItems,
+  CustomerWithContacts,
+  PricingItem,
+} from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
 
 /** Internal cost worksheet row — never printed on the customer PDF. */
@@ -44,7 +50,15 @@ function blankDisplayRow(): DisplayRow {
   return { description: '', amount: '' };
 }
 
-export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
+export function QuoteBuilder({
+  quote,
+  customers = [],
+  pricingItems = [],
+}: {
+  quote?: QuoteWithItems;
+  customers?: CustomerWithContacts[];
+  pricingItems?: PricingItem[];
+}) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +82,68 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
   const [taxPercent, setTaxPercent] = useState<string>(
     quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
   );
+
+  // Customer picker. A saved customer is chosen by its id; '__other__' means a
+  // one-off customer typed by hand. When editing, preselect the saved customer
+  // (and contact) whose name matches the stored quote.
+  const norm = (v: string | null | undefined) => (v ?? '').trim().toLowerCase();
+  const matchedCustomer = customers.find((c) => norm(c.name) === norm(quote?.customer));
+  const [customerId, setCustomerId] = useState<string>(
+    matchedCustomer ? String(matchedCustomer.id) : quote?.customer ? '__other__' : customers.length ? '' : '__other__'
+  );
+  const matchedContact = matchedCustomer?.contacts.find(
+    (ct) => norm(ct.name) === norm(quote?.customer_contact)
+  );
+  const [contactId, setContactId] = useState<string>(matchedContact ? String(matchedContact.id) : '');
+
+  const selectedCustomer = customers.find((c) => String(c.id) === customerId);
+
+  function onSelectCustomer(value: string) {
+    setCustomerId(value);
+    setContactId('');
+    if (value === '__other__' || value === '') return;
+    const c = customers.find((x) => String(x.id) === value);
+    if (!c) return;
+    // Fill from the saved record; clear contact fields so a prior customer's
+    // contact info doesn't linger.
+    setHeader((h) => ({
+      ...h,
+      customer: c.name,
+      customer_address: c.address ?? '',
+      customer_contact: '',
+      customer_email: '',
+      customer_phone: '',
+    }));
+  }
+
+  function onSelectContact(value: string) {
+    setContactId(value);
+    if (value === '__other__' || value === '') return;
+    const ct = selectedCustomer?.contacts.find((x) => String(x.id) === value);
+    if (!ct) return;
+    setHeader((h) => ({
+      ...h,
+      customer_contact: ct.name,
+      customer_email: ct.email ?? '',
+      customer_phone: ct.phone ?? '',
+    }));
+  }
+
+  /** Append a pricing-worksheet row prefilled from a saved price-book item. */
+  function addFromCatalog(value: string) {
+    const item = pricingItems.find((p) => String(p.id) === value);
+    if (!item) return;
+    const row: PricingRow = {
+      description: item.description,
+      quantity: '1',
+      unit: item.unit ?? 'ea',
+      unit_price: String(item.unit_price),
+    };
+    setPricingRows((rs) => {
+      const onlyBlank = rs.length === 1 && !rs[0].description.trim() && !rs[0].unit_price.trim();
+      return onlyBlank ? [row] : [...rs, row];
+    });
+  }
 
   // Existing quotes store both kinds in one list; split them for editing. Rows
   // without an explicit kind predate the split and were customer-facing.
@@ -223,10 +299,45 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className="label">Customer *</label>
-            <input className="input" value={header.customer} onChange={set('customer')} placeholder="ARH-Highlands" />
+            {customers.length > 0 && (
+              <select className="input" value={customerId} onChange={(e) => onSelectCustomer(e.target.value)}>
+                <option value="">Select a saved customer…</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name}
+                  </option>
+                ))}
+                <option value="__other__">Other / one-off…</option>
+              </select>
+            )}
+            {(customers.length === 0 || customerId === '__other__') && (
+              <input
+                className={`input ${customers.length > 0 ? 'mt-2' : ''}`}
+                value={header.customer}
+                onChange={set('customer')}
+                placeholder="ARH-Highlands"
+              />
+            )}
+            {customers.length > 0 && (
+              <p className="mt-1 text-xs text-brand-gray">
+                Manage saved customers under Settings → Customers.
+              </p>
+            )}
           </div>
           <div>
             <label className="label">Contact Name</label>
+            {selectedCustomer && selectedCustomer.contacts.length > 0 && (
+              <select className="input mb-2" value={contactId} onChange={(e) => onSelectContact(e.target.value)}>
+                <option value="">Select a saved contact…</option>
+                {selectedCustomer.contacts.map((ct) => (
+                  <option key={ct.id} value={String(ct.id)}>
+                    {ct.name}
+                    {ct.title ? ` — ${ct.title}` : ''}
+                  </option>
+                ))}
+                <option value="__other__">Other…</option>
+              </select>
+            )}
             <input className="input" value={header.customer_contact} onChange={set('customer_contact')} placeholder="Jane Doe" />
           </div>
           <div>
@@ -286,11 +397,31 @@ export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
 
       {/* Internal pricing worksheet — not shown on the PDF */}
       <div className="card p-5">
-        <div className="mb-1 flex items-center justify-between">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
           <h2 className="brand-heading text-sm text-brand-ink">Pricing Worksheet</h2>
-          <button type="button" className="btn-secondary" onClick={addPricing}>
-            + Add Item
-          </button>
+          <div className="flex items-center gap-2">
+            {pricingItems.length > 0 && (
+              <select
+                className="input w-auto py-2 text-sm"
+                value=""
+                onChange={(e) => {
+                  addFromCatalog(e.target.value);
+                  e.currentTarget.value = '';
+                }}
+              >
+                <option value="">+ From price book…</option>
+                {pricingItems.map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.description}
+                    {p.unit_price ? ` — ${money(p.unit_price, { cents: true })}${p.unit ? `/${p.unit}` : ''}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button type="button" className="btn-secondary" onClick={addPricing}>
+              + Add Item
+            </button>
+          </div>
         </div>
         <p className="mb-4 text-xs text-brand-gray">
           Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Use it to work out
