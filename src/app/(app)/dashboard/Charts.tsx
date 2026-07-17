@@ -54,9 +54,9 @@ function WeekTooltip({ active, payload }: any) {
   const p = payload[0].payload as WeekBucket;
   return (
     <div className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs shadow-card">
-      <p className="font-semibold text-brand-ink">Week of {weekLabel(p.week_start)}</p>
+      <p className="font-semibold text-brand-ink">As of week of {weekLabel(p.week_start)}</p>
       <p className="text-brand-gray">
-        <span className="font-semibold text-brand-ink">{p.count}</span> quote{p.count === 1 ? '' : 's'} ·{' '}
+        <span className="font-semibold text-brand-ink">{p.count}</span> total quote{p.count === 1 ? '' : 's'} ·{' '}
         <span className="font-semibold text-brand-ink">{money(p.value)}</span>
       </p>
       <p className="mt-0.5 text-[11px] text-brand-gray">Click to see details</p>
@@ -131,7 +131,7 @@ export function QuotesByWeek({ data }: { data: WeekBucket[] }) {
   return (
     <div className="h-64 w-full">
       {!hasData ? (
-        <p className="py-8 text-center text-sm text-brand-gray">No quotes in the last 8 weeks.</p>
+        <p className="py-8 text-center text-sm text-brand-gray">No quotes yet.</p>
       ) : (
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 20, right: 12, left: 0, bottom: 0 }}>
@@ -152,7 +152,7 @@ export function QuotesByWeek({ data }: { data: WeekBucket[] }) {
         </ResponsiveContainer>
       )}
       {sel && (
-        <Drilldown title={`Quotes — week of ${weekLabel(sel.week_start)}`} onClose={() => setSel(null)}>
+        <Drilldown title={`Total quotes as of week of ${weekLabel(sel.week_start)}`} onClose={() => setSel(null)}>
           <QuoteList quotes={sel.quotes} />
         </Drilldown>
       )}
