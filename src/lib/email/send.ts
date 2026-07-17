@@ -19,6 +19,7 @@ import {
   buildProjectReminderEmail,
   buildCompletionReportEmail,
   buildScheduleChangeEmail,
+  buildPasswordResetEmail,
 } from './templates';
 
 /*
@@ -55,6 +56,25 @@ export async function sendTestEmail(): Promise<SendResult> {
   if (!loaded.ok) return { status: 'error', count: 0, attempted: 0, reason: loaded.reason };
   const { subject, html } = buildTestEmail();
   await sendEmail(loaded.cfg, loaded.cfg.from_email, subject, html);
+  return { status: 'sent', count: 1, attempted: 1 };
+}
+
+/* ---------------------------------------- Event-driven: password reset */
+
+/**
+ * Send a single password-reset link to one address. Unlike the subscription
+ * emails, the recipient is explicit (the account owner), so this bypasses the
+ * flag-based recipient resolver but still funnels through the same transport.
+ */
+export async function sendPasswordResetEmail(
+  toEmail: string,
+  firstName: string,
+  resetUrl: string
+): Promise<SendResult> {
+  const loaded = await loadConfigOrReason();
+  if (!loaded.ok) return { status: 'error', count: 0, attempted: 1, reason: loaded.reason };
+  const { subject, html } = buildPasswordResetEmail(firstName, resetUrl);
+  await sendEmail(loaded.cfg, toEmail, subject, html);
   return { status: 'sent', count: 1, attempted: 1 };
 }
 
