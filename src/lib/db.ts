@@ -315,6 +315,26 @@ Your City, ST 00000',
   `);
 
   /* ==================================================================
+   * Self-service password reset.
+   *
+   * A user who forgets their password requests a reset from the login
+   * screen; we email them a single-use, time-limited link. Only the SHA-256
+   * HASH of the token is stored here — the raw token lives only in the email
+   * link — so a leaked table can't be used to reset anyone's password.
+   * Rows are consumed on use (used_at) and are safe to prune after expiry.
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      token_hash TEXT PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at    TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pw_reset_user ON password_reset_tokens(user_id);
+  `);
+
+  /* ==================================================================
    * Saved catalogs, editable under Settings:
    *   - customers            : reusable customer records (address, contact
    *                            details) that feed the New Quote customer picker.

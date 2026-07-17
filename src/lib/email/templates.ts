@@ -51,6 +51,37 @@ export function buildCompletionReportEmail(
   };
 }
 
+/** EVENT-DRIVEN: a user requested a password reset link. */
+export function buildPasswordResetEmail(firstName: string, resetUrl: string): RenderedEmail {
+  const hello = firstName ? `Hi ${firstName},` : 'Hi,';
+  return {
+    subject: 'Reset your Cornerstone Project Tracker password',
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2421;font-size:15px;line-height:1.5">
+        <p>${hello}</p>
+        <p>We received a request to reset the password for your Cornerstone
+        Project Tracker account. Click the button below to choose a new
+        password. This link expires in 1 hour.</p>
+        <p style="margin:24px 0">
+          <a href="${resetUrl}"
+             style="background:#7ab648;color:#1f2421;text-decoration:none;font-weight:bold;padding:12px 20px;border-radius:8px;display:inline-block">
+            Reset password
+          </a>
+        </p>
+        <p style="font-size:13px;color:#5b615c">
+          If the button doesn't work, copy and paste this link into your browser:<br />
+          <a href="${resetUrl}" style="color:#4a7a2b">${resetUrl}</a>
+        </p>
+        <p style="font-size:13px;color:#5b615c">
+          If you didn't request this, you can safely ignore this email — your
+          password won't change.
+        </p>
+        <p style="font-size:13px;color:#5b615c">— Cornerstone Facility Solutions</p>
+      </div>
+    `,
+  };
+}
+
 /** EVENT-DRIVEN: a project's schedule/status changed. */
 export function buildScheduleChangeEmail(
   recipient: Recipient,

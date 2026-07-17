@@ -1,17 +1,12 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { getBranding } from '@/lib/branding-store';
-import { LoginForm } from './LoginForm';
+import { ForgotPasswordForm } from './ForgotPasswordForm';
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ reset?: string }>;
-}) {
+export default async function ForgotPasswordPage() {
   const user = await getCurrentUser();
   if (user) redirect('/dashboard');
 
-  const { reset } = await searchParams;
   const branding = await getBranding();
 
   return (
@@ -22,14 +17,11 @@ export default async function LoginPage({
           <img src={branding.full} alt="Cornerstone Facility Solutions" className="h-16 w-auto max-w-[280px] object-contain" />
         </div>
         <div className="card p-6">
-          <h1 className="brand-heading mb-1 text-lg text-brand-ink">Project Tracker</h1>
-          <p className="mb-5 text-sm text-brand-gray">Sign in to continue.</p>
-          {reset && (
-            <p className="mb-4 rounded-lg bg-brand-green/15 px-3 py-2 text-sm text-brand-green-dark">
-              Your password has been reset. Sign in with your new password.
-            </p>
-          )}
-          <LoginForm />
+          <h1 className="brand-heading mb-1 text-lg text-brand-ink">Forgot password</h1>
+          <p className="mb-5 text-sm text-brand-gray">
+            Enter your email and we&rsquo;ll send you a link to reset your password.
+          </p>
+          <ForgotPasswordForm />
         </div>
         <p className="mt-6 text-center text-xs text-white/50">
           Cornerstone Facility Solutions · DLOM Group
