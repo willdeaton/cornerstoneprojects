@@ -84,6 +84,37 @@ docker run -p 3000:3000 -e DATABASE_URL="postgresql://user:pass@host:5432/corner
 
 To start fresh, drop and recreate the database (or `TRUNCATE` its tables).
 
+## Email notifications
+
+Automated email (sender identity, per-user subscriptions, scheduled reminders /
+reports, and event-driven schedule-change alerts) is built in.
+
+- **Sender identity** lives in a single settings row, edited under **Settings →
+  Email Settings** (`from_name` / `from_email`). The from address must be a
+  sender authenticated with your email provider.
+- **Transport** is the provider's HTTP API (SendGrid v3 `/mail/send`) — not
+  SMTP. The API key is read from the **`SENDGRID_API_KEY`** environment variable
+  and is never stored in the database. Nothing is sent unless both the key and a
+  `from_email` are set.
+- **Who receives what** is controlled per-user with subscription checkboxes in
+  the user add/edit forms (Users page). Addresses resolve
+  `personal_email → work_email → login email`.
+- **Scheduled emails** are driven by env vars + a built-in cron scheduler
+  (defaults shown; all off unless turned `on`):
+
+  ```bash
+  PROJECT_REMINDER=on   PROJECT_REMINDER_DAY=fri  PROJECT_REMINDER_HOUR=8  PROJECT_REMINDER_TZ=America/New_York
+  COMPLETION_REPORT=on  COMPLETION_REPORT_DAY=mon COMPLETION_REPORT_HOUR=7 COMPLETION_REPORT_TZ=America/New_York
+  ```
+
+  Duplicate sends across multiple workers are debounced by a per-job singleton
+  run lock. Each job can also be fired manually (bypassing the debounce) via
+  `POST /api/email/send-reminders` and `POST /api/email/send-report`; send a
+  test message with `POST /api/test-email`.
+
+Email body/HTML content is intentionally left as stubbed placeholder functions
+in `src/lib/email/templates.ts` — fill in the real copy there.
+
 ## Excel upload format
 
 Any `.xlsx`/`.csv` with a header row works — columns are matched by name

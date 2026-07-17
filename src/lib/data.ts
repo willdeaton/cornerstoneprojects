@@ -752,12 +752,30 @@ export interface UserRow {
   role: 'admin' | 'manager' | 'worker';
   active: number;
   created_at: string;
+  // Optional email-resolution chain (personal_email -> work_email -> email).
+  personal_email: string | null;
+  work_email: string | null;
+  // Per-user email subscription flags (one boolean column per email type).
+  receives_project_reminders: boolean;
+  receives_completion_report: boolean;
+  receives_schedule_change_emails: boolean;
 }
 
+/** Column names ↔ payload keys for the per-user subscription flags. */
+export const USER_EMAIL_FLAGS = [
+  'receives_project_reminders',
+  'receives_completion_report',
+  'receives_schedule_change_emails',
+] as const;
+export type UserEmailFlag = (typeof USER_EMAIL_FLAGS)[number];
+
+const USER_SELECT =
+  `id, name, email, role, active, created_at,
+   personal_email, work_email,
+   receives_project_reminders, receives_completion_report, receives_schedule_change_emails`;
+
 export async function listUsers(): Promise<UserRow[]> {
-  return q<UserRow>(
-    'SELECT id, name, email, role, active, created_at FROM users ORDER BY active DESC, name'
-  );
+  return q<UserRow>(`SELECT ${USER_SELECT} FROM users ORDER BY active DESC, name`);
 }
 
 export async function listActiveWorkers(): Promise<UserRow[]> {
@@ -771,17 +789,63 @@ export async function emailExists(email: string): Promise<boolean> {
   return !!row;
 }
 
+export interface UserEmailFields {
+  personal_email?: string | null;
+  work_email?: string | null;
+  receives_project_reminders?: boolean;
+  receives_completion_report?: boolean;
+  receives_schedule_change_emails?: boolean;
+}
+
 export async function createUserRow(u: {
   name: string;
   email: string;
   password_hash: string;
   role: 'admin' | 'manager' | 'worker';
-}): Promise<number> {
+} & UserEmailFields): Promise<number> {
   const row = await one<{ id: number }>(
-    'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id',
-    [u.name, u.email.trim().toLowerCase(), u.password_hash, u.role]
+    `INSERT INTO users
+       (name, email, password_hash, role, personal_email, work_email,
+        receives_project_reminders, receives_completion_report, receives_schedule_change_emails)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [
+      u.name,
+      u.email.trim().toLowerCase(),
+      u.password_hash,
+      u.role,
+      u.personal_email?.trim() || null,
+      u.work_email?.trim() || null,
+      u.receives_project_reminders ?? false,
+      u.receives_completion_report ?? false,
+      u.receives_schedule_change_emails ?? false,
+    ]
   );
   return row!.id;
+}
+
+/**
+ * Update a user's email-resolution fields and subscription flags. The edit
+ * form always submits every field, so these are assigned directly (allowing
+ * an email field to be cleared).
+ */
+export async function updateUserEmailFields(id: number, fields: Required<UserEmailFields>): Promise<void> {
+  await q(
+    `UPDATE users
+        SET personal_email = $1,
+            work_email     = $2,
+            receives_project_reminders      = $3,
+            receives_completion_report      = $4,
+            receives_schedule_change_emails = $5
+      WHERE id = $6`,
+    [
+      fields.personal_email?.trim() || null,
+      fields.work_email?.trim() || null,
+      fields.receives_project_reminders,
+      fields.receives_completion_report,
+      fields.receives_schedule_change_emails,
+      id,
+    ]
+  );
 }
 
 export async function setUserRole(id: number, role: 'admin' | 'manager' | 'worker'): Promise<void> {

@@ -5,7 +5,13 @@ import { useRouter } from 'next/navigation';
 import type { Role } from '@/lib/auth';
 import type { UserRow } from '@/lib/data';
 import { Modal } from '@/components/Modal';
-import { changeRoleAction, toggleActiveAction, resetPasswordAction } from '@/app/actions/users';
+import {
+  changeRoleAction,
+  toggleActiveAction,
+  resetPasswordAction,
+  updateUserSubscriptionsAction,
+} from '@/app/actions/users';
+import { SubscriptionFields } from './SubscriptionFields';
 
 export function UserRowActions({
   user,
@@ -18,6 +24,7 @@ export function UserRowActions({
 }) {
   const [open, setOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
+  const [subsOpen, setSubsOpen] = useState(false);
   const [pw, setPw] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -95,6 +102,15 @@ export function UserRowActions({
           >
             Reset password
           </button>
+          <button
+            className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+            onClick={() => {
+              setOpen(false);
+              setSubsOpen(true);
+            }}
+          >
+            Email subscriptions
+          </button>
           {!isSelf &&
             (user.active ? (
               <button
@@ -139,6 +155,42 @@ export function UserRowActions({
             </button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={subsOpen}
+        onClose={() => setSubsOpen(false)}
+        title={`Email subscriptions — ${user.name}`}
+      >
+        <form
+          action={(fd) => {
+            start(async () => {
+              await updateUserSubscriptionsAction({}, fd);
+              setSubsOpen(false);
+              router.refresh();
+            });
+          }}
+          className="space-y-4"
+        >
+          <input type="hidden" name="id" value={user.id} />
+          <SubscriptionFields
+            defaults={{
+              personal_email: user.personal_email,
+              work_email: user.work_email,
+              receives_project_reminders: user.receives_project_reminders,
+              receives_completion_report: user.receives_completion_report,
+              receives_schedule_change_emails: user.receives_schedule_change_emails,
+            }}
+          />
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" className="btn-secondary" onClick={() => setSubsOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={pending}>
+              {pending ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );
