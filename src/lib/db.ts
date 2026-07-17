@@ -24,18 +24,24 @@ types.setTypeParser(20, (v) => parseInt(v, 10));
 
 const g = globalThis as unknown as { __cspg?: Pool; __cspgInit?: Promise<void> };
 
-function needsSsl(url: string): boolean {
+function sslOption(url: string): false | { rejectUnauthorized: boolean } {
+  // Default OFF. Many hosted setups — including Railway's private network
+  // (postgres.railway.internal) — do NOT support SSL, and forcing it there
+  // throws "The server does not support SSL connections". Only enable SSL when
+  // the connection string explicitly asks for it, or PGSSL=true is set.
   if (process.env.PGSSL === 'false') return false;
-  if (/sslmode=disable/.test(url)) return false;
-  // Local connections don't use SSL; hosted ones generally do.
-  return !/localhost|127\.0\.0\.1/.test(url) || process.env.PGSSL === 'true';
+  if (process.env.PGSSL === 'true') return { rejectUnauthorized: false };
+  if (/sslmode=(require|verify-ca|verify-full|prefer)/.test(url)) {
+    return { rejectUnauthorized: false };
+  }
+  return false;
 }
 
 function createPool(): Pool {
   const url = process.env.DATABASE_URL || DEFAULT_URL;
   return new Pool({
     connectionString: url,
-    ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined,
+    ssl: sslOption(url),
     max: 10,
   });
 }

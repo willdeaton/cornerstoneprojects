@@ -39,8 +39,10 @@ npm run dev
 Open http://localhost:3000. The tables are created and **seeded on first run**.
 If `DATABASE_URL` is unset, the app falls back to
 `postgresql://postgres:postgres@localhost:5432/cornerstone` for local dev.
-Connections to non-local hosts use SSL automatically (set `PGSSL=false` to
-disable, or `PGSSL=true` to force it).
+SSL is off by default (which is what Railway's private network and local dev
+want); it turns on when the connection string includes `sslmode=require` (as
+managed hosts like Supabase/Neon provide), or you can force it with `PGSSL=true`
+/ disable it with `PGSSL=false`.
 
 ### Default logins (change these!)
 
