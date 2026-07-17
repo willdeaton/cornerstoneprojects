@@ -31,6 +31,9 @@ export default async function QuotesPage({
       <PageHeader title="Open Quotes" subtitle="Prospective work in the pipeline">
         <UploadButton />
         <AddQuoteButton />
+        <Link href="/quotes/new" className="btn-primary">
+          + Create Quote
+        </Link>
       </PageHeader>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

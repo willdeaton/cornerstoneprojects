@@ -1,6 +1,19 @@
 import 'server-only';
+import type { PoolClient } from 'pg';
 import { getDb } from './db';
-import type { Quote, Project, Note, TimeEntry, ProjectFile, QuoteStatus, ProjectStatus } from './types';
+import type {
+  Quote,
+  QuoteLineItem,
+  QuoteWithItems,
+  QuoteDocInput,
+  LineItemInput,
+  Project,
+  Note,
+  TimeEntry,
+  ProjectFile,
+  QuoteStatus,
+  ProjectStatus,
+} from './types';
 import { hoursBetween } from './format';
 
 /* -------------------------------------------------------------- Query helpers */
@@ -99,6 +112,128 @@ export async function convertQuoteToProject(id: number): Promise<number | null> 
     await client.query("UPDATE quotes SET status = 'sold', updated_at = now() WHERE id = $1", [id]);
     await client.query('COMMIT');
     return projectId;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/* ------------------------------------------------- Quote documents (line items) */
+
+/** Subtotal / tax / total for a set of line items at a given tax rate. */
+export function quoteTotals(
+  items: Pick<LineItemInput, 'quantity' | 'unit_price'>[],
+  taxRate: number
+): { subtotal: number; tax: number; total: number } {
+  const subtotal = items.reduce((s, it) => s + (it.quantity || 0) * (it.unit_price || 0), 0);
+  const tax = subtotal * (taxRate || 0);
+  return { subtotal, tax, total: subtotal + tax };
+}
+
+export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | undefined> {
+  const quote = await getQuote(id);
+  if (!quote) return undefined;
+  const line_items = await q<QuoteLineItem>(
+    'SELECT * FROM quote_line_items WHERE quote_id = $1 ORDER BY position, id',
+    [id]
+  );
+  return { ...quote, line_items };
+}
+
+async function replaceItems(client: PoolClient, quoteId: number, items: LineItemInput[]) {
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it.description?.trim()) continue;
+    await client.query(
+      `INSERT INTO quote_line_items (quote_id, position, description, quantity, unit, unit_price)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [quoteId, i, it.description.trim(), it.quantity || 0, it.unit?.trim() || null, it.unit_price || 0]
+    );
+  }
+}
+
+// Header columns written by both create and update, in a fixed order so the
+// two INSERT/UPDATE statements stay in sync. date_received mirrors issue_date
+// so quote documents flow into the dashboard's weekly buckets.
+function headerValues(input: QuoteDocInput, total: number): unknown[] {
+  return [
+    input.quote_number ?? null,
+    input.customer,
+    input.project_name ?? null,
+    input.category ?? null,
+    total,
+    input.issue_date ?? null, // date_received
+    input.customer_contact ?? null,
+    input.customer_email ?? null,
+    input.customer_phone ?? null,
+    input.customer_address ?? null,
+    input.project_location ?? null,
+    input.issue_date ?? null,
+    input.valid_until ?? null,
+    input.tax_rate ?? 0,
+    input.terms ?? null,
+    input.notes ?? null,
+    input.prepared_by ?? null,
+  ];
+}
+
+export async function createQuoteWithItems(input: QuoteDocInput): Promise<number> {
+  const db = await getDb();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const { total } = quoteTotals(input.items, input.tax_rate);
+    const res = await client.query(
+      `INSERT INTO quotes
+         (quote_number, customer, project_name, category, bid_value, date_received,
+          customer_contact, customer_email, customer_phone, customer_address,
+          project_location, issue_date, valid_until, tax_rate, terms, notes,
+          prepared_by, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'manual')
+       RETURNING id`,
+      headerValues(input, total)
+    );
+    const id = res.rows[0].id as number;
+    await replaceItems(client, id, input.items);
+    await client.query('COMMIT');
+    return id;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Promise<void> {
+  const db = await getDb();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    // Only recompute bid_value from line items when the quote actually has
+    // them; otherwise preserve the stored value so editing a pipeline-only
+    // quote (imported / quick-added, no line items) doesn't zero its total.
+    let total: number;
+    if (input.items.length > 0) {
+      total = quoteTotals(input.items, input.tax_rate).total;
+    } else {
+      const existing = await client.query('SELECT bid_value FROM quotes WHERE id = $1', [id]);
+      total = (existing.rows[0]?.bid_value as number | undefined) ?? 0;
+    }
+    await client.query(
+      `UPDATE quotes SET
+         quote_number=$1, customer=$2, project_name=$3, category=$4, bid_value=$5,
+         date_received=$6, customer_contact=$7, customer_email=$8, customer_phone=$9,
+         customer_address=$10, project_location=$11, issue_date=$12, valid_until=$13,
+         tax_rate=$14, terms=$15, notes=$16, prepared_by=$17, updated_at=now()
+       WHERE id=$18`,
+      [...headerValues(input, total), id]
+    );
+    await client.query('DELETE FROM quote_line_items WHERE quote_id = $1', [id]);
+    await replaceItems(client, id, input.items);
+    await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

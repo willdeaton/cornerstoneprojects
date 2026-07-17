@@ -98,6 +98,17 @@ async function migrate(pool: Pool) {
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS quote_line_items (
+      id          SERIAL PRIMARY KEY,
+      quote_id    INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+      position    INTEGER NOT NULL DEFAULT 0,
+      description TEXT NOT NULL,
+      quantity    DOUBLE PRECISION NOT NULL DEFAULT 1,
+      unit        TEXT,
+      unit_price  DOUBLE PRECISION NOT NULL DEFAULT 0,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS projects (
       id              SERIAL PRIMARY KEY,
       quote_id        INTEGER REFERENCES quotes(id) ON DELETE SET NULL,
@@ -163,7 +174,22 @@ async function migrate(pool: Pool) {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Document fields added to quotes so a pipeline record can also be a
+    -- full customer-facing quote. ADD COLUMN IF NOT EXISTS keeps this safe to
+    -- run against databases created before these columns existed.
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_contact  TEXT;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_email    TEXT;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_phone    TEXT;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_address  TEXT;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS project_location  TEXT;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS issue_date        DATE;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS valid_until       DATE;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS tax_rate          DOUBLE PRECISION NOT NULL DEFAULT 0;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS terms             TEXT;
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS prepared_by       TEXT;
+
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
+    CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_line_items(quote_id);
     CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
     CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id);
     CREATE INDEX IF NOT EXISTS idx_time_project ON time_entries(project_id);

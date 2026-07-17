@@ -9,7 +9,10 @@ import {
   updateQuoteStatus,
   deleteQuote,
   convertQuoteToProject,
+  createQuoteWithItems,
+  updateQuoteWithItems,
 } from '@/lib/data';
+import type { QuoteDocInput } from '@/lib/types';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -49,6 +52,60 @@ export async function updateQuoteAction(id: number, formData: FormData) {
   });
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
+}
+
+/** Create a full quote document (header + line items) and go to its printable page. */
+export async function createQuoteDocAction(input: QuoteDocInput) {
+  await requireUser();
+  if (!input.customer?.trim()) return { error: 'Customer is required.' };
+  const id = await createQuoteWithItems(sanitizeDoc(input));
+  revalidatePath('/quotes');
+  revalidatePath('/dashboard');
+  redirect(`/quotes/${id}/print`);
+}
+
+/** Update an existing quote document, then return to its printable page. */
+export async function updateQuoteDocAction(id: number, input: QuoteDocInput) {
+  await requireUser();
+  if (!input.customer?.trim()) return { error: 'Customer is required.' };
+  await updateQuoteWithItems(id, sanitizeDoc(input));
+  revalidatePath('/quotes');
+  revalidatePath('/dashboard');
+  revalidatePath(`/quotes/${id}/print`);
+  redirect(`/quotes/${id}/print`);
+}
+
+/** Trim strings, coerce numbers, and drop blank line items before persisting. */
+function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
+  const clean = (v: string | null | undefined) => {
+    const t = (v ?? '').toString().trim();
+    return t === '' ? null : t;
+  };
+  return {
+    quote_number: clean(input.quote_number),
+    customer: input.customer.trim(),
+    customer_contact: clean(input.customer_contact),
+    customer_email: clean(input.customer_email),
+    customer_phone: clean(input.customer_phone),
+    customer_address: clean(input.customer_address),
+    project_name: clean(input.project_name),
+    project_location: clean(input.project_location),
+    category: clean(input.category),
+    issue_date: clean(input.issue_date),
+    valid_until: clean(input.valid_until),
+    tax_rate: Number.isFinite(input.tax_rate) ? Math.max(0, input.tax_rate) : 0,
+    terms: clean(input.terms),
+    notes: clean(input.notes),
+    prepared_by: clean(input.prepared_by),
+    items: (input.items ?? [])
+      .filter((it) => (it.description ?? '').trim() !== '')
+      .map((it) => ({
+        description: it.description.trim(),
+        quantity: Number.isFinite(it.quantity) ? it.quantity : 0,
+        unit: clean(it.unit),
+        unit_price: Number.isFinite(it.unit_price) ? it.unit_price : 0,
+      })),
+  };
 }
 
 export interface ParsedQuote {

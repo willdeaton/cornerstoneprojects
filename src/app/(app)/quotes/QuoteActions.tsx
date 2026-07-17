@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { QuoteStatus } from '@/lib/types';
 import {
@@ -46,6 +47,20 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
       </button>
       {open && (
         <div className="absolute right-0 z-10 mt-1 w-44 overflow-hidden rounded-lg border border-black/10 bg-white py-1 text-sm shadow-card-hover">
+          <Link
+            href={`/quotes/${id}/print`}
+            className="block w-full px-4 py-2 text-left font-medium text-brand-ink hover:bg-black/5"
+            onClick={() => setOpen(false)}
+          >
+            View / PDF
+          </Link>
+          <Link
+            href={`/quotes/${id}/edit`}
+            className="block w-full px-4 py-2 text-left text-brand-ink hover:bg-black/5"
+            onClick={() => setOpen(false)}
+          >
+            Edit Quote
+          </Link>
           {status === 'open' && (
             <button
               className="block w-full px-4 py-2 text-left font-medium text-brand-green-dark hover:bg-brand-green/10"

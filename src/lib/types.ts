@@ -13,8 +13,60 @@ export interface Quote {
   week_of: string | null;
   source: string;
   notes: string | null;
+  // Customer-facing quote-document fields.
+  customer_contact: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  customer_address: string | null;
+  project_location: string | null;
+  issue_date: string | null;
+  valid_until: string | null;
+  tax_rate: number;
+  terms: string | null;
+  prepared_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface QuoteLineItem {
+  id: number;
+  quote_id: number;
+  position: number;
+  description: string;
+  quantity: number;
+  unit: string | null;
+  unit_price: number;
+  created_at: string;
+}
+
+export type QuoteWithItems = Quote & { line_items: QuoteLineItem[] };
+
+/** A single line-item row as submitted from the quote builder. */
+export interface LineItemInput {
+  description: string;
+  quantity: number;
+  unit: string | null;
+  unit_price: number;
+}
+
+/** Full payload submitted when creating/updating a quote document. */
+export interface QuoteDocInput {
+  quote_number: string | null;
+  customer: string;
+  customer_contact: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  customer_address: string | null;
+  project_name: string | null;
+  project_location: string | null;
+  category: string | null;
+  issue_date: string | null;
+  valid_until: string | null;
+  tax_rate: number;
+  terms: string | null;
+  notes: string | null;
+  prepared_by: string | null;
+  items: LineItemInput[];
 }
 
 export interface Project {

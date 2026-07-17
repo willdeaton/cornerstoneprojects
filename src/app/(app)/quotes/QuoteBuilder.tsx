@@ -1,0 +1,337 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { money } from '@/lib/format';
+import type { QuoteDocInput, QuoteWithItems } from '@/lib/types';
+import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
+
+interface Row {
+  description: string;
+  quantity: string;
+  unit: string;
+  unit_price: string;
+}
+
+const UNITS = ['ea', 'sf', 'lf', 'sy', 'hr', 'day', 'ls', 'gal'];
+const CATEGORIES = [
+  'Flooring',
+  'Painting',
+  'Renovation',
+  'Roofing',
+  'Restoration',
+  'Maintenance',
+  'Janitorial',
+  'Grounds',
+];
+
+function num(v: string): number {
+  const n = parseFloat(v.replace(/[$,\s]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function blankRow(): Row {
+  return { description: '', quantity: '1', unit: 'ea', unit_price: '' };
+}
+
+export function QuoteBuilder({ quote }: { quote?: QuoteWithItems }) {
+  const router = useRouter();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [header, setHeader] = useState({
+    quote_number: quote?.quote_number ?? '',
+    customer: quote?.customer ?? '',
+    customer_contact: quote?.customer_contact ?? '',
+    customer_email: quote?.customer_email ?? '',
+    customer_phone: quote?.customer_phone ?? '',
+    customer_address: quote?.customer_address ?? '',
+    project_name: quote?.project_name ?? '',
+    project_location: quote?.project_location ?? '',
+    category: quote?.category ?? '',
+    issue_date: quote?.issue_date ?? new Date().toISOString().slice(0, 10),
+    valid_until: quote?.valid_until ?? '',
+    terms: quote?.terms ?? '',
+    notes: quote?.notes ?? '',
+    prepared_by: quote?.prepared_by ?? '',
+  });
+  const [taxPercent, setTaxPercent] = useState<string>(
+    quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
+  );
+  const [rows, setRows] = useState<Row[]>(
+    quote && quote.line_items.length
+      ? quote.line_items.map((li) => ({
+          description: li.description,
+          quantity: String(li.quantity),
+          unit: li.unit ?? '',
+          unit_price: String(li.unit_price),
+        }))
+      : [blankRow()]
+  );
+
+  const set = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setHeader((h) => ({ ...h, [k]: e.target.value }));
+
+  const totals = useMemo(() => {
+    const subtotal = rows.reduce((s, r) => s + num(r.quantity) * num(r.unit_price), 0);
+    const tax = subtotal * (num(taxPercent) / 100);
+    return { subtotal, tax, total: subtotal + tax };
+  }, [rows, taxPercent]);
+
+  function updateRow(i: number, patch: Partial<Row>) {
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function addRow() {
+    setRows((rs) => [...rs, blankRow()]);
+  }
+  function removeRow(i: number) {
+    setRows((rs) => (rs.length === 1 ? rs : rs.filter((_, idx) => idx !== i)));
+  }
+  function moveRow(i: number, dir: -1 | 1) {
+    setRows((rs) => {
+      const j = i + dir;
+      if (j < 0 || j >= rs.length) return rs;
+      const copy = [...rs];
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+      return copy;
+    });
+  }
+
+  async function save() {
+    setError(null);
+    if (!header.customer.trim()) {
+      setError('Customer is required.');
+      return;
+    }
+    const payload: QuoteDocInput = {
+      quote_number: header.quote_number || null,
+      customer: header.customer,
+      customer_contact: header.customer_contact || null,
+      customer_email: header.customer_email || null,
+      customer_phone: header.customer_phone || null,
+      customer_address: header.customer_address || null,
+      project_name: header.project_name || null,
+      project_location: header.project_location || null,
+      category: header.category || null,
+      issue_date: header.issue_date || null,
+      valid_until: header.valid_until || null,
+      tax_rate: num(taxPercent) / 100,
+      terms: header.terms || null,
+      notes: header.notes || null,
+      prepared_by: header.prepared_by || null,
+      items: rows
+        .filter((r) => r.description.trim())
+        .map((r) => ({
+          description: r.description,
+          quantity: num(r.quantity),
+          unit: r.unit || null,
+          unit_price: num(r.unit_price),
+        })),
+    };
+    setSaving(true);
+    try {
+      const res = quote
+        ? await updateQuoteDocAction(quote.id, payload)
+        : await createQuoteDocAction(payload);
+      // A successful action redirects server-side; only errors return here.
+      if (res?.error) {
+        setError(res.error);
+        setSaving(false);
+      }
+    } catch (err) {
+      // NEXT_REDIRECT is thrown on success — let it bubble to navigate.
+      if (err && typeof err === 'object' && 'digest' in err && String((err as { digest: string }).digest).startsWith('NEXT_REDIRECT')) {
+        throw err;
+      }
+      setError('Could not save the quote. Please try again.');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Customer / project details */}
+      <div className="card p-5">
+        <h2 className="brand-heading mb-4 text-sm text-brand-ink">Customer &amp; Project</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className="label">Customer *</label>
+            <input className="input" value={header.customer} onChange={set('customer')} placeholder="ARH-Highlands" />
+          </div>
+          <div>
+            <label className="label">Contact Name</label>
+            <input className="input" value={header.customer_contact} onChange={set('customer_contact')} placeholder="Jane Doe" />
+          </div>
+          <div>
+            <label className="label">Contact Email</label>
+            <input className="input" type="email" value={header.customer_email} onChange={set('customer_email')} placeholder="jane@example.com" />
+          </div>
+          <div>
+            <label className="label">Contact Phone</label>
+            <input className="input" value={header.customer_phone} onChange={set('customer_phone')} placeholder="(555) 555-0123" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Customer Address</label>
+            <textarea className="input" rows={2} value={header.customer_address} onChange={set('customer_address')} placeholder="Street, City, ST ZIP" />
+          </div>
+          <div>
+            <label className="label">Project / Description</label>
+            <input className="input" value={header.project_name} onChange={set('project_name')} placeholder="Corridor Flooring Replacement" />
+          </div>
+          <div>
+            <label className="label">Project Location</label>
+            <input className="input" value={header.project_location} onChange={set('project_location')} placeholder="Building B, 2nd floor" />
+          </div>
+          <div>
+            <label className="label">Category</label>
+            <input className="input" value={header.category} onChange={set('category')} list="qb-categories" placeholder="Flooring" />
+            <datalist id="qb-categories">
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label className="label">Prepared By</label>
+            <input className="input" value={header.prepared_by} onChange={set('prepared_by')} placeholder="Your name" />
+          </div>
+        </div>
+      </div>
+
+      {/* Quote meta */}
+      <div className="card p-5">
+        <h2 className="brand-heading mb-4 text-sm text-brand-ink">Quote Details</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div>
+            <label className="label">Quote #</label>
+            <input className="input" value={header.quote_number} onChange={set('quote_number')} placeholder="Q-2601" />
+          </div>
+          <div>
+            <label className="label">Issue Date</label>
+            <input className="input" type="date" value={header.issue_date} onChange={set('issue_date')} />
+          </div>
+          <div>
+            <label className="label">Valid Until</label>
+            <input className="input" type="date" value={header.valid_until} onChange={set('valid_until')} />
+          </div>
+        </div>
+      </div>
+
+      {/* Line items */}
+      <div className="card p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="brand-heading text-sm text-brand-ink">Line Items</h2>
+          <button type="button" className="btn-secondary" onClick={addRow}>
+            + Add Line
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead>
+              <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
+                <th className="px-2 py-2 font-semibold">Description</th>
+                <th className="px-2 py-2 font-semibold w-20">Qty</th>
+                <th className="px-2 py-2 font-semibold w-24">Unit</th>
+                <th className="px-2 py-2 font-semibold w-32">Unit Price</th>
+                <th className="px-2 py-2 text-right font-semibold w-28">Amount</th>
+                <th className="px-2 py-2 w-24" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-b border-black/5 last:border-0 align-top">
+                  <td className="px-2 py-2">
+                    <textarea
+                      className="input"
+                      rows={1}
+                      value={r.description}
+                      onChange={(e) => updateRow(i, { description: e.target.value })}
+                      placeholder="Furnish and install …"
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updateRow(i, { quantity: e.target.value })} />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input className="input" value={r.unit} onChange={(e) => updateRow(i, { unit: e.target.value })} list="qb-units" />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input className="input" inputMode="decimal" value={r.unit_price} onChange={(e) => updateRow(i, { unit_price: e.target.value })} placeholder="0.00" />
+                  </td>
+                  <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                    {money(num(r.quantity) * num(r.unit_price), { cents: true })}
+                  </td>
+                  <td className="px-2 py-2">
+                    <div className="flex items-center justify-end gap-1 text-brand-gray">
+                      <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveRow(i, -1)} disabled={i === 0}>↑</button>
+                      <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveRow(i, 1)} disabled={i === rows.length - 1}>↓</button>
+                      <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removeRow(i)} disabled={rows.length === 1}>✕</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <datalist id="qb-units">
+            {UNITS.map((u) => (
+              <option key={u} value={u} />
+            ))}
+          </datalist>
+        </div>
+
+        {/* Totals */}
+        <div className="mt-4 flex justify-end">
+          <div className="w-full max-w-xs space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-brand-gray">Subtotal</span>
+              <span className="font-semibold text-brand-ink">{money(totals.subtotal, { cents: true })}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-brand-gray">
+                Tax
+                <input
+                  className="input ml-2 inline-block w-16 px-2 py-1"
+                  inputMode="decimal"
+                  value={taxPercent}
+                  onChange={(e) => setTaxPercent(e.target.value)}
+                />
+                <span className="ml-1">%</span>
+              </span>
+              <span className="font-semibold text-brand-ink">{money(totals.tax, { cents: true })}</span>
+            </div>
+            <div className="flex justify-between border-t border-black/10 pt-2 text-base">
+              <span className="font-semibold text-brand-ink">Total</span>
+              <span className="font-bold text-brand-ink">{money(totals.total, { cents: true })}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Terms & notes */}
+      <div className="card p-5">
+        <h2 className="brand-heading mb-4 text-sm text-brand-ink">Terms &amp; Notes</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className="label">Terms &amp; Conditions</label>
+            <textarea className="input" rows={4} value={header.terms} onChange={set('terms')} placeholder="Payment due within 30 days. Pricing valid for 30 days." />
+          </div>
+          <div>
+            <label className="label">Notes (shown on quote)</label>
+            <textarea className="input" rows={4} value={header.notes} onChange={set('notes')} placeholder="Anything the customer should know." />
+          </div>
+        </div>
+      </div>
+
+      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <button type="button" className="btn-secondary" onClick={() => router.push('/quotes')} disabled={saving}>
+          Cancel
+        </button>
+        <button type="button" className="btn-primary" onClick={save} disabled={saving}>
+          {saving ? 'Saving…' : quote ? 'Save & View PDF' : 'Create & View PDF'}
+        </button>
+      </div>
+    </div>
+  );
+}
