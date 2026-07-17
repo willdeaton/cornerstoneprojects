@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { getQuoteWithItems, listCustomersWithContacts, listPricingItems, listUnits } from '@/lib/data';
@@ -23,6 +24,11 @@ export default async function EditQuotePage({ params }: { params: Promise<{ id: 
 
   return (
     <div>
+      <div className="mb-5">
+        <Link href="/quotes" className="text-sm font-medium text-brand-gray hover:text-brand-ink">
+          ← Back to Quotes
+        </Link>
+      </div>
       <PageHeader title="Edit Quote" subtitle={quote.customer} />
       <QuoteBuilder quote={quote} customers={customers} pricingItems={pricingItems} units={units} />
     </div>
