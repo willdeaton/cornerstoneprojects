@@ -1,5 +1,5 @@
 import { getCurrentUser } from '@/lib/auth';
-import { listProjects, listUserTime, activeEntry, listActiveClockIns } from '@/lib/data';
+import { listProjects, listUserTime, activeEntry, listActiveClockIns, weekNetHours } from '@/lib/data';
 import { PageHeader } from '@/components/ui';
 import { dateTime, duration } from '@/lib/format';
 import { TimeClock } from './TimeClock';
@@ -12,21 +12,11 @@ export default async function TimePage() {
   const projects = (await listProjects()).filter((p) => p.status !== 'completed');
   const myEntries = await listUserTime(user.id, 25);
   const crew = await listActiveClockIns();
-
-  // Total hours this week for the current user
-  const weekAgo = Date.now() - 7 * 864e5;
-  const weekHours = myEntries
-    .filter((e) => e.clock_out)
-    .filter((e) => new Date(e.clock_in.replace(' ', 'T') + 'Z').getTime() > weekAgo)
-    .reduce((s, e) => {
-      const start = new Date(e.clock_in.replace(' ', 'T') + 'Z').getTime();
-      const end = new Date(e.clock_out!.replace(' ', 'T') + 'Z').getTime();
-      return s + Math.max(0, (end - start) / 3600000);
-    }, 0);
+  const weekHours = await weekNetHours(user.id);
 
   return (
     <div>
-      <PageHeader title="Time Clock" subtitle="Clock in and out of jobs to track time" />
+      <PageHeader title="Time Clock" subtitle="Clock in and out to track your time" />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
@@ -34,7 +24,14 @@ export default async function TimePage() {
             userName={user.name}
             active={
               active
-                ? { id: active.id, projectName: active.project_name, customer: active.customer, clockIn: active.clock_in }
+                ? {
+                    id: active.id,
+                    projectName: active.project_name,
+                    customer: active.customer,
+                    clockIn: active.clock_in,
+                    onBreak: active.on_break,
+                    breakStart: active.break_start,
+                  }
                 : null
             }
             projects={projects.map((p) => ({ id: p.id, name: p.name, customer: p.customer }))}
@@ -60,8 +57,10 @@ export default async function TimePage() {
                     {myEntries.map((e) => (
                       <tr key={e.id} className="border-t border-black/5">
                         <td className="py-2.5">
-                          <p className="font-medium text-brand-ink">{e.project_name}</p>
-                          <p className="text-xs text-brand-gray">{e.customer}</p>
+                          <p className="font-medium text-brand-ink">
+                            {e.project_name ?? 'General (no job)'}
+                          </p>
+                          {e.customer && <p className="text-xs text-brand-gray">{e.customer}</p>}
                         </td>
                         <td className="py-2.5 text-brand-gray">{dateTime(e.clock_in)}</td>
                         <td className="py-2.5 text-brand-gray">
@@ -91,12 +90,22 @@ export default async function TimePage() {
                   <li key={e.id} className="flex items-center justify-between">
                     <div>
                       <p className="flex items-center gap-2 text-sm font-semibold text-brand-ink">
-                        <span className="h-2 w-2 animate-pulse rounded-full bg-brand-green" />
+                        <span
+                          className={`h-2 w-2 animate-pulse rounded-full ${
+                            e.on_break ? 'bg-status-progress' : 'bg-brand-green'
+                          }`}
+                        />
                         {e.user_name}
                       </p>
-                      <p className="pl-4 text-xs text-brand-gray">{e.project_name}</p>
+                      <p className="pl-4 text-xs text-brand-gray">
+                        {e.on_break ? 'On lunch break' : e.project_name ?? 'General (no job)'}
+                      </p>
                     </div>
-                    <span className="text-sm font-semibold text-brand-green-dark">
+                    <span
+                      className={`text-sm font-semibold ${
+                        e.on_break ? 'text-amber-700' : 'text-brand-green-dark'
+                      }`}
+                    >
                       {duration(e.clock_in, null)}
                     </span>
                   </li>

@@ -248,24 +248,38 @@ export async function deleteNote(id: number): Promise<void> {
 
 export interface TimeEntryWithUser extends TimeEntry {
   user_name: string;
-  project_name?: string;
-  customer?: string;
+  project_name?: string | null;
+  customer?: string | null;
+}
+
+/** An open (unclosed) time entry with the current break state, if any. */
+export interface ActiveEntry extends TimeEntry {
+  project_name: string | null;
+  customer: string | null;
+  on_break: boolean;
+  break_start: string | null;
 }
 
 /** The user's currently-open time entry, if any. */
-export async function activeEntry(
-  userId: number
-): Promise<(TimeEntry & { project_name: string; customer: string }) | undefined> {
-  return one(
-    `SELECT t.*, p.name AS project_name, p.customer
-     FROM time_entries t JOIN projects p ON p.id = t.project_id
+export async function activeEntry(userId: number): Promise<ActiveEntry | undefined> {
+  return one<ActiveEntry>(
+    `SELECT t.*, p.name AS project_name, p.customer,
+            b.break_start,
+            (b.id IS NOT NULL) AS on_break
+     FROM time_entries t
+     LEFT JOIN projects p ON p.id = t.project_id
+     LEFT JOIN time_breaks b ON b.time_entry_id = t.id AND b.break_end IS NULL
      WHERE t.user_id = $1 AND t.clock_out IS NULL
      ORDER BY t.clock_in DESC LIMIT 1`,
     [userId]
   );
 }
 
-export async function clockIn(userId: number, projectId: number): Promise<{ ok: boolean; error?: string }> {
+/** Clock in. A null projectId is a general clock-in not tied to a job. */
+export async function clockIn(
+  userId: number,
+  projectId: number | null
+): Promise<{ ok: boolean; error?: string }> {
   if (await activeEntry(userId)) {
     return { ok: false, error: 'You are already clocked in. Clock out first.' };
   }
@@ -279,7 +293,31 @@ export async function clockIn(userId: number, projectId: number): Promise<{ ok: 
 export async function clockOut(userId: number, note?: string): Promise<{ ok: boolean; error?: string }> {
   const entry = await activeEntry(userId);
   if (!entry) return { ok: false, error: 'You are not clocked in.' };
+  // Close any lunch break still running so the shift total stays accurate.
+  await q('UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL', [
+    entry.id,
+  ]);
   await q('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [note ?? null, entry.id]);
+  return { ok: true };
+}
+
+/** Start a lunch break on the user's active shift. */
+export async function startBreak(userId: number): Promise<{ ok: boolean; error?: string }> {
+  const entry = await activeEntry(userId);
+  if (!entry) return { ok: false, error: 'Clock in before starting a break.' };
+  if (entry.on_break) return { ok: false, error: 'You are already on a break.' };
+  await q('INSERT INTO time_breaks (time_entry_id, break_start) VALUES ($1, now())', [entry.id]);
+  return { ok: true };
+}
+
+/** End the running lunch break on the user's active shift. */
+export async function endBreak(userId: number): Promise<{ ok: boolean; error?: string }> {
+  const entry = await activeEntry(userId);
+  if (!entry) return { ok: false, error: 'You are not clocked in.' };
+  if (!entry.on_break) return { ok: false, error: 'You are not on a break.' };
+  await q('UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL', [
+    entry.id,
+  ]);
   return { ok: true };
 }
 
@@ -297,7 +335,7 @@ export async function listUserTime(userId: number, limit = 50): Promise<TimeEntr
     `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer
      FROM time_entries t
      JOIN users u ON u.id = t.user_id
-     JOIN projects p ON p.id = t.project_id
+     LEFT JOIN projects p ON p.id = t.project_id
      WHERE t.user_id = $1 ORDER BY t.clock_in DESC LIMIT $2`,
     [userId, limit]
   );
@@ -308,30 +346,229 @@ export async function listRecentTime(limit = 25): Promise<TimeEntryWithUser[]> {
     `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer
      FROM time_entries t
      JOIN users u ON u.id = t.user_id
-     JOIN projects p ON p.id = t.project_id
+     LEFT JOIN projects p ON p.id = t.project_id
      ORDER BY t.clock_in DESC LIMIT $1`,
     [limit]
   );
 }
 
 /** Everyone currently clocked in (open entries), across all projects. */
-export async function listActiveClockIns(): Promise<TimeEntryWithUser[]> {
-  return q<TimeEntryWithUser>(
-    `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer
+export async function listActiveClockIns(): Promise<(TimeEntryWithUser & { on_break: boolean })[]> {
+  return q<TimeEntryWithUser & { on_break: boolean }>(
+    `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer,
+            EXISTS (
+              SELECT 1 FROM time_breaks b WHERE b.time_entry_id = t.id AND b.break_end IS NULL
+            ) AS on_break
      FROM time_entries t
      JOIN users u ON u.id = t.user_id
-     JOIN projects p ON p.id = t.project_id
+     LEFT JOIN projects p ON p.id = t.project_id
      WHERE t.clock_out IS NULL ORDER BY t.clock_in ASC`
   );
 }
 
-/** Total logged hours for a project (closed entries only). */
+/** Total logged hours for a project (closed entries only, minus breaks). */
 export async function projectHours(projectId: number): Promise<number> {
-  const rows = await q<{ clock_in: string; clock_out: string }>(
-    'SELECT clock_in, clock_out FROM time_entries WHERE project_id = $1 AND clock_out IS NOT NULL',
+  const row = await one<{ hours: number }>(
+    `SELECT COALESCE(SUM(
+              EXTRACT(EPOCH FROM (t.clock_out - t.clock_in))
+              - COALESCE((
+                  SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out) - b.break_start)))
+                  FROM time_breaks b WHERE b.time_entry_id = t.id
+                ), 0)
+            ), 0) / 3600.0 AS hours
+     FROM time_entries t
+     WHERE t.project_id = $1 AND t.clock_out IS NOT NULL`,
     [projectId]
   );
-  return rows.reduce((sum, r) => sum + hoursBetween(r.clock_in, r.clock_out), 0);
+  return Math.max(0, row?.hours ?? 0);
+}
+
+/** Net hours (minus breaks) the user has logged in the last 7 days. */
+export async function weekNetHours(userId: number): Promise<number> {
+  const row = await one<{ hours: number }>(
+    `SELECT COALESCE(SUM(
+              EXTRACT(EPOCH FROM (t.clock_out - t.clock_in))
+              - COALESCE((
+                  SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out) - b.break_start)))
+                  FROM time_breaks b WHERE b.time_entry_id = t.id
+                ), 0)
+            ), 0) / 3600.0 AS hours
+     FROM time_entries t
+     WHERE t.user_id = $1 AND t.clock_out IS NOT NULL
+       AND t.clock_in > now() - INTERVAL '7 days'`,
+    [userId]
+  );
+  return Math.max(0, row?.hours ?? 0);
+}
+
+/* ------------------------------------------- Time clock: payroll review */
+
+export interface AdminTimeEntry {
+  id: number;
+  user_id: number;
+  user_name: string;
+  project_name: string | null;
+  customer: string | null;
+  clock_in: string;
+  clock_out: string | null;
+  note: string | null;
+  paid: boolean;
+  break_minutes: number;
+  net_hours: number;
+}
+
+export interface AdminWeekUser {
+  user_id: number;
+  user_name: string;
+  entries: AdminTimeEntry[];
+  total_hours: number;
+  paid_hours: number;
+  unpaid_hours: number;
+  closed_count: number;
+  all_paid: boolean;
+}
+
+export interface AdminWeek {
+  week_start: string;
+  users: AdminWeekUser[];
+  total_hours: number;
+  unpaid_hours: number;
+  fully_paid: boolean;
+}
+
+/**
+ * Time entries for the last `weeks` weeks, grouped by ISO week (Mon-start)
+ * and then by employee, with break-adjusted net hours and paid status.
+ */
+export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
+  const rows = await q<{
+    id: number;
+    user_id: number;
+    user_name: string;
+    project_name: string | null;
+    customer: string | null;
+    clock_in: string;
+    clock_out: string | null;
+    note: string | null;
+    paid: boolean;
+    week_start: string;
+    break_seconds: number;
+  }>(
+    `SELECT t.id, t.user_id, u.name AS user_name,
+            p.name AS project_name, p.customer,
+            t.clock_in, t.clock_out, t.note, t.paid,
+            to_char(date_trunc('week', t.clock_in), 'YYYY-MM-DD') AS week_start,
+            COALESCE((
+              SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
+              FROM time_breaks b WHERE b.time_entry_id = t.id
+            ), 0) AS break_seconds
+     FROM time_entries t
+     JOIN users u ON u.id = t.user_id
+     LEFT JOIN projects p ON p.id = t.project_id
+     WHERE t.clock_in >= date_trunc('week', CURRENT_DATE) - (($1::int - 1) * INTERVAL '1 week')
+     ORDER BY t.clock_in DESC`,
+    [weeks]
+  );
+
+  const weekMap = new Map<string, Map<number, AdminWeekUser>>();
+
+  for (const r of rows) {
+    const breakMinutes = Math.round(r.break_seconds / 60);
+    const gross = hoursBetween(r.clock_in, r.clock_out);
+    const netHours = Math.max(0, gross - r.break_seconds / 3600);
+
+    const entry: AdminTimeEntry = {
+      id: r.id,
+      user_id: r.user_id,
+      user_name: r.user_name,
+      project_name: r.project_name,
+      customer: r.customer,
+      clock_in: r.clock_in,
+      clock_out: r.clock_out,
+      note: r.note,
+      paid: r.paid,
+      break_minutes: breakMinutes,
+      net_hours: netHours,
+    };
+
+    let byUser = weekMap.get(r.week_start);
+    if (!byUser) {
+      byUser = new Map();
+      weekMap.set(r.week_start, byUser);
+    }
+    let u = byUser.get(r.user_id);
+    if (!u) {
+      u = {
+        user_id: r.user_id,
+        user_name: r.user_name,
+        entries: [],
+        total_hours: 0,
+        paid_hours: 0,
+        unpaid_hours: 0,
+        closed_count: 0,
+        all_paid: true,
+      };
+      byUser.set(r.user_id, u);
+    }
+    u.entries.push(entry);
+    if (r.clock_out) {
+      u.total_hours += netHours;
+      u.closed_count += 1;
+      if (r.paid) u.paid_hours += netHours;
+      else {
+        u.unpaid_hours += netHours;
+        u.all_paid = false;
+      }
+    }
+  }
+
+  const weeks_out: AdminWeek[] = [...weekMap.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([week_start, byUser]) => {
+      const users = [...byUser.values()].sort((a, b) => a.user_name.localeCompare(b.user_name));
+      const total_hours = users.reduce((s, u) => s + u.total_hours, 0);
+      const unpaid_hours = users.reduce((s, u) => s + u.unpaid_hours, 0);
+      return {
+        week_start,
+        users,
+        total_hours,
+        unpaid_hours,
+        fully_paid: users.every((u) => u.all_paid),
+      };
+    });
+
+  return weeks_out;
+}
+
+/** Mark a single time entry paid/unpaid. */
+export async function setEntryPaid(entryId: number, paid: boolean, adminId: number): Promise<void> {
+  await q(
+    `UPDATE time_entries
+     SET paid = $1,
+         paid_at = CASE WHEN $1 THEN now() ELSE NULL END,
+         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END
+     WHERE id = $3`,
+    [paid, adminId, entryId]
+  );
+}
+
+/** Mark every closed entry for a user in a given ISO week paid/unpaid. */
+export async function setWeekPaid(
+  userId: number,
+  weekStart: string,
+  paid: boolean,
+  adminId: number
+): Promise<void> {
+  await q(
+    `UPDATE time_entries
+     SET paid = $1,
+         paid_at = CASE WHEN $1 THEN now() ELSE NULL END,
+         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END
+     WHERE user_id = $3
+       AND clock_out IS NOT NULL
+       AND date_trunc('week', clock_in) = date_trunc('week', $4::date)`,
+    [paid, adminId, userId, weekStart]
+  );
 }
 
 /* -------------------------------------------------------------- Dashboard */

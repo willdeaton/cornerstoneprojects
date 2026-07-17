@@ -60,11 +60,22 @@ export interface Note {
 
 export interface TimeEntry {
   id: number;
-  project_id: number;
+  project_id: number | null;
   user_id: number;
   clock_in: string;
   clock_out: string | null;
   note: string | null;
+  paid: boolean;
+  paid_at: string | null;
+  paid_by: number | null;
+  created_at: string;
+}
+
+export interface TimeBreak {
+  id: number;
+  time_entry_id: number;
+  break_start: string;
+  break_end: string | null;
   created_at: string;
 }
 
