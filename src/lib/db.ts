@@ -210,6 +210,36 @@ async function migrate(pool: Pool) {
      *  - Singleton "run lock" tables debounce duplicate sends across workers.
      * ================================================================== */
 
+    /* ==================================================================
+     * Company profile shown on customer-facing quote PDFs.
+     *
+     * Singleton row (id = 1) so the quote header/footer render the same
+     * everywhere. Seeded with the previous hard-coded defaults so existing
+     * installs look identical until an admin edits the values under
+     * Settings -> Company.
+     * ================================================================== */
+    CREATE TABLE IF NOT EXISTS company_settings (
+      id         INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      name       TEXT NOT NULL DEFAULT '',
+      address    TEXT NOT NULL DEFAULT '',  -- newline-separated address lines
+      phone      TEXT NOT NULL DEFAULT '',
+      email      TEXT NOT NULL DEFAULT '',
+      website    TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    INSERT INTO company_settings (id, name, address, phone, email, website)
+    VALUES (
+      1,
+      'Cornerstone Facility Solutions',
+      '123 Main Street
+Suite 100
+Your City, ST 00000',
+      '(555) 555-0100',
+      'estimating@cornerstonefs.com',
+      'cornerstonefs.com'
+    )
+    ON CONFLICT (id) DO NOTHING;
+
     -- Singleton sender-identity row. CHECK (id = 1) enforces exactly one row.
     CREATE TABLE IF NOT EXISTS email_settings (
       id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),

@@ -67,7 +67,7 @@ export async function createUserAction(
     role,
     ...readEmailFields(formData),
   });
-  revalidatePath('/users');
+  revalidatePath('/settings/users');
   return { success: `Added ${name}.` };
 }
 
@@ -79,7 +79,7 @@ export async function updateUserSubscriptionsAction(
   const id = Number(formData.get('id'));
   if (!id) return { error: 'Missing user id.' };
   await updateUserEmailFields(id, readEmailFields(formData));
-  revalidatePath('/users');
+  revalidatePath('/settings/users');
   return { success: 'Subscriptions updated.' };
 }
 
@@ -93,7 +93,7 @@ export async function changeRoleAction(id: number, role: Role) {
   // Only admins can grant admin.
   if (role === 'admin' && me.role !== 'admin') return;
   await setUserRole(id, role);
-  revalidatePath('/users');
+  revalidatePath('/settings/users');
 }
 
 export async function toggleActiveAction(id: number, active: boolean) {
@@ -101,13 +101,13 @@ export async function toggleActiveAction(id: number, active: boolean) {
   if (id === me.id) return; // can't deactivate yourself
   if (!active && (await getUserRole(id)) === 'admin' && (await countAdmins()) <= 1) return;
   await setUserActive(id, active);
-  revalidatePath('/users');
+  revalidatePath('/settings/users');
 }
 
 export async function resetPasswordAction(id: number, password: string) {
   await requireManager();
   if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
   await setUserPassword(id, hashPassword(password));
-  revalidatePath('/users');
+  revalidatePath('/settings/users');
   return { ok: true };
 }
