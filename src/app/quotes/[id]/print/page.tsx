@@ -39,11 +39,14 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
   const total = hasItems ? roundCents(subtotal + tax) : quote.bid_value;
   const taxPct = +(quote.tax_rate * 100).toFixed(4);
 
+  // Filename for the downloaded PDF — prefer the quote number, fall back to the id.
+  const pdfFileName = `Quote-${quote.quote_number || quote.id}`;
+
   return (
     <div className="min-h-screen bg-neutral-100">
-      <PrintToolbar editHref={`/quotes/${quote.id}/edit`} />
+      <PrintToolbar editHref={`/quotes/${quote.id}/edit`} fileName={pdfFileName} />
 
-      <div className="mx-auto my-6 max-w-[8.5in] bg-white p-[0.6in] shadow-card print:my-0 print:max-w-none print:p-0 print:shadow-none">
+      <div id="quote-document" className="mx-auto my-6 max-w-[8.5in] bg-white p-[0.6in] shadow-card print:my-0 print:max-w-none print:p-0 print:shadow-none">
         {/* Header */}
         <div className="flex items-start justify-between gap-6 border-b-2 border-brand-green pb-5">
           <div>
@@ -148,27 +151,25 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
           </div>
         </div>
 
-        {/* Terms & notes */}
-        {(quote.terms || quote.notes) && (
-          <div className="mt-8 grid grid-cols-1 gap-6 border-t border-black/10 pt-5 text-sm sm:grid-cols-2">
-            {quote.terms && (
-              <div>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">Terms &amp; Conditions</p>
-                <p className="whitespace-pre-line text-brand-gray">{quote.terms}</p>
-              </div>
-            )}
-            {quote.notes && (
-              <div>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">Notes</p>
-                <p className="whitespace-pre-line text-brand-gray">{quote.notes}</p>
-              </div>
-            )}
+        {/* Notes */}
+        {quote.notes && (
+          <div className="mt-8 border-t border-black/10 pt-5 text-sm">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">Notes</p>
+            <p className="whitespace-pre-line text-brand-gray">{quote.notes}</p>
           </div>
         )}
 
         <p className="mt-10 text-center text-xs text-brand-gray">
           Thank you for the opportunity to earn your business. — {company.name}
         </p>
+
+        {/* Terms & Conditions — footer at the bottom in smaller italics */}
+        {quote.terms && (
+          <div className="mt-10 border-t border-black/10 pt-4">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-brand-gray">Terms &amp; Conditions</p>
+            <p className="whitespace-pre-line text-[10px] italic leading-snug text-brand-gray">{quote.terms}</p>
+          </div>
+        )}
       </div>
     </div>
   );

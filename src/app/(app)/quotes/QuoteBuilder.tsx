@@ -142,7 +142,10 @@ export function QuoteBuilder({
   // The stored customer isn't one of the saved records — offer it as a "current"
   // option so editing an older one-off quote doesn't silently drop the name.
   const hasUnsavedCurrent = !matchedCustomer && !!quote?.customer;
-  const selKey = customerId ? `${customerId}:${contactId}` : hasUnsavedCurrent ? '__current__' : '';
+  // Selected values for the two separate dropdowns. When the stored customer is a
+  // one-off (not saved), both selects fall back to the "current" sentinel.
+  const customerSelValue = customerId ? customerId : hasUnsavedCurrent ? '__current__' : '';
+  const contactSelValue = contactId ? contactId : customerSelValue === '__current__' ? '__current__' : '';
 
   // Add-customer / add-contact modal state.
   const [addMode, setAddMode] = useState<null | 'customer' | 'contact'>(null);
@@ -174,15 +177,22 @@ export function QuoteBuilder({
     }));
   }
 
-  function onSelectCustomerContact(value: string) {
+  function onSelectCustomer(value: string) {
     // Keep the stored one-off value untouched.
     if (value === '__current__') return;
-    const [cid, ctid] = value.split(':');
-    setCustomerId(cid ?? '');
-    setContactId(ctid ?? '');
-    const c = customers.find((x) => String(x.id) === cid);
-    const ct = ctid ? c?.contacts.find((x) => String(x.id) === ctid) : undefined;
-    applyCustomerContact(c, ct);
+    setCustomerId(value);
+    // Picking a new customer clears any previously chosen contact.
+    setContactId('');
+    const c = customers.find((x) => String(x.id) === value);
+    applyCustomerContact(c, undefined);
+  }
+
+  function onSelectContact(value: string) {
+    // Keep the stored one-off value untouched.
+    if (value === '__current__') return;
+    setContactId(value);
+    const ct = value ? selectedCustomer?.contacts.find((x) => String(x.id) === value) : undefined;
+    applyCustomerContact(selectedCustomer, ct);
   }
 
   function openAdd(mode: 'customer' | 'contact') {
@@ -497,29 +507,49 @@ export function QuoteBuilder({
       <div className="card p-5">
         <h2 className="brand-heading mb-4 text-sm text-brand-ink">Customer &amp; Project</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="label">Customer &amp; Contact *</label>
-            <select className="input" value={selKey} onChange={(e) => onSelectCustomerContact(e.target.value)}>
-              <option value="">Select a customer &amp; contact…</option>
+          <div>
+            <label className="label">Customer *</label>
+            <select className="input" value={customerSelValue} onChange={(e) => onSelectCustomer(e.target.value)}>
+              <option value="">Select a customer…</option>
               {hasUnsavedCurrent && (
                 <option value="__current__">
-                  {quote?.customer}
-                  {quote?.customer_contact ? ` — ${quote.customer_contact}` : ''} (current — not saved)
+                  {quote?.customer} (current — not saved)
                 </option>
               )}
               {customers.map((c) => (
-                <optgroup key={c.id} label={c.name}>
-                  <option value={`${c.id}:`}>{c.name} — (no contact)</option>
-                  {c.contacts.map((ct) => (
-                    <option key={ct.id} value={`${c.id}:${ct.id}`}>
-                      {c.name} — {ct.name}
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Contact</label>
+            <select
+              className="input"
+              value={contactSelValue}
+              onChange={(e) => onSelectContact(e.target.value)}
+              disabled={!selectedCustomer && customerSelValue !== '__current__'}
+            >
+              {selectedCustomer ? (
+                <>
+                  <option value="">(no contact)</option>
+                  {selectedCustomer.contacts.map((ct) => (
+                    <option key={ct.id} value={String(ct.id)}>
+                      {ct.name}
                       {ct.title ? ` (${ct.title})` : ''}
                     </option>
                   ))}
-                </optgroup>
-              ))}
+                </>
+              ) : customerSelValue === '__current__' ? (
+                <option value="__current__">{quote?.customer_contact || '(no contact)'}</option>
+              ) : (
+                <option value="">Select a customer first…</option>
+              )}
             </select>
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          </div>
+          <div className="sm:col-span-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               <button
                 type="button"
                 className="font-semibold text-brand-green-dark hover:underline"
