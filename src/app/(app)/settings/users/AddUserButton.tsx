@@ -30,7 +30,7 @@ export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
             <label className="label">Email</label>
             <input name="email" type="email" className="input" required placeholder="jane@dlomgroup.com" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Temp Password</label>
               <input name="password" className="input" required minLength={6} placeholder="min 6 chars" />
