@@ -4,12 +4,19 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logoutAction } from '@/app/actions/auth';
+import { setViewAsAction } from '@/app/actions/view-as';
 import { SETTINGS_GROUPS, TIME_GROUP, itemActive, groupActive } from './nav-config';
+
+type Role = 'admin' | 'manager' | 'worker';
 
 interface NavUser {
   name: string;
   email: string;
-  role: 'admin' | 'manager' | 'worker';
+  role: Role;
+  /** The signed-in user's true role (differs from `role` while previewing). */
+  realRole: Role;
+  /** The role an admin is previewing as, or null. */
+  viewingAs: Role | null;
 }
 
 type IconComp = () => React.ReactElement;
@@ -211,7 +218,10 @@ export function AppShell({
 
       {/* Main content */}
       <main className="flex-1 px-4 py-6 sm:px-8 lg:px-10 lg:py-8">
-        <div className="mx-auto max-w-7xl">{children}</div>
+        <div className="mx-auto max-w-7xl">
+          {user.viewingAs && <ViewAsBanner role={user.viewingAs} />}
+          {children}
+        </div>
       </main>
     </div>
   );
@@ -351,6 +361,17 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
         >
           {initials}
         </div>
+        {user.viewingAs && (
+          <form action={setViewAsAction.bind(null, 'admin')}>
+            <button
+              title={`Viewing as ${user.viewingAs} — exit preview`}
+              aria-label="Exit role preview"
+              className="rounded-lg border border-amber-400/60 bg-amber-400/10 p-2 text-amber-300 transition hover:bg-amber-400/20"
+            >
+              <EyeIcon />
+            </button>
+          </form>
+        )}
         <form action={logoutAction}>
           <button
             title="Sign out"
@@ -372,12 +393,79 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-white">{user.name}</p>
-          <p className="truncate text-xs capitalize text-white/50">{user.role}</p>
+          <p className="truncate text-xs capitalize text-white/50">
+            {user.role}
+            {user.viewingAs && <span className="text-amber-300"> · previewing</span>}
+          </p>
         </div>
       </div>
+
+      {user.realRole === 'admin' && <ViewAsSwitcher active={user.role} />}
+
       <form action={logoutAction} className="mt-3">
         <button className="w-full rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10">
           Sign out
+        </button>
+      </form>
+    </div>
+  );
+}
+
+const VIEW_AS_ROLES: { value: Role; label: string }[] = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'manager', label: 'Manager' },
+  { value: 'worker', label: 'Worker' },
+];
+
+/**
+ * Sidebar control (admins only) to preview the app as another role. Each button
+ * submits a tiny form bound to the server action, which swaps the effective role
+ * cookie and reloads — so the whole app re-renders with that role's access.
+ */
+function ViewAsSwitcher({ active }: { active: Role }) {
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 p-2">
+      <p className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-white/40">
+        <EyeIcon /> View as
+      </p>
+      <div className="grid grid-cols-3 gap-1">
+        {VIEW_AS_ROLES.map((r) => {
+          const on = r.value === active;
+          return (
+            <form key={r.value} action={setViewAsAction.bind(null, r.value)}>
+              <button
+                disabled={on}
+                aria-pressed={on}
+                className={`w-full rounded-md px-1 py-1.5 text-xs font-medium transition ${
+                  on
+                    ? 'cursor-default bg-brand-green text-white'
+                    : 'text-white/70 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                {r.label}
+              </button>
+            </form>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Amber banner shown across the top of every page while an admin is previewing. */
+function ViewAsBanner({ role }: { role: Role }) {
+  return (
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <span className="flex items-center gap-2">
+        <EyeIcon />
+        <span>
+          You are viewing the site as a <strong className="capitalize">{role}</strong>. This shows
+          exactly what that role can access.
+        </span>
+      </span>
+      <form action={setViewAsAction.bind(null, 'admin')}>
+        <button className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100">
+          Exit preview
         </button>
       </form>
     </div>
@@ -417,6 +505,13 @@ function ChevronRightIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 18l6-6-6-6" />
+    </svg>
+  );
+}
+function EyeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
