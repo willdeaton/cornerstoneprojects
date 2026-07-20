@@ -23,6 +23,11 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
 - **Users & Auth** — email/password login, sign out, and user management
   (add users, set roles, reset passwords, deactivate). Roles: **admin**,
   **manager**, **worker**. User management lives under **Settings → Users**.
+- **View as role** (admins only) — a "View as" switcher in the sidebar lets an
+  admin preview the app exactly as a **manager** or **worker** would see it
+  (hidden nav, page redirects, and restricted actions all apply). An amber
+  banner marks the preview; "Exit preview" or picking **Admin** returns to full
+  access. Previewing only ever lowers access — it can never escalate.
 - **Settings** (admins & managers) — a tabbed area with **Company** (name,
   address, phone, email, and website shown on customer-facing quote PDFs),
   **Email** (sender identity for automated notifications), and **Users**.

@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import { getDb } from './db';
 
 export const SESSION_COOKIE = 'cs_session';
+/** Cookie holding the role an admin has chosen to preview the app as. */
+export const VIEW_AS_COOKIE = 'cs_view_as';
 const SESSION_DAYS = 30;
 
 export type Role = 'admin' | 'manager' | 'worker';
@@ -13,9 +15,15 @@ export interface User {
   id: number;
   name: string;
   email: string;
+  /** Effective role used for every access check — equals `realRole` unless an
+   *  admin is previewing the app as a lower-privileged role. */
   role: Role;
   active: number;
   created_at: string;
+  /** The user's actual role from the database (unaffected by previewing). */
+  realRole?: Role;
+  /** The role an admin is currently previewing as, or null when not previewing. */
+  viewingAs?: Role | null;
 }
 
 export function hashPassword(plain: string): string {
@@ -81,5 +89,25 @@ export async function getCurrentUser(): Promise<User | null> {
      WHERE s.token = $1 AND s.expires_at > now() AND u.active = 1`,
     [token]
   );
-  return (rows[0] as User) ?? null;
+  const user = (rows[0] as User) ?? null;
+  if (!user) return null;
+
+  // Record the real role and default to "not previewing".
+  user.realRole = user.role;
+  user.viewingAs = null;
+
+  // Only an admin may preview the app as a lower-privileged role, and only ever
+  // *downgrade* to 'manager' or 'worker'. The effective `role` is swapped so
+  // every existing access gate (nav, page redirects, server actions) honours the
+  // preview automatically, while `realRole` keeps the true identity so the admin
+  // can always switch back.
+  if (user.role === 'admin') {
+    const previewed = jar.get(VIEW_AS_COOKIE)?.value;
+    if (previewed === 'manager' || previewed === 'worker') {
+      user.viewingAs = previewed;
+      user.role = previewed;
+    }
+  }
+
+  return user;
 }

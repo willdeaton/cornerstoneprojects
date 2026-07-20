@@ -12,7 +12,13 @@ export default async function AuthedLayout({ children }: { children: React.React
 
   return (
     <AppShell
-      user={{ name: user.name, email: user.email, role: user.role }}
+      user={{
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        realRole: user.realRole ?? user.role,
+        viewingAs: user.viewingAs ?? null,
+      }}
       clockedInTo={
         active
           ? {
