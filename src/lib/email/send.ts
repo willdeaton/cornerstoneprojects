@@ -1,24 +1,17 @@
 import 'server-only';
-import { createHash } from 'node:crypto';
 import { getDb } from '../db';
 import type { Project } from '../types';
-import { sendEmail, hasApiKey, type EmailAttachment } from './transport';
+import { sendEmail, hasApiKey } from './transport';
 import {
   getEmailSettings,
-  projectReminderRecipients,
-  completionReportRecipients,
-  scheduleChangeRecipients,
-  tryAcquireProjectReminderLock,
-  markProjectReminderRun,
-  tryAcquireCompletionReportLock,
-  markCompletionReportRun,
+  newProjectRecipients,
+  completionRecipients,
   type Recipient,
 } from './settings';
 import {
   buildTestEmail,
-  buildProjectReminderEmail,
-  buildCompletionReportEmail,
-  buildScheduleChangeEmail,
+  buildNewProjectEmail,
+  buildJobCompletedEmail,
   buildPasswordResetEmail,
 } from './templates';
 
@@ -78,160 +71,58 @@ export async function sendPasswordResetEmail(
   return { status: 'sent', count: 1, attempted: 1 };
 }
 
-/* --------------------------------------------- Scheduled: project reminders */
+/* --------------------------------------------- Event-driven subscription emails */
 
-async function activeProjects(): Promise<Project[]> {
+async function loadProject(projectId: number): Promise<Project | undefined> {
   const db = await getDb();
-  const { rows } = await db.query(
-    `SELECT * FROM projects WHERE status != 'completed' ORDER BY due_date NULLS LAST`
-  );
-  return rows as Project[];
+  const { rows } = await db.query('SELECT * FROM projects WHERE id = $1', [projectId]);
+  return rows[0] as Project | undefined;
 }
 
 /**
- * SCHEDULED weekly reminder. Acquire the singleton lock (min_gap ~60 for cron,
- * 0 for a manual trigger) BEFORE sending so multiple workers don't double-send.
+ * EVENT-DRIVEN, best-effort. Called inline after a quote is sold and converted
+ * into a project — emails everyone subscribed to new-project notifications a
+ * short status report on the new job. Never throws: the conversion must
+ * complete regardless of email outcome.
  */
-export async function sendProjectReminders(minGapMinutes = 60): Promise<SendResult> {
-  if (!(await tryAcquireProjectReminderLock(minGapMinutes))) {
-    return { status: 'skipped', count: 0, attempted: 0, reason: 'debounced by run lock' };
-  }
-  try {
-    const loaded = await loadConfigOrReason();
-    if (!loaded.ok) {
-      console.warn(`[email] project reminders not sent: ${loaded.reason}`);
-      await markProjectReminderRun('error');
-      return { status: 'error', count: 0, attempted: 0, reason: loaded.reason };
-    }
-    const recipients = await projectReminderRecipients();
-    if (recipients.length === 0) {
-      console.warn('[email] project reminders: no subscribed recipients (no-op).');
-      await markProjectReminderRun('sent');
-      return { status: 'sent', count: 0, attempted: 0 };
-    }
-    const projects = await activeProjects();
-    const sent = await deliverEach(recipients, (r) => {
-      const { subject, html } = buildProjectReminderEmail(r, projects);
-      return { subject, html };
-    }, loaded.cfg);
-    await markProjectReminderRun('sent');
-    return { status: 'sent', count: sent, attempted: recipients.length };
-  } catch (err) {
-    await markProjectReminderRun('error');
-    throw err;
-  }
+export async function sendNewProjectEmail(projectId: number): Promise<SendResult> {
+  return sendProjectEvent(projectId, newProjectRecipients, buildNewProjectEmail, 'new-project');
 }
 
-/* ----------------------------------------- Scheduled: completion report */
-
 /**
- * SCHEDULED periodic status report. Same shape as reminders. Attachments are
- * supported by the transport — pass base64 report files through if needed.
+ * EVENT-DRIVEN, best-effort. Called inline when a project is marked complete —
+ * emails everyone subscribed to completion notifications. Never throws.
  */
-export async function sendCompletionReport(
-  minGapMinutes = 60,
-  attachments?: EmailAttachment[]
+export async function sendJobCompletedEmail(projectId: number): Promise<SendResult> {
+  return sendProjectEvent(projectId, completionRecipients, buildJobCompletedEmail, 'job-completed');
+}
+
+/** Shared body for the two event-driven, per-project subscription emails. */
+async function sendProjectEvent(
+  projectId: number,
+  resolveRecipients: () => Promise<Recipient[]>,
+  render: (r: Recipient, p: Project) => { subject: string; html: string },
+  label: string
 ): Promise<SendResult> {
-  if (!(await tryAcquireCompletionReportLock(minGapMinutes))) {
-    return { status: 'skipped', count: 0, attempted: 0, reason: 'debounced by run lock' };
-  }
   try {
     const loaded = await loadConfigOrReason();
     if (!loaded.ok) {
-      console.warn(`[email] completion report not sent: ${loaded.reason}`);
-      await markCompletionReportRun('error');
+      console.warn(`[email] ${label} not sent: ${loaded.reason}`);
       return { status: 'error', count: 0, attempted: 0, reason: loaded.reason };
     }
-    const recipients = await completionReportRecipients();
-    if (recipients.length === 0) {
-      console.warn('[email] completion report: no subscribed recipients (no-op).');
-      await markCompletionReportRun('sent');
-      return { status: 'sent', count: 0, attempted: 0 };
-    }
-    const db = await getDb();
-    const { rows } = await db.query('SELECT * FROM projects ORDER BY value DESC');
-    const projects = rows as Project[];
-    const sent = await deliverEach(recipients, (r) => {
-      const { subject, html } = buildCompletionReportEmail(r, projects);
-      return { subject, html };
-    }, loaded.cfg, attachments);
-    await markCompletionReportRun('sent');
-    return { status: 'sent', count: sent, attempted: recipients.length };
-  } catch (err) {
-    await markCompletionReportRun('error');
-    throw err;
-  }
-}
-
-/* ------------------------------- Event-driven: schedule change notification */
-
-/** Signature of the schedule-relevant fields; changes only when they change. */
-function scheduleSignature(p: Project): string {
-  const material = [p.status, p.start_date, p.end_date, p.due_date].join('|');
-  return createHash('sha256').update(material).digest('hex').slice(0, 32);
-}
-
-/**
- * EVENT-DRIVEN, best-effort. Called inline after a project schedule changes.
- * Only emails recipients whose stored per-recipient signature differs from the
- * project's current one, then records a snapshot on success so re-runs don't
- * re-notify unchanged people. Never throws — the triggering business action
- * must complete regardless of email outcome.
- */
-export async function notifyScheduleChange(projectId: number): Promise<SendResult> {
-  try {
-    const loaded = await loadConfigOrReason();
-    if (!loaded.ok) {
-      console.warn(`[email] schedule-change not sent: ${loaded.reason}`);
-      return { status: 'error', count: 0, attempted: 0, reason: loaded.reason };
-    }
-    const db = await getDb();
-    const { rows } = await db.query('SELECT * FROM projects WHERE id = $1', [projectId]);
-    const project = rows[0] as Project | undefined;
+    const project = await loadProject(projectId);
     if (!project) return { status: 'error', count: 0, attempted: 0, reason: 'project not found' };
 
-    const recipients = await scheduleChangeRecipients();
+    const recipients = await resolveRecipients();
     if (recipients.length === 0) {
-      console.warn('[email] schedule-change: no subscribed recipients (no-op).');
+      console.warn(`[email] ${label}: no subscribed recipients (no-op).`);
       return { status: 'sent', count: 0, attempted: 0 };
     }
-
-    const signature = scheduleSignature(project);
-
-    // Which recipients have already been notified of THIS signature?
-    const { rows: seenRows } = await db.query(
-      'SELECT recipient_email FROM schedule_change_notifications WHERE project_id = $1 AND signature = $2',
-      [projectId, signature]
-    );
-    const alreadyNotified = new Set(
-      (seenRows as { recipient_email: string }[]).map((r) => r.recipient_email)
-    );
-
-    const changed = recipients.filter((r) => !alreadyNotified.has(r.email));
-    if (changed.length === 0) return { status: 'sent', count: 0, attempted: 0 };
-
-    let sent = 0;
-    for (const r of changed) {
-      try {
-        const { subject, html } = buildScheduleChangeEmail(r, project);
-        await sendEmail(loaded.cfg, r.email, subject, html);
-        // Record the per-recipient snapshot only on a successful send.
-        await db.query(
-          `INSERT INTO schedule_change_notifications (project_id, recipient_email, signature, notified_at)
-           VALUES ($1, $2, $3, now())
-           ON CONFLICT (project_id, recipient_email)
-           DO UPDATE SET signature = excluded.signature, notified_at = now()`,
-          [projectId, r.email, signature]
-        );
-        sent++;
-      } catch (err) {
-        console.error(`[email] schedule-change to ${r.email} failed:`, err);
-      }
-    }
-    return { status: 'sent', count: sent, attempted: changed.length };
+    const sent = await deliverEach(recipients, (r) => render(r, project), loaded.cfg);
+    return { status: 'sent', count: sent, attempted: recipients.length };
   } catch (err) {
-    // Best-effort: never let email failure bubble into the business action.
-    console.error('[email] notifyScheduleChange failed:', err);
+    // Best-effort: never let an email failure bubble into the business action.
+    console.error(`[email] ${label} failed:`, err);
     return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message };
   }
 }
@@ -242,14 +133,13 @@ export async function notifyScheduleChange(projectId: number): Promise<SendResul
 async function deliverEach(
   recipients: Recipient[],
   render: (r: Recipient) => { subject: string; html: string },
-  cfg: { from_name: string; from_email: string },
-  attachments?: EmailAttachment[]
+  cfg: { from_name: string; from_email: string }
 ): Promise<number> {
   let sent = 0;
   for (const r of recipients) {
     try {
       const { subject, html } = render(r);
-      await sendEmail(cfg, r.email, subject, html, attachments);
+      await sendEmail(cfg, r.email, subject, html);
       sent++;
     } catch (err) {
       console.error(`[email] send to ${r.email} failed:`, err);

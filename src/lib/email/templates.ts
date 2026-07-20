@@ -4,12 +4,10 @@ import type { Project } from '../types';
 
 /*
  * ============================================================================
- *  EMAIL BODY PLACEHOLDERS
+ *  EMAIL BODIES
  *
- *  These are intentionally STUBBED. Each function returns the subject line and
- *  a minimal HTML body so the mechanism (transport, gating, scheduling) works
- *  end-to-end. Fill in the real subject + HTML copy here — this is the only
- *  place email content is authored.
+ *  This is the ONLY place email content is authored. Each function returns the
+ *  subject line and the HTML body; the transport / gating live elsewhere.
  * ============================================================================
  */
 
@@ -18,36 +16,104 @@ export interface RenderedEmail {
   html: string;
 }
 
+/* Shared inline styling helpers so every email reads as one system. */
+const WRAP =
+  'font-family:Arial,Helvetica,sans-serif;color:#1f2421;font-size:15px;line-height:1.5';
+const MUTED = 'font-size:13px;color:#5b615c';
+const SIGNOFF = `<p style="${MUTED}">— Cornerstone Facility Solutions</p>`;
+
+/** Currency for dollar amounts shown in the body (whole-dollar, US). */
+function money(n: number): string {
+  return (n || 0).toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  });
+}
+
+/** A small "label: value" detail table, omitting rows with no value. */
+function detailTable(rows: [string, string | null | undefined][]): string {
+  const cells = rows
+    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .map(
+      ([label, v]) => `
+        <tr>
+          <td style="padding:4px 16px 4px 0;${MUTED};white-space:nowrap;vertical-align:top">${label}</td>
+          <td style="padding:4px 0;font-weight:bold;color:#1f2421;vertical-align:top">${v}</td>
+        </tr>`
+    )
+    .join('');
+  return `<table style="border-collapse:collapse;margin:16px 0">${cells}</table>`;
+}
+
 /** Test email sent from the settings screen to the configured from_email. */
 export function buildTestEmail(): RenderedEmail {
-  // TODO: replace with real test-email copy.
   return {
-    subject: '[PLACEHOLDER] Cornerstone test email',
-    html: '<p>PLACEHOLDER — this is a test email from the Cornerstone Project Tracker.</p>',
+    subject: 'Cornerstone Project Tracker — test email',
+    html: `
+      <div style="${WRAP}">
+        <p>This is a test email from the Cornerstone Project Tracker.</p>
+        <p style="${MUTED}">If you received this, your sender identity and API key
+        are configured correctly.</p>
+        ${SIGNOFF}
+      </div>
+    `,
   };
 }
 
-/** SCHEDULED: weekly reminder about active / overdue projects. */
-export function buildProjectReminderEmail(
-  recipient: Recipient,
-  projects: Project[]
-): RenderedEmail {
-  // TODO: replace with real reminder copy (list of open/overdue projects, etc.).
+/**
+ * EVENT-DRIVEN: a quote was marked sold and converted into a project. Sent to
+ * everyone subscribed to new-project notifications as a short status report on
+ * the job that just entered the pipeline.
+ */
+export function buildNewProjectEmail(recipient: Recipient, project: Project): RenderedEmail {
+  const hello = recipient.first_name ? `Hi ${recipient.first_name},` : 'Hi,';
   return {
-    subject: '[PLACEHOLDER] Project reminder',
-    html: `<p>PLACEHOLDER reminder for ${recipient.first_name || 'there'} — ${projects.length} active project(s).</p>`,
+    subject: `New project: ${project.name}`,
+    html: `
+      <div style="${WRAP}">
+        <p>${hello}</p>
+        <p>A quote was just marked <strong>sold</strong> and moved into projects.
+        Here's the status of the new job:</p>
+        ${detailTable([
+          ['Project', project.name],
+          ['Customer', project.customer],
+          ['Value', money(project.value)],
+          ['Quote #', project.quote_number],
+          ['Category', project.category],
+        ])}
+        <p style="${MUTED}">You're receiving this because you're subscribed to
+        new-project notifications.</p>
+        ${SIGNOFF}
+      </div>
+    `,
   };
 }
 
-/** SCHEDULED: periodic project status report (may carry an attachment). */
-export function buildCompletionReportEmail(
-  recipient: Recipient,
-  projects: Project[]
-): RenderedEmail {
-  // TODO: replace with real report copy.
+/**
+ * EVENT-DRIVEN: a project was marked complete. Sent to everyone subscribed to
+ * completion notifications.
+ */
+export function buildJobCompletedEmail(recipient: Recipient, project: Project): RenderedEmail {
+  const hello = recipient.first_name ? `Hi ${recipient.first_name},` : 'Hi,';
   return {
-    subject: '[PLACEHOLDER] Project status report',
-    html: `<p>PLACEHOLDER status report for ${recipient.first_name || 'there'} — ${projects.length} project(s).</p>`,
+    subject: `Job completed: ${project.name}`,
+    html: `
+      <div style="${WRAP}">
+        <p>${hello}</p>
+        <p>The following job has been marked <strong>complete</strong>:</p>
+        ${detailTable([
+          ['Project', project.name],
+          ['Customer', project.customer],
+          ['Value', money(project.value)],
+          ['Quote #', project.quote_number],
+          ['Category', project.category],
+        ])}
+        <p style="${MUTED}">You're receiving this because you're subscribed to
+        job-completion notifications.</p>
+        ${SIGNOFF}
+      </div>
+    `,
   };
 }
 
@@ -57,7 +123,7 @@ export function buildPasswordResetEmail(firstName: string, resetUrl: string): Re
   return {
     subject: 'Reset your Cornerstone Project Tracker password',
     html: `
-      <div style="font-family:Arial,Helvetica,sans-serif;color:#1f2421;font-size:15px;line-height:1.5">
+      <div style="${WRAP}">
         <p>${hello}</p>
         <p>We received a request to reset the password for your Cornerstone
         Project Tracker account. Click the button below to choose a new
@@ -68,28 +134,16 @@ export function buildPasswordResetEmail(firstName: string, resetUrl: string): Re
             Reset password
           </a>
         </p>
-        <p style="font-size:13px;color:#5b615c">
+        <p style="${MUTED}">
           If the button doesn't work, copy and paste this link into your browser:<br />
           <a href="${resetUrl}" style="color:#4a7a2b">${resetUrl}</a>
         </p>
-        <p style="font-size:13px;color:#5b615c">
+        <p style="${MUTED}">
           If you didn't request this, you can safely ignore this email — your
           password won't change.
         </p>
-        <p style="font-size:13px;color:#5b615c">— Cornerstone Facility Solutions</p>
+        ${SIGNOFF}
       </div>
     `,
-  };
-}
-
-/** EVENT-DRIVEN: a project's schedule/status changed. */
-export function buildScheduleChangeEmail(
-  recipient: Recipient,
-  project: Project
-): RenderedEmail {
-  // TODO: replace with real change-notification copy (what changed, new dates).
-  return {
-    subject: '[PLACEHOLDER] Project schedule changed',
-    html: `<p>PLACEHOLDER — schedule changed for "${project.name}".</p>`,
   };
 }

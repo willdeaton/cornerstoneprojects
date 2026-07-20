@@ -177,9 +177,8 @@ export function UserRowActions({
             defaults={{
               personal_email: user.personal_email,
               work_email: user.work_email,
-              receives_project_reminders: user.receives_project_reminders,
-              receives_completion_report: user.receives_completion_report,
-              receives_schedule_change_emails: user.receives_schedule_change_emails,
+              receives_new_project_emails: user.receives_new_project_emails,
+              receives_completion_emails: user.receives_completion_emails,
             }}
           />
           <div className="flex justify-end gap-2 pt-1">

@@ -8,26 +8,20 @@
 export interface SubscriptionDefaults {
   personal_email?: string | null;
   work_email?: string | null;
-  receives_project_reminders?: boolean;
-  receives_completion_report?: boolean;
-  receives_schedule_change_emails?: boolean;
+  receives_new_project_emails?: boolean;
+  receives_completion_emails?: boolean;
 }
 
 const EMAIL_TYPES: { name: keyof SubscriptionDefaults; label: string; hint: string }[] = [
   {
-    name: 'receives_project_reminders',
-    label: 'Project reminders',
-    hint: 'Weekly reminder about active / overdue projects.',
+    name: 'receives_new_project_emails',
+    label: 'New projects',
+    hint: 'Emailed when a quote is sold and moved into projects.',
   },
   {
-    name: 'receives_completion_report',
-    label: 'Completion report',
-    hint: 'Periodic project status report.',
-  },
-  {
-    name: 'receives_schedule_change_emails',
-    label: 'Schedule change alerts',
-    hint: 'Emailed when a project’s schedule or status changes.',
+    name: 'receives_completion_emails',
+    label: 'Job completions',
+    hint: 'Emailed when a job is marked complete.',
   },
 ];
 

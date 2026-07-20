@@ -273,42 +273,40 @@ Your City, ST 00000',
     INSERT INTO email_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
     -- Per-user subscription flags: one boolean column per subscribable email
-    -- type. Read/written through the normal user create/update endpoints.
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_project_reminders     BOOLEAN NOT NULL DEFAULT false;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_completion_report     BOOLEAN NOT NULL DEFAULT false;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_schedule_change_emails BOOLEAN NOT NULL DEFAULT false;
+    -- type. Both remaining emails are EVENT-DRIVEN:
+    --   receives_new_project_emails -> quote sold & converted into a project
+    --   receives_completion_emails  -> project marked complete
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_new_project_emails BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_completion_emails  BOOLEAN NOT NULL DEFAULT false;
+
+    -- Migrate installs created before the email types were reworked: carry the
+    -- old "completion report" subscribers onto the new-project flag, then drop
+    -- the retired columns. Guarded so it's safe to run repeatedly.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'users' AND column_name = 'receives_completion_report') THEN
+        UPDATE users SET receives_new_project_emails = receives_completion_report;
+        ALTER TABLE users DROP COLUMN receives_completion_report;
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'users' AND column_name = 'receives_project_reminders') THEN
+        ALTER TABLE users DROP COLUMN receives_project_reminders;
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'users' AND column_name = 'receives_schedule_change_emails') THEN
+        ALTER TABLE users DROP COLUMN receives_schedule_change_emails;
+      END IF;
+    END $$;
 
     -- Ordered email-resolution chain: personal_email -> work_email -> email.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS personal_email TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS work_email     TEXT;
 
-    -- One singleton run-lock table per SCHEDULED email. Atomic UPDATE ... WHERE
-    -- id=1 AND last_run_at < now()-gap is how multiple web workers avoid
-    -- double-sending.
-    CREATE TABLE IF NOT EXISTS project_reminder_run_lock (
-      id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-      last_run_at TIMESTAMPTZ,
-      last_status TEXT
-    );
-    INSERT INTO project_reminder_run_lock (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
-
-    CREATE TABLE IF NOT EXISTS completion_report_run_lock (
-      id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-      last_run_at TIMESTAMPTZ,
-      last_status TEXT
-    );
-    INSERT INTO completion_report_run_lock (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
-
-    -- Per-recipient snapshot for EVENT-DRIVEN "schedule changed" notifications.
-    -- Stores the last-notified signature per (project, recipient) so re-runs
-    -- only email people whose schedule data actually changed.
-    CREATE TABLE IF NOT EXISTS schedule_change_notifications (
-      project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      recipient_email TEXT NOT NULL,
-      signature       TEXT NOT NULL,
-      notified_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (project_id, recipient_email)
-    );
+    -- Retired with the scheduled/schedule-change emails: the per-job run locks
+    -- and the schedule-change snapshot table are no longer used.
+    DROP TABLE IF EXISTS project_reminder_run_lock;
+    DROP TABLE IF EXISTS completion_report_run_lock;
+    DROP TABLE IF EXISTS schedule_change_notifications;
   `);
 
   // ---- Incremental migrations (safe to run repeatedly) ------------------

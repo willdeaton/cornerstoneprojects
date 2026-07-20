@@ -12,9 +12,8 @@ export const SECRET_MASK = '••••••••';
 
 /** The per-user boolean subscription flags this app supports. */
 export const EMAIL_FLAGS = [
-  'receives_project_reminders',
-  'receives_completion_report',
-  'receives_schedule_change_emails',
+  'receives_new_project_emails',
+  'receives_completion_emails',
 ] as const;
 
 export type EmailFlag = (typeof EMAIL_FLAGS)[number];
@@ -119,42 +118,5 @@ export async function recipientsWithFlag(flag: EmailFlag): Promise<Recipient[]> 
 }
 
 /* thin per-type wrappers */
-export const projectReminderRecipients = () => recipientsWithFlag('receives_project_reminders');
-export const completionReportRecipients = () => recipientsWithFlag('receives_completion_report');
-export const scheduleChangeRecipients = () => recipientsWithFlag('receives_schedule_change_emails');
-
-/* --------------------------------------------------- Scheduled-job run locks */
-
-type LockTable = 'project_reminder_run_lock' | 'completion_report_run_lock';
-
-/**
- * Atomically claim a scheduled job's singleton lock. Returns true only if this
- * caller won the race (rowcount > 0), i.e. no other worker ran within the gap.
- */
-async function tryAcquireLock(table: LockTable, minGapMinutes: number): Promise<boolean> {
-  const db = await getDb();
-  const res = await db.query(
-    `UPDATE ${table}
-        SET last_run_at = now(), last_status = 'running'
-      WHERE id = 1
-        AND (last_run_at IS NULL
-             OR last_run_at < now() - ($1 || ' minutes')::interval)`,
-    [String(minGapMinutes)]
-  );
-  return (res.rowCount ?? 0) > 0;
-}
-
-async function markRun(table: LockTable, status: string): Promise<void> {
-  const db = await getDb();
-  await db.query(`UPDATE ${table} SET last_status = $1 WHERE id = 1`, [status]);
-}
-
-export const tryAcquireProjectReminderLock = (minGap: number) =>
-  tryAcquireLock('project_reminder_run_lock', minGap);
-export const markProjectReminderRun = (status: string) =>
-  markRun('project_reminder_run_lock', status);
-
-export const tryAcquireCompletionReportLock = (minGap: number) =>
-  tryAcquireLock('completion_report_run_lock', minGap);
-export const markCompletionReportRun = (status: string) =>
-  markRun('completion_report_run_lock', status);
+export const newProjectRecipients = () => recipientsWithFlag('receives_new_project_emails');
+export const completionRecipients = () => recipientsWithFlag('receives_completion_emails');

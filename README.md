@@ -87,8 +87,8 @@ To start fresh, drop and recreate the database (or `TRUNCATE` its tables).
 
 ## Email notifications
 
-Automated email (sender identity, per-user subscriptions, scheduled reminders /
-reports, and event-driven schedule-change alerts) is built in.
+Automated email (sender identity, per-user subscriptions, and event-driven
+new-project / job-completion notifications) is built in.
 
 - **Sender identity** lives in a single settings row, edited under **Settings →
   Email Settings** (`from_name` / `from_email`). The from address must be a
@@ -100,21 +100,16 @@ reports, and event-driven schedule-change alerts) is built in.
 - **Who receives what** is controlled per-user with subscription checkboxes in
   the user add/edit forms (Users page). Addresses resolve
   `personal_email → work_email → login email`.
-- **Scheduled emails** are driven by env vars + a built-in cron scheduler
-  (defaults shown; all off unless turned `on`):
+- **Event-driven emails** are sent inline from the action that triggers them —
+  no scheduler or cron config required:
+  - **New project** — sent when a quote is marked sold and converted into a
+    project (single or bulk convert).
+  - **Job completion** — sent when a project's status is set to *completed*.
 
-  ```bash
-  PROJECT_REMINDER=on   PROJECT_REMINDER_DAY=fri  PROJECT_REMINDER_HOUR=8  PROJECT_REMINDER_TZ=America/New_York
-  COMPLETION_REPORT=on  COMPLETION_REPORT_DAY=mon COMPLETION_REPORT_HOUR=7 COMPLETION_REPORT_TZ=America/New_York
-  ```
+  Both are best-effort: an email failure never blocks the underlying action.
+  Send a test message with `POST /api/test-email`.
 
-  Duplicate sends across multiple workers are debounced by a per-job singleton
-  run lock. Each job can also be fired manually (bypassing the debounce) via
-  `POST /api/email/send-reminders` and `POST /api/email/send-report`; send a
-  test message with `POST /api/test-email`.
-
-Email body/HTML content is intentionally left as stubbed placeholder functions
-in `src/lib/email/templates.ts` — fill in the real copy there.
+Email body/HTML content is authored in `src/lib/email/templates.ts`.
 
 ## Excel upload format
 
