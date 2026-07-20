@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logoutAction } from '@/app/actions/auth';
@@ -246,8 +247,53 @@ function NavGroup({
   onNavigate: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const Icon = group.icon;
   const active = group.items.some((it) => it.isActive(pathname));
+
+  useEffect(() => setMounted(true), []);
+
+  const clearClose = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  // Small grace period so the pointer can cross the gap to the flyout.
+  const scheduleClose = () => {
+    clearClose();
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+  const updatePos = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ top: r.top, left: r.right });
+  };
+  const openFlyout = () => {
+    clearClose();
+    updatePos();
+    setOpen(true);
+  };
+
+  // Keep the flyout glued to the trigger while it's open (the sticky sidebar can
+  // still scroll internally, and the window can resize).
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => updatePos();
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [open]);
+
+  // Clear any pending close timer if the component unmounts.
+  useEffect(() => () => clearClose(), []);
 
   if (mobile) {
     return (
@@ -278,13 +324,13 @@ function NavGroup({
 
   return (
     <div
-      className="relative"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      ref={triggerRef}
+      onMouseEnter={openFlyout}
+      onMouseLeave={scheduleClose}
     >
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? setOpen(false) : openFlyout())}
         title={rail ? group.label : undefined}
         aria-label={group.label}
         aria-expanded={open}
@@ -301,33 +347,43 @@ function NavGroup({
         {!rail && <span className="flex-1 text-left">{group.label}</span>}
         {!rail && <ChevronRightIcon />}
       </button>
-      {open && (
-        // pl-2 bridges the gap so moving the pointer to the flyout keeps it open.
-        <div className="absolute left-full top-0 z-30 pl-2">
-          <div className="min-w-[12rem] rounded-lg border border-black/10 bg-white py-1 shadow-lg">
-            {group.items.map((it) => {
-              const on = it.isActive(pathname);
-              return (
-                <Link
-                  key={it.href}
-                  href={it.href}
-                  onClick={() => {
-                    setOpen(false);
-                    onNavigate();
-                  }}
-                  className={`block px-4 py-2 text-sm transition-colors ${
-                    on
-                      ? 'bg-brand-green/10 font-medium text-brand-ink'
-                      : 'text-brand-gray hover:bg-black/5 hover:text-brand-ink'
-                  }`}
-                >
-                  {it.label}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Rendered in a portal so the flyout isn't clipped by the sidebar's
+          overflow-y-auto scroll box (which forces overflow-x to auto too). */}
+      {mounted &&
+        open &&
+        pos &&
+        createPortal(
+          <div
+            // paddingLeft bridges the gap so moving the pointer to the flyout keeps it open.
+            style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 50, paddingLeft: 8 }}
+            onMouseEnter={clearClose}
+            onMouseLeave={scheduleClose}
+          >
+            <div className="min-w-[12rem] rounded-lg border border-black/10 bg-white py-1 shadow-lg">
+              {group.items.map((it) => {
+                const on = it.isActive(pathname);
+                return (
+                  <Link
+                    key={it.href}
+                    href={it.href}
+                    onClick={() => {
+                      setOpen(false);
+                      onNavigate();
+                    }}
+                    className={`block px-4 py-2 text-sm transition-colors ${
+                      on
+                        ? 'bg-brand-green/10 font-medium text-brand-ink'
+                        : 'text-brand-gray hover:bg-black/5 hover:text-brand-ink'
+                    }`}
+                  >
+                    {it.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
