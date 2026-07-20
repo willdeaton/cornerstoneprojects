@@ -224,7 +224,10 @@ function headerValues(input: QuoteDocInput, total: number): unknown[] {
   ];
 }
 
-export async function createQuoteWithItems(input: QuoteDocInput): Promise<number> {
+export async function createQuoteWithItems(
+  input: QuoteDocInput,
+  opts?: { source?: string; week_of?: string | null }
+): Promise<number> {
   const db = await getDb();
   const client = await db.connect();
   try {
@@ -235,10 +238,10 @@ export async function createQuoteWithItems(input: QuoteDocInput): Promise<number
          (quote_number, customer, project_name, category, bid_value, date_received,
           customer_contact, customer_email, customer_phone, customer_address,
           project_location, issue_date, valid_until, tax_rate, markup_rate, terms, notes,
-          prepared_by, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'manual')
+          prepared_by, source, week_of)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        RETURNING id`,
-      headerValues(input, total)
+      [...headerValues(input, total), opts?.source ?? 'manual', opts?.week_of ?? null]
     );
     const id = res.rows[0].id as number;
     await replaceItems(client, id, input.items);

@@ -8,6 +8,12 @@ import { money } from '@/lib/format';
 
 type Phase = 'select' | 'preview' | 'importing' | 'done';
 
+/** Best-effort plain text from a line-item description (imports are plain, but
+ * be safe against any stray markup). */
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 export function UploadButton() {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('select');
@@ -76,8 +82,11 @@ export function UploadButton() {
             <p className="text-sm text-brand-gray">
               Upload an <strong>.xlsx</strong> or <strong>.csv</strong> file of this week&apos;s new
               quotes. We&apos;ll match columns for <em>Quote Number</em>, <em>Customer</em>,{' '}
-              <em>Project</em>, <em>Category</em>, <em>Bid Value</em>, <em>Date Received</em> and{' '}
-              <em>Notes</em> automatically.
+              <em>Project</em>, <em>Category</em>, <em>Date Received</em> and <em>Notes</em>{' '}
+              automatically. Add <em>Item Type</em>, <em>Item Description</em>, <em>Qty</em>,{' '}
+              <em>Unit</em>, <em>Unit Price</em> and <em>Amount</em> columns to import{' '}
+              <strong>line items and pricing details</strong> — rows that share a Quote Number roll
+              up into one quote.
             </p>
             <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-black/15 bg-black/[0.02] px-6 py-10 text-center transition hover:border-brand-green hover:bg-brand-green/5">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#98C73A" strokeWidth="2">
@@ -114,35 +123,84 @@ export function UploadButton() {
                 Choose another file
               </button>
             </div>
-            <div className="max-h-72 overflow-auto rounded-lg border border-black/10">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50 text-left text-xs uppercase text-brand-gray">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">Quote #</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Project</th>
-                    <th className="px-3 py-2 font-semibold">Category</th>
-                    <th className="px-3 py-2 text-right font-semibold">Bid Value</th>
-                    <th className="px-3 py-2 font-semibold">Received</th>
-                    <th className="px-3 py-2 font-semibold">Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={i} className="border-t border-black/5">
-                      <td className="px-3 py-2 text-brand-gray">{r.quote_number || '—'}</td>
-                      <td className="px-3 py-2 font-medium text-brand-ink">{r.customer || '—'}</td>
-                      <td className="px-3 py-2 text-brand-gray">{r.project_name || '—'}</td>
-                      <td className="px-3 py-2 text-brand-gray">{r.category || '—'}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-brand-ink">
-                        {money(r.bid_value || 0)}
-                      </td>
-                      <td className="px-3 py-2 text-brand-gray">{r.date_received || '—'}</td>
-                      <td className="px-3 py-2 text-brand-gray">{r.notes || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="max-h-96 space-y-3 overflow-auto pr-1">
+              {rows.map((r, i) => {
+                const items = r.items ?? [];
+                const displayItems = items.filter((it) => it.kind === 'display');
+                const pricingItems = items.filter((it) => it.kind === 'pricing');
+                return (
+                  <div key={i} className="rounded-lg border border-black/10">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-black/5 bg-gray-50 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-brand-ink">
+                          {r.customer || '—'}
+                          {r.quote_number ? (
+                            <span className="ml-2 text-xs font-normal text-brand-gray">
+                              {r.quote_number}
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="truncate text-xs text-brand-gray">
+                          {[r.project_name, r.category, r.date_received]
+                            .filter(Boolean)
+                            .join(' · ') || 'No project details'}
+                        </p>
+                      </div>
+                      <span className="font-semibold text-brand-ink">{money(r.bid_value || 0)}</span>
+                    </div>
+
+                    {items.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-brand-gray">
+                        No line items — imports as a single pipeline quote.
+                      </p>
+                    ) : (
+                      <div className="space-y-2 px-3 py-2 text-sm">
+                        {displayItems.length > 0 && (
+                          <div>
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
+                              Line Items
+                            </p>
+                            {displayItems.map((it, j) => (
+                              <div key={j} className="flex justify-between gap-3 py-0.5">
+                                <span className="min-w-0 flex-1 truncate text-brand-ink">
+                                  {stripHtml(it.description)}
+                                </span>
+                                <span className="whitespace-nowrap font-medium text-brand-ink">
+                                  {money(
+                                    it.amount != null ? it.amount : it.quantity * it.unit_price,
+                                    { cents: true },
+                                  )}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {pricingItems.length > 0 && (
+                          <div className="rounded-md bg-black/[0.02] p-2">
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
+                              Pricing Worksheet <span className="font-normal">(internal)</span>
+                            </p>
+                            {pricingItems.map((it, j) => (
+                              <div key={j} className="flex justify-between gap-3 py-0.5 text-xs text-brand-gray">
+                                <span className="min-w-0 flex-1 truncate">
+                                  {stripHtml(it.description)}
+                                </span>
+                                <span className="whitespace-nowrap">
+                                  {it.quantity} {it.unit ?? ''} × {money(it.unit_price, { cents: true })}
+                                  {' = '}
+                                  <span className="font-medium text-brand-ink">
+                                    {money(it.quantity * it.unit_price, { cents: true })}
+                                  </span>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <div className="flex justify-end gap-2">
               <button className="btn-secondary" onClick={close}>
