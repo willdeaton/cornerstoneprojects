@@ -140,9 +140,10 @@ export function AppShell({
 
   return (
     <div className="min-h-screen lg:flex">
-      {/* Sidebar (desktop) */}
+      {/* Sidebar (desktop) — pinned to the viewport so it stays static and
+          doesn't grow with long pages; only the main content scrolls. */}
       <aside
-        className={`hidden shrink-0 flex-col bg-black p-4 transition-[width] duration-200 lg:flex ${
+        className={`sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto bg-black p-4 transition-[width] duration-200 lg:flex ${
           collapsed ? 'w-20' : 'w-64'
         }`}
       >

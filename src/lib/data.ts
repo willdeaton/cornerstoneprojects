@@ -947,8 +947,10 @@ export async function getDashboard(): Promise<DashboardData> {
        ) gs`
     ),
     q<QuoteLite & { week_start: string }>(
+      // Bucket by issue date (falling back to created_at when a quote has no
+      // issue date, so nothing silently drops off the chart).
       `SELECT id, quote_number, customer, project_name, bid_value, status,
-              to_char(date_trunc('week', created_at::date), 'YYYY-MM-DD') AS week_start
+              to_char(date_trunc('week', COALESCE(issue_date, created_at::date)), 'YYYY-MM-DD') AS week_start
        FROM quotes
        ORDER BY bid_value DESC`
     ),
@@ -995,11 +997,10 @@ export async function getDashboard(): Promise<DashboardData> {
     };
   });
 
-  // Cumulative total quotes created as of the end of each of the past 8 weeks.
-  // A quote counts toward every week on or after the week it was created in, so
-  // each bar reflects the running total of all quotes created up to that point.
+  // Total dollar value of quotes issued in each of the past 8 weeks, bucketed by
+  // issue date. Each bar reflects only the quotes issued during that week.
   const quotesByWeek: WeekBucket[] = weekStarts.map((w) => {
-    const quotes = allQuotes.filter((qt) => qt.week_start <= w.week_start);
+    const quotes = allQuotes.filter((qt) => qt.week_start === w.week_start);
     return {
       week_start: w.week_start,
       count: quotes.length,

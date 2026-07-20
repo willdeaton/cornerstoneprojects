@@ -54,10 +54,10 @@ function WeekTooltip({ active, payload }: any) {
   const p = payload[0].payload as WeekBucket;
   return (
     <div className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs shadow-card">
-      <p className="font-semibold text-brand-ink">As of week of {weekLabel(p.week_start)}</p>
+      <p className="font-semibold text-brand-ink">Week of {weekLabel(p.week_start)}</p>
       <p className="text-brand-gray">
-        <span className="font-semibold text-brand-ink">{p.count}</span> total quote{p.count === 1 ? '' : 's'} ·{' '}
-        <span className="font-semibold text-brand-ink">{money(p.value)}</span>
+        <span className="font-semibold text-brand-ink">{money(p.value)}</span> ·{' '}
+        <span className="font-semibold text-brand-ink">{p.count}</span> quote{p.count === 1 ? '' : 's'}
       </p>
       <p className="mt-0.5 text-[11px] text-brand-gray">Click to see details</p>
     </div>
@@ -126,7 +126,7 @@ function ProjectList({ projects }: { projects: ProjectLite[] }) {
 export function QuotesByWeek({ data }: { data: WeekBucket[] }) {
   const [sel, setSel] = useState<WeekBucket | null>(null);
   const chartData = data.map((d) => ({ ...d, label: weekLabel(d.week_start) }));
-  const hasData = data.some((d) => d.count > 0);
+  const hasData = data.some((d) => d.value > 0);
 
   return (
     <div className="h-64 w-full">
@@ -136,23 +136,34 @@ export function QuotesByWeek({ data }: { data: WeekBucket[] }) {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 20, right: 12, left: 0, bottom: 0 }}>
             <XAxis dataKey="label" tick={{ fontSize: 11, fill: GRAY }} axisLine={false} tickLine={false} />
-            <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: GRAY }} axisLine={false} tickLine={false} width={28} />
+            <YAxis
+              tickFormatter={(v) => moneyCompact(v)}
+              tick={{ fontSize: 11, fill: GRAY }}
+              axisLine={false}
+              tickLine={false}
+              width={44}
+            />
             <Tooltip content={<WeekTooltip />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
             <Bar
-              dataKey="count"
+              dataKey="value"
               radius={[6, 6, 0, 0]}
               maxBarSize={52}
               fill={GREEN}
               cursor="pointer"
               onClick={(_d: any, i: number) => setSel(data[i])}
             >
-              <LabelList dataKey="count" position="top" style={{ fontSize: 12, fontWeight: 700, fill: INK }} />
+              <LabelList
+                dataKey="value"
+                position="top"
+                formatter={(v: number) => moneyCompact(v)}
+                style={{ fontSize: 12, fontWeight: 700, fill: INK }}
+              />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
       )}
       {sel && (
-        <Drilldown title={`Total quotes as of week of ${weekLabel(sel.week_start)}`} onClose={() => setSel(null)}>
+        <Drilldown title={`Quotes issued week of ${weekLabel(sel.week_start)}`} onClose={() => setSel(null)}>
           <QuoteList quotes={sel.quotes} />
         </Drilldown>
       )}
