@@ -977,7 +977,9 @@ export async function getDashboard(): Promise<DashboardData> {
     entry.quotes.push(qt);
     byCustomer.set(qt.customer, entry);
   }
-  const pipelineByCustomer = [...byCustomer.values()].sort((a, b) => b.value - a.value);
+  const pipelineByCustomer = [...byCustomer.values()]
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10);
 
   // Projects grouped by status (with the underlying projects for drill-down).
   const statusLabels: Record<ProjectStatus, string> = {
