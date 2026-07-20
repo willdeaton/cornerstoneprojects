@@ -54,7 +54,7 @@ export default async function DashboardPage() {
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="card p-5 lg:col-span-2">
-          <h2 className="brand-heading mb-4 text-sm text-brand-gray">Pipeline by Customer</h2>
+          <h2 className="brand-heading mb-4 text-sm text-brand-gray">Pipeline by Customer (Top 10)</h2>
           <PipelineByCustomer data={d.pipelineByCustomer} />
         </div>
 
