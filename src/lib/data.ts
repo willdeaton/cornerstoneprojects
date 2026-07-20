@@ -1146,6 +1146,16 @@ export async function setUserPassword(id: number, passwordHash: string): Promise
   await q('DELETE FROM sessions WHERE user_id = $1', [id]);
 }
 
+/**
+ * Permanently delete a user. FK constraints cascade to the user's sessions,
+ * time entries and password-reset tokens; notes and uploaded files keep their
+ * text but have their user_id nulled out (the author/uploader name is stored
+ * separately).
+ */
+export async function deleteUser(id: number): Promise<void> {
+  await q('DELETE FROM users WHERE id = $1', [id]);
+}
+
 export async function countAdmins(): Promise<number> {
   return (await one<{ n: number }>(
     "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1"
