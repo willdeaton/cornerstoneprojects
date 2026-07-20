@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useRef, useEffect, useTransition } from 'react';
+import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Role } from '@/lib/auth';
 import type { UserRow } from '@/lib/data';
 import { Modal } from '@/components/Modal';
+import { DropdownMenu } from '@/components/DropdownMenu';
 import {
   changeRoleAction,
   toggleActiveAction,
   resetPasswordAction,
   updateUserSubscriptionsAction,
+  deleteUserAction,
 } from '@/app/actions/users';
 import { SubscriptionFields } from './SubscriptionFields';
 
@@ -22,29 +24,20 @@ export function UserRowActions({
   isSelf: boolean;
   canGrantAdmin: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
   const [subsOpen, setSubsOpen] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
   const [pw, setPw] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [delMsg, setDelMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
-
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, []);
 
   const roles: Role[] = canGrantAdmin ? ['worker', 'manager', 'admin'] : ['worker', 'manager'];
 
   function run(fn: () => Promise<unknown>) {
     start(async () => {
       await fn();
-      setOpen(false);
       router.refresh();
     });
   }
@@ -63,72 +56,100 @@ export function UserRowActions({
     });
   }
 
-  return (
-    <div className="relative inline-block text-left" ref={ref}>
-      <button
-        className="rounded-lg px-2 py-1 text-brand-gray hover:bg-black/5 disabled:opacity-50"
-        onClick={() => setOpen((v) => !v)}
-        disabled={pending}
-        aria-label="Actions"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
-        </svg>
-      </button>
+  function submitDelete() {
+    start(async () => {
+      const res = await deleteUserAction(user.id);
+      if (res && !res.ok) {
+        setDelMsg(res.error ?? 'Could not delete user.');
+      } else {
+        setDelOpen(false);
+        setDelMsg(null);
+        router.refresh();
+      }
+    });
+  }
 
-      {open && (
-        <div className="absolute right-0 z-10 mt-1 w-48 overflow-hidden rounded-lg border border-black/10 bg-white py-1 text-sm shadow-card-hover">
-          <p className="px-4 py-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">
-            Set role
-          </p>
-          {roles.map((r) => (
-            <button
-              key={r}
-              disabled={r === user.role}
-              className="block w-full px-4 py-1.5 text-left capitalize text-brand-ink hover:bg-black/5 disabled:font-semibold disabled:text-brand-green-dark"
-              onClick={() => run(() => changeRoleAction(user.id, r))}
-            >
-              {r}
-              {r === user.role ? ' ✓' : ''}
-            </button>
-          ))}
-          <div className="my-1 border-t border-black/5" />
-          <button
-            className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
-            onClick={() => {
-              setOpen(false);
-              setPwOpen(true);
-            }}
-          >
-            Reset password
-          </button>
-          <button
-            className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
-            onClick={() => {
-              setOpen(false);
-              setSubsOpen(true);
-            }}
-          >
-            Email subscriptions
-          </button>
-          {!isSelf &&
-            (user.active ? (
+  return (
+    <>
+      <DropdownMenu width={192} disabled={pending}>
+        {(close) => (
+          <>
+            <p className="px-4 py-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+              Set role
+            </p>
+            {roles.map((r) => (
               <button
-                className="block w-full px-4 py-1.5 text-left text-red-600 hover:bg-red-50"
-                onClick={() => run(() => toggleActiveAction(user.id, false))}
+                key={r}
+                disabled={r === user.role}
+                className="block w-full px-4 py-1.5 text-left capitalize text-brand-ink hover:bg-black/5 disabled:font-semibold disabled:text-brand-green-dark"
+                onClick={() => {
+                  close();
+                  run(() => changeRoleAction(user.id, r));
+                }}
               >
-                Deactivate
-              </button>
-            ) : (
-              <button
-                className="block w-full px-4 py-1.5 text-left text-brand-green-dark hover:bg-brand-green/10"
-                onClick={() => run(() => toggleActiveAction(user.id, true))}
-              >
-                Reactivate
+                {r}
+                {r === user.role ? ' ✓' : ''}
               </button>
             ))}
-        </div>
-      )}
+            <div className="my-1 border-t border-black/5" />
+            <button
+              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              onClick={() => {
+                close();
+                setPwOpen(true);
+              }}
+            >
+              Reset password
+            </button>
+            <button
+              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              onClick={() => {
+                close();
+                setSubsOpen(true);
+              }}
+            >
+              Email subscriptions
+            </button>
+            {!isSelf &&
+              (user.active ? (
+                <button
+                  className="block w-full px-4 py-1.5 text-left text-red-600 hover:bg-red-50"
+                  onClick={() => {
+                    close();
+                    run(() => toggleActiveAction(user.id, false));
+                  }}
+                >
+                  Deactivate
+                </button>
+              ) : (
+                <button
+                  className="block w-full px-4 py-1.5 text-left text-brand-green-dark hover:bg-brand-green/10"
+                  onClick={() => {
+                    close();
+                    run(() => toggleActiveAction(user.id, true));
+                  }}
+                >
+                  Reactivate
+                </button>
+              ))}
+            {!isSelf && (
+              <>
+                <div className="my-1 border-t border-black/5" />
+                <button
+                  className="block w-full px-4 py-1.5 text-left text-red-600 hover:bg-red-50"
+                  onClick={() => {
+                    close();
+                    setDelMsg(null);
+                    setDelOpen(true);
+                  }}
+                >
+                  Delete user
+                </button>
+              </>
+            )}
+          </>
+        )}
+      </DropdownMenu>
 
       <Modal open={pwOpen} onClose={() => setPwOpen(false)} title={`Reset password — ${user.name}`}>
         <div className="space-y-4">
@@ -192,6 +213,32 @@ export function UserRowActions({
           </div>
         </form>
       </Modal>
-    </div>
+
+      <Modal open={delOpen} onClose={() => setDelOpen(false)} title={`Delete user — ${user.name}`}>
+        <div className="space-y-4">
+          <p className="text-sm text-brand-ink">
+            This permanently removes <span className="font-semibold">{user.name}</span> and all of
+            their time entries. This cannot be undone.
+          </p>
+          <p className="text-xs text-brand-gray">
+            To keep their history for reporting, use <span className="font-semibold">Deactivate</span>{' '}
+            instead — that blocks access while preserving past clock-ins.
+          </p>
+          {delMsg && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{delMsg}</p>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" onClick={() => setDelOpen(false)}>
+              Cancel
+            </button>
+            <button
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              onClick={submitDelete}
+              disabled={pending}
+            >
+              {pending ? 'Deleting…' : 'Delete User'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }

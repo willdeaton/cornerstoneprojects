@@ -11,6 +11,7 @@ import {
   setUserRole,
   setUserActive,
   setUserPassword,
+  deleteUser,
   countAdmins,
   getUserRole,
   USER_EMAIL_FLAGS,
@@ -102,6 +103,18 @@ export async function toggleActiveAction(id: number, active: boolean) {
   if (!active && (await getUserRole(id)) === 'admin' && (await countAdmins()) <= 1) return;
   await setUserActive(id, active);
   revalidatePath('/settings/users');
+}
+
+export async function deleteUserAction(id: number): Promise<{ ok: boolean; error?: string }> {
+  const me = await requireManager();
+  if (id === me.id) return { ok: false, error: "You can't delete your own account." };
+  // Never remove the last remaining admin.
+  if ((await getUserRole(id)) === 'admin' && (await countAdmins()) <= 1) {
+    return { ok: false, error: 'Cannot delete the last admin.' };
+  }
+  await deleteUser(id);
+  revalidatePath('/settings/users');
+  return { ok: true };
 }
 
 export async function resetPasswordAction(id: number, password: string) {
