@@ -1,8 +1,14 @@
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth';
 import { EmailSettings } from '../EmailSettings';
 
 export const dynamic = 'force-dynamic';
 
-export default function EmailSettingsPage() {
+export default async function EmailSettingsPage() {
+  const me = await getCurrentUser();
+  if (!me) redirect('/login');
+  if (me.role !== 'admin') redirect('/dashboard');
+
   return (
     <div className="max-w-2xl">
       <div className="card p-6">

@@ -16,7 +16,7 @@ const ROLE_BADGE: Record<string, string> = {
 export default async function UsersPage() {
   const me = await getCurrentUser();
   if (!me) redirect('/login');
-  if (me.role !== 'admin' && me.role !== 'manager') redirect('/dashboard');
+  if (me.role !== 'admin') redirect('/dashboard');
 
   const users = await listUsers();
 

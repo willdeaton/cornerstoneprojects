@@ -4,10 +4,10 @@ import { getCompanySettings, saveCompanySettings } from '@/lib/company';
 
 export const runtime = 'nodejs';
 
-async function requireManager() {
+async function requireAdmin() {
   const user = await getCurrentUser();
   if (!user) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
-  if (user.role !== 'admin' && user.role !== 'manager') {
+  if (user.role !== 'admin') {
     return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
   }
   return { user };
@@ -15,7 +15,7 @@ async function requireManager() {
 
 /** GET — company details shown on customer-facing quotes. */
 export async function GET() {
-  const { error } = await requireManager();
+  const { error } = await requireAdmin();
   if (error) return error;
   const settings = await getCompanySettings();
   return NextResponse.json({ settings });
@@ -23,7 +23,7 @@ export async function GET() {
 
 /** PUT — save company details (guarded behind admin/manager). */
 export async function PUT(req: Request) {
-  const { error } = await requireManager();
+  const { error } = await requireAdmin();
   if (error) return error;
 
   let body: Record<string, unknown>;

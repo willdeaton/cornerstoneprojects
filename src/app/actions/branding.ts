@@ -5,10 +5,10 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { setLogo, type LogoKind } from '@/lib/branding-store';
 
-async function requireManager() {
+async function requireAdmin() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
-  if (user.role !== 'admin' && user.role !== 'manager') {
+  if (user.role !== 'admin') {
     throw new Error('You do not have permission to change branding.');
   }
   return user;
@@ -35,7 +35,7 @@ export async function uploadLogoAction(
   _prev: LogoUploadState,
   formData: FormData
 ): Promise<LogoUploadState> {
-  await requireManager();
+  await requireAdmin();
 
   const kind = parseKind(formData.get('kind'));
   if (!kind) return { error: 'Unknown logo type.' };
@@ -62,7 +62,7 @@ export async function uploadLogoAction(
 
 /** Clear an uploaded logo so it reverts to its default/fallback. */
 export async function resetLogoAction(kind: LogoKind): Promise<void> {
-  await requireManager();
+  await requireAdmin();
   await setLogo(kind, null);
   revalidateBranding();
 }

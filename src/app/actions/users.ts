@@ -31,10 +31,10 @@ function readEmailFields(formData: FormData) {
   };
 }
 
-async function requireManager() {
+async function requireAdmin() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
-  if (user.role !== 'admin' && user.role !== 'manager') {
+  if (user.role !== 'admin') {
     throw new Error('Not authorized.');
   }
   return user;
@@ -49,7 +49,7 @@ export async function createUserAction(
   _prev: UserFormState,
   formData: FormData
 ): Promise<UserFormState> {
-  await requireManager();
+  await requireAdmin();
   const name = String(formData.get('name') ?? '').trim();
   const email = String(formData.get('email') ?? '').trim().toLowerCase();
   const password = String(formData.get('password') ?? '');
@@ -75,7 +75,7 @@ export async function updateUserSubscriptionsAction(
   _prev: UserFormState,
   formData: FormData
 ): Promise<UserFormState> {
-  await requireManager();
+  await requireAdmin();
   const id = Number(formData.get('id'));
   if (!id) return { error: 'Missing user id.' };
   await updateUserEmailFields(id, readEmailFields(formData));
@@ -84,7 +84,7 @@ export async function updateUserSubscriptionsAction(
 }
 
 export async function changeRoleAction(id: number, role: Role) {
-  const me = await requireManager();
+  const me = await requireAdmin();
   if (!ROLES.includes(role)) return;
   // Don't allow removing the last admin.
   if ((await getUserRole(id)) === 'admin' && role !== 'admin' && (await countAdmins()) <= 1) {
@@ -97,7 +97,7 @@ export async function changeRoleAction(id: number, role: Role) {
 }
 
 export async function toggleActiveAction(id: number, active: boolean) {
-  const me = await requireManager();
+  const me = await requireAdmin();
   if (id === me.id) return; // can't deactivate yourself
   if (!active && (await getUserRole(id)) === 'admin' && (await countAdmins()) <= 1) return;
   await setUserActive(id, active);
@@ -105,7 +105,7 @@ export async function toggleActiveAction(id: number, active: boolean) {
 }
 
 export async function resetPasswordAction(id: number, password: string) {
-  await requireManager();
+  await requireAdmin();
   if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
   await setUserPassword(id, hashPassword(password));
   revalidatePath('/settings/users');

@@ -45,7 +45,8 @@ export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
             </div>
           </div>
           <p className="text-xs text-brand-gray">
-            Workers can clock in/out and add notes. Managers &amp; admins can also manage users.
+            Workers clock in/out and add notes. Managers also see timesheets and manage
+            customers &amp; pricing. Admins additionally manage company settings, email, and users.
           </p>
           <div className="border-t border-black/5 pt-4">
             <SubscriptionFields />

@@ -1,3 +1,5 @@
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth';
 import { getBranding } from '@/lib/branding-store';
 import { CompanyInfo } from './CompanyInfo';
 import { LogoSettings } from './LogoSettings';
@@ -6,6 +8,10 @@ import { QuoteDefaults } from './QuoteDefaults';
 export const dynamic = 'force-dynamic';
 
 export default async function CompanySettingsPage() {
+  const me = await getCurrentUser();
+  if (!me) redirect('/login');
+  if (me.role !== 'admin') redirect('/dashboard');
+
   const branding = await getBranding();
   return (
     <div className="max-w-2xl space-y-6">

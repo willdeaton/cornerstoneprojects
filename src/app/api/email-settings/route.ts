@@ -4,10 +4,10 @@ import { getEmailSettings, saveEmailSettings, maskSettings } from '@/lib/email/s
 
 export const runtime = 'nodejs';
 
-async function requireManager() {
+async function requireAdmin() {
   const user = await getCurrentUser();
   if (!user) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
-  if (user.role !== 'admin' && user.role !== 'manager') {
+  if (user.role !== 'admin') {
     return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
   }
   return { user };
@@ -15,7 +15,7 @@ async function requireManager() {
 
 /** GET — return settings with any secret field MASKED. */
 export async function GET() {
-  const { error } = await requireManager();
+  const { error } = await requireAdmin();
   if (error) return error;
   const settings = await getEmailSettings();
   return NextResponse.json({ settings: maskSettings(settings) });
@@ -23,7 +23,7 @@ export async function GET() {
 
 /** PUT — save sender identity (guarded behind admin/manager). */
 export async function PUT(req: Request) {
-  const { error } = await requireManager();
+  const { error } = await requireAdmin();
   if (error) return error;
 
   let body: Record<string, unknown>;

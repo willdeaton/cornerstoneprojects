@@ -1,10 +1,13 @@
 export type NavItem = { href: string; label: string; exact?: boolean };
-export type NavGroupDef = { label: string; items: NavItem[] };
+export type NavGroupDef = { label: string; items: NavItem[]; adminOnly?: boolean };
 
 /** Sub-pages that live under the Settings section, split into flyout groups. */
 export const SETTINGS_GROUPS: NavGroupDef[] = [
   {
     label: 'System Settings',
+    // Company info, email config, and user management are admin-only. Managers
+    // keep the operational "Data" group below.
+    adminOnly: true,
     items: [
       { href: '/settings', label: 'Company', exact: true },
       { href: '/settings/email', label: 'Email' },

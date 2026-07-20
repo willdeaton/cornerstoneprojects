@@ -85,12 +85,15 @@ export function AppShell({
         }
       : { kind: 'link', href: '/time', label: 'Time Clock', icon: ClockIcon };
 
-  // "Settings" opens the two page groups (System Settings / Data) as a flyout.
+  // "Settings" opens its page groups (System Settings / Data) as a flyout.
+  // System Settings is admin-only, so managers see just the Data group.
+  const isAdmin = user.role === 'admin';
+  const visibleSettingsGroups = SETTINGS_GROUPS.filter((g) => isAdmin || !g.adminOnly);
   const settingsEntry: GroupEntry = {
     kind: 'group',
     label: 'Settings',
     icon: SettingsIcon,
-    items: SETTINGS_GROUPS.map((g) => ({
+    items: visibleSettingsGroups.map((g) => ({
       href: g.items[0].href,
       label: g.label,
       isActive: (p) => groupActive(g, p),
@@ -100,7 +103,7 @@ export function AppShell({
   const nav: NavEntry[] = [
     ...BASE_NAV,
     timeEntry,
-    ...(canManageUsers ? [settingsEntry] : []),
+    ...(visibleSettingsGroups.length > 0 ? [settingsEntry] : []),
   ];
 
   const NavLinks = ({ rail = false, mobile = false }: { rail?: boolean; mobile?: boolean }) => (
