@@ -42,7 +42,7 @@ export default async function DashboardPage() {
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="card p-5 lg:col-span-2">
           <h2 className="brand-heading mb-4 text-sm text-brand-gray">
-            Total Quotes Created by Week · Last 8 Weeks
+            Total Quote Value by Week · Last 8 Weeks
           </h2>
           <QuotesByWeek data={d.quotesByWeek} />
         </div>
