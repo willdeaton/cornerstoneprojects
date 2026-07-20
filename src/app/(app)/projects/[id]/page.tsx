@@ -16,6 +16,7 @@ import { NotesSection } from './NotesSection';
 import { ProjectTime } from './ProjectTime';
 import { ProjectHeaderActions } from './ProjectHeaderActions';
 import { ProjectFiles } from './ProjectFiles';
+import { InvoiceSection } from './InvoiceSection';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,7 +54,23 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
           <p className="mt-1 text-sm text-brand-gray">
             {project.category ?? 'Uncategorized'}
             {project.location ? ` · ${project.location}` : ''}
-            {project.quote_number ? ` · Quote ${project.quote_number}` : ''}
+            {project.quote_number ? (
+              <>
+                {' · Quote '}
+                {project.quote_id ? (
+                  <Link
+                    href={`/quotes/${project.quote_id}/edit`}
+                    className="font-medium text-brand-green-dark underline underline-offset-2 hover:text-brand-ink"
+                  >
+                    {project.quote_number}
+                  </Link>
+                ) : (
+                  project.quote_number
+                )}
+              </>
+            ) : (
+              ''
+            )}
           </p>
         </div>
         <ProjectHeaderActions project={project} />
@@ -80,33 +97,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             />
           </div>
 
-          <div className="card p-5">
-            <h2 className="brand-heading mb-4 text-sm text-brand-gray">Invoicing</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
-                  Invoice Number(s)
-                </p>
-                <p className="mt-1 text-sm text-brand-ink">
-                  {project.invoice_numbers ? project.invoice_numbers : <span className="text-brand-gray">—</span>}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">Quote #</p>
-                <p className="mt-1 text-sm text-brand-ink">
-                  {project.quote_number ? project.quote_number : <span className="text-brand-gray">—</span>}
-                </p>
-              </div>
-            </div>
-            <div className="mt-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">Invoice Notes</p>
-              {project.invoice_notes ? (
-                <p className="mt-1 whitespace-pre-wrap text-sm text-brand-ink/90">{project.invoice_notes}</p>
-              ) : (
-                <p className="mt-1 text-sm text-brand-gray">No invoice notes yet.</p>
-              )}
-            </div>
-          </div>
+          <InvoiceSection project={project} />
 
           <NotesSection projectId={project.id} notes={notes} currentUserId={user.id} />
         </div>

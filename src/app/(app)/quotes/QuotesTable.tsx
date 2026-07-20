@@ -257,7 +257,7 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
           title={quotes.length === 0 ? 'No quotes here yet' : 'No quotes match'}
           hint={
             quotes.length === 0
-              ? "Add a quote manually or upload this week's spreadsheet."
+              ? 'Use “Create Quote” to start a new quote.'
               : 'Try a different search or category filter.'
           }
         />
