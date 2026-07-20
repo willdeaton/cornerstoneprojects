@@ -20,6 +20,12 @@ import type {
   PricingItem,
   Unit,
 } from './types';
+import type {
+  BackupData,
+  BackupQuote,
+  BackupProjectFile,
+  BackupTimeEntry,
+} from './backup-types';
 import { hoursBetween } from './format';
 
 /* -------------------------------------------------------------- Query helpers */
@@ -1023,6 +1029,131 @@ export async function getDashboard(): Promise<DashboardData> {
     categoryBreakdown,
     quotesByWeek,
     recentDecisions,
+  };
+}
+
+/* ----------------------------------------------------------------- Backup */
+
+/**
+ * Gather everything for a date-range backup. Quotes are selected by their
+ * effective date (issue date, falling back to when they were entered) so it
+ * matches the dashboard's weekly buckets; projects by creation or start date;
+ * time entries by clock-in. Customers and the pricing catalog are reference
+ * data and are included in full (not date-filtered). Boundaries are inclusive
+ * `YYYY-MM-DD` strings.
+ */
+export async function getBackupData(from: string, to: string): Promise<BackupData> {
+  const quotes = await q<Quote>(
+    `SELECT * FROM quotes
+      WHERE COALESCE(issue_date, created_at::date) BETWEEN $1 AND $2
+      ORDER BY COALESCE(issue_date, created_at::date), id`,
+    [from, to]
+  );
+  const quoteIds = quotes.map((qt) => qt.id);
+  const lineItems = quoteIds.length
+    ? await q<QuoteLineItem>(
+        `SELECT * FROM quote_line_items WHERE quote_id = ANY($1::int[]) ORDER BY quote_id, position, id`,
+        [quoteIds]
+      )
+    : [];
+  const itemsByQuote = new Map<number, QuoteLineItem[]>();
+  for (const li of lineItems) {
+    const list = itemsByQuote.get(li.quote_id) ?? [];
+    list.push(li);
+    itemsByQuote.set(li.quote_id, list);
+  }
+  const quotesWithItems: BackupQuote[] = quotes.map((qt) => ({
+    ...qt,
+    line_items: itemsByQuote.get(qt.id) ?? [],
+  }));
+
+  // A project counts as in-range if it was created in the window or its
+  // scheduled span [start_date, end_date] overlaps it — so a project that
+  // started earlier but was still active during the period is included too.
+  const projects = await q<Project>(
+    `SELECT * FROM projects
+      WHERE created_at::date BETWEEN $1 AND $2
+         OR (start_date IS NOT NULL AND start_date <= $2
+             AND (end_date IS NULL OR end_date >= $1))
+      ORDER BY created_at`,
+    [from, to]
+  );
+  const projectIds = projects.map((p) => p.id);
+  const notes = projectIds.length
+    ? await q<Note>(
+        `SELECT * FROM notes WHERE project_id = ANY($1::int[]) ORDER BY project_id, created_at`,
+        [projectIds]
+      )
+    : [];
+  // Metadata only — the base64 blob is fetched per file by the client.
+  const projectFiles = projectIds.length
+    ? await q<BackupProjectFile>(
+        `SELECT id, project_id, filename, mime, size, created_at
+           FROM project_files WHERE project_id = ANY($1::int[]) ORDER BY project_id, created_at`,
+        [projectIds]
+      )
+    : [];
+
+  const timeRows = await q<{
+    id: number;
+    user_id: number;
+    user_name: string;
+    project_id: number | null;
+    project_name: string | null;
+    customer: string | null;
+    clock_in: string;
+    clock_out: string | null;
+    note: string | null;
+    paid: boolean;
+    break_seconds: number;
+  }>(
+    `SELECT t.id, t.user_id, u.name AS user_name,
+            t.project_id, p.name AS project_name, p.customer,
+            t.clock_in, t.clock_out, t.note, t.paid,
+            COALESCE((
+              SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
+              FROM time_breaks b WHERE b.time_entry_id = t.id
+            ), 0) AS break_seconds
+       FROM time_entries t
+       JOIN users u ON u.id = t.user_id
+       LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.clock_in::date BETWEEN $1 AND $2
+      ORDER BY t.clock_in`,
+    [from, to]
+  );
+  const timeEntries: BackupTimeEntry[] = timeRows.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    user_name: r.user_name,
+    project_id: r.project_id,
+    project_name: r.project_name,
+    customer: r.customer,
+    clock_in: r.clock_in,
+    clock_out: r.clock_out,
+    note: r.note,
+    paid: r.paid,
+    // Both figures only make sense for a closed shift. For an open entry the
+    // break total is measured against now() and would grow unboundedly, so
+    // export 0 to stay consistent with the 0 net hours.
+    break_minutes: r.clock_out ? Math.round(r.break_seconds / 60) : 0,
+    net_hours: r.clock_out
+      ? Math.max(0, hoursBetween(r.clock_in, r.clock_out) - r.break_seconds / 3600)
+      : 0,
+  }));
+
+  const [customers, pricing] = await Promise.all([
+    listCustomersWithContacts(),
+    listPricingItems(),
+  ]);
+
+  return {
+    quotes: quotesWithItems,
+    projects,
+    notes,
+    projectFiles,
+    timeEntries,
+    customers,
+    pricing,
   };
 }
 
