@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import {
-  createQuote,
   updateQuote,
   updateQuoteStatus,
   deleteQuote,
@@ -13,31 +12,13 @@ import {
   updateQuoteWithItems,
   getQuote,
 } from '@/lib/data';
-import type { QuoteDocInput, LineItemInput } from '@/lib/types';
+import type { QuoteDocInput } from '@/lib/types';
 import { sendNewProjectEmail } from '@/lib/email/send';
 
 async function requireUser() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
   return user;
-}
-
-export async function createQuoteAction(formData: FormData) {
-  await requireUser();
-  const customer = String(formData.get('customer') ?? '').trim();
-  const bid = parseFloat(String(formData.get('bid_value') ?? '0').replace(/[$,]/g, ''));
-  if (!customer || isNaN(bid)) return;
-  await createQuote({
-    quote_number: String(formData.get('quote_number') ?? '').trim() || null,
-    customer,
-    project_name: String(formData.get('project_name') ?? '').trim() || null,
-    category: String(formData.get('category') ?? '').trim() || null,
-    bid_value: bid,
-    date_received: String(formData.get('date_received') ?? '') || null,
-    source: 'manual',
-  });
-  revalidatePath('/quotes');
-  revalidatePath('/dashboard');
 }
 
 export async function updateQuoteAction(id: number, formData: FormData) {
@@ -115,93 +96,6 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
         amount: it.amount != null && Number.isFinite(it.amount) ? it.amount : null,
       })),
   };
-}
-
-export interface ParsedLineItem {
-  kind: 'pricing' | 'display';
-  description: string;
-  quantity: number;
-  unit: string | null;
-  unit_price: number;
-  amount: number | null;
-}
-
-export interface ParsedQuote {
-  quote_number: string | null;
-  customer: string;
-  project_name: string | null;
-  category: string | null;
-  bid_value: number;
-  date_received: string | null;
-  notes: string | null;
-  tax_rate?: number;
-  markup_rate?: number;
-  items?: ParsedLineItem[];
-}
-
-/** Bulk-insert quotes parsed from an uploaded spreadsheet. */
-export async function importQuotesAction(rows: ParsedQuote[]) {
-  await requireUser();
-  const thisWeek = new Date().toISOString().slice(0, 10);
-  let imported = 0;
-  for (const r of rows) {
-    if (!r.customer) continue;
-    // Honor a date from the sheet when present; otherwise fall back to today
-    // so the quote still lands in the current week's pipeline.
-    const dateReceived = r.date_received || thisWeek;
-
-    // A quote with parsed line items becomes a full quote document (pricing
-    // worksheet + customer-facing lines); the bid value is recomputed from the
-    // display lines. Otherwise it's a simple one-line pipeline quote.
-    if (r.items && r.items.length > 0) {
-      const items: LineItemInput[] = r.items.map((it) => ({
-        kind: it.kind === 'pricing' ? 'pricing' : 'display',
-        description: it.description,
-        quantity: Number.isFinite(it.quantity) ? it.quantity : 0,
-        unit: it.unit,
-        unit_price: Number.isFinite(it.unit_price) ? it.unit_price : 0,
-        amount: it.amount != null && Number.isFinite(it.amount) ? it.amount : null,
-      }));
-      await createQuoteWithItems(
-        {
-          quote_number: r.quote_number,
-          customer: r.customer,
-          customer_contact: null,
-          customer_email: null,
-          customer_phone: null,
-          customer_address: null,
-          project_name: r.project_name,
-          project_location: null,
-          category: r.category,
-          issue_date: dateReceived,
-          valid_until: null,
-          tax_rate: r.tax_rate ?? 0,
-          markup_rate: r.markup_rate ?? 0,
-          terms: null,
-          notes: r.notes,
-          prepared_by: null,
-          items,
-        },
-        { source: 'import', week_of: dateReceived }
-      );
-    } else {
-      await createQuote({
-        quote_number: r.quote_number,
-        customer: r.customer,
-        project_name: r.project_name,
-        category: r.category,
-        bid_value: r.bid_value || 0,
-        date_received: dateReceived,
-        week_of: dateReceived,
-        notes: r.notes,
-        source: 'import',
-      });
-    }
-    imported++;
-  }
-  revalidatePath('/quotes');
-  revalidatePath('/dashboard');
-  return { imported };
 }
 
 export async function markQuoteLostAction(id: number) {

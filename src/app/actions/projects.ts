@@ -73,6 +73,15 @@ export async function updateProjectDetailsAction(id: number, formData: FormData)
     start_date: String(formData.get('start_date') ?? '') || null,
     end_date: String(formData.get('end_date') ?? '') || null,
     due_date: String(formData.get('due_date') ?? '') || null,
+  });
+  revalidatePath(`/projects/${id}`);
+  revalidatePath('/projects');
+  revalidatePath('/dashboard');
+}
+
+export async function updateInvoiceAction(id: number, formData: FormData) {
+  await requireUser();
+  await updateProject(id, {
     invoice_numbers: String(formData.get('invoice_numbers') ?? '').trim() || null,
     invoice_notes: String(formData.get('invoice_notes') ?? '').trim() || null,
   });

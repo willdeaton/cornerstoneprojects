@@ -78,14 +78,6 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
               <input name="due_date" type="date" className="input" defaultValue={project.due_date ?? ''} />
             </div>
           </div>
-          <div>
-            <label className="label">Invoice Number(s)</label>
-            <input name="invoice_numbers" className="input" defaultValue={project.invoice_numbers ?? ''} placeholder="e.g. INV-1042, INV-1043" />
-          </div>
-          <div>
-            <label className="label">Invoice Notes</label>
-            <textarea name="invoice_notes" className="input min-h-[70px] resize-y" defaultValue={project.invoice_notes ?? ''} placeholder="Billing terms, PO numbers, partial-invoice status…" />
-          </div>
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" className="btn-secondary" onClick={() => setOpen(false)}>
               Cancel
