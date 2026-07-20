@@ -430,6 +430,7 @@ export interface TimeEntryWithUser extends TimeEntry {
   user_name: string;
   project_name?: string | null;
   customer?: string | null;
+  break_minutes?: number;
 }
 
 /** An open (unclosed) time entry with the current break state, if any. */
@@ -512,7 +513,11 @@ export async function listProjectTime(projectId: number): Promise<TimeEntryWithU
 
 export async function listUserTime(userId: number, limit = 50): Promise<TimeEntryWithUser[]> {
   return q<TimeEntryWithUser>(
-    `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer
+    `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer,
+            ROUND(COALESCE((
+              SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
+              FROM time_breaks b WHERE b.time_entry_id = t.id
+            ), 0) / 60.0) AS break_minutes
      FROM time_entries t
      JOIN users u ON u.id = t.user_id
      LEFT JOIN projects p ON p.id = t.project_id
@@ -587,6 +592,7 @@ export interface AdminTimeEntry {
   id: number;
   user_id: number;
   user_name: string;
+  project_id: number | null;
   project_name: string | null;
   customer: string | null;
   clock_in: string;
@@ -625,6 +631,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     id: number;
     user_id: number;
     user_name: string;
+    project_id: number | null;
     project_name: string | null;
     customer: string | null;
     clock_in: string;
@@ -635,7 +642,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     break_seconds: number;
   }>(
     `SELECT t.id, t.user_id, u.name AS user_name,
-            p.name AS project_name, p.customer,
+            t.project_id, p.name AS project_name, p.customer,
             t.clock_in, t.clock_out, t.note, t.paid,
             to_char(date_trunc('week', t.clock_in), 'YYYY-MM-DD') AS week_start,
             COALESCE((
@@ -661,6 +668,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
       id: r.id,
       user_id: r.user_id,
       user_name: r.user_name,
+      project_id: r.project_id,
       project_name: r.project_name,
       customer: r.customer,
       clock_in: r.clock_in,
@@ -749,6 +757,95 @@ export async function setWeekPaid(
        AND date_trunc('week', clock_in) = date_trunc('week', $4::date)`,
     [paid, adminId, userId, weekStart]
   );
+}
+
+/* --------------------------------------- Time clock: manual edit / backdate */
+
+/** Fetch a single raw time entry, or undefined if it doesn't exist. */
+export async function getTimeEntry(entryId: number): Promise<TimeEntry | undefined> {
+  return one<TimeEntry>('SELECT * FROM time_entries WHERE id = $1', [entryId]);
+}
+
+interface ManualEntryInput {
+  projectId: number | null;
+  clockIn: string;
+  clockOut: string;
+  note?: string | null;
+  breakMinutes?: number;
+}
+
+/** Validate the shared shape of a manual add/edit, returning the parsed
+ *  boundaries or an error message. */
+function validateManualEntry(
+  input: ManualEntryInput
+): { ok: true; startMs: number; breakMin: number } | { ok: false; error: string } {
+  const startMs = Date.parse(input.clockIn);
+  const endMs = Date.parse(input.clockOut);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
+    return { ok: false, error: 'Enter a valid clock-in and clock-out time.' };
+  }
+  if (endMs <= startMs) {
+    return { ok: false, error: 'Clock-out must be after clock-in.' };
+  }
+  const breakMin = Math.max(0, Math.round(input.breakMinutes ?? 0));
+  const grossMin = (endMs - startMs) / 60000;
+  if (breakMin >= grossMin) {
+    return { ok: false, error: 'Break time is longer than the shift.' };
+  }
+  return { ok: true, startMs, breakMin };
+}
+
+/** Insert a synthetic break row of `breakMin` minutes starting at clock-in.
+ *  Manual entries track break as a single lump rather than start/stop pairs. */
+async function writeSyntheticBreak(entryId: number, clockIn: string, startMs: number, breakMin: number) {
+  if (breakMin <= 0) return;
+  const breakEnd = new Date(startMs + breakMin * 60000).toISOString();
+  await q(
+    'INSERT INTO time_breaks (time_entry_id, break_start, break_end) VALUES ($1, $2, $3)',
+    [entryId, clockIn, breakEnd]
+  );
+}
+
+/** Create a completed, backdated time entry for a user (e.g. hours worked on a
+ *  previous day that weren't clocked live). */
+export async function addManualTimeEntry(
+  input: ManualEntryInput & { userId: number }
+): Promise<{ ok: boolean; error?: string; id?: number }> {
+  const v = validateManualEntry(input);
+  if (!v.ok) return v;
+
+  const row = await one<{ id: number }>(
+    `INSERT INTO time_entries (project_id, user_id, clock_in, clock_out, note)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [input.projectId, input.userId, input.clockIn, input.clockOut, input.note ?? null]
+  );
+  const id = row!.id;
+  await writeSyntheticBreak(id, input.clockIn, v.startMs, v.breakMin);
+  return { ok: true, id };
+}
+
+/** Update the times, job, note and break of an existing (closed) entry.
+ *  Any recorded breaks are replaced with a single lump of `breakMinutes`. */
+export async function updateTimeEntry(
+  input: ManualEntryInput & { entryId: number }
+): Promise<{ ok: boolean; error?: string }> {
+  const v = validateManualEntry(input);
+  if (!v.ok) return v;
+
+  await q(
+    `UPDATE time_entries
+     SET project_id = $1, clock_in = $2, clock_out = $3, note = $4
+     WHERE id = $5`,
+    [input.projectId, input.clockIn, input.clockOut, input.note ?? null, input.entryId]
+  );
+  await q('DELETE FROM time_breaks WHERE time_entry_id = $1', [input.entryId]);
+  await writeSyntheticBreak(input.entryId, input.clockIn, v.startMs, v.breakMin);
+  return { ok: true };
+}
+
+/** Delete a time entry (and, via cascade, its break rows). */
+export async function deleteTimeEntry(entryId: number): Promise<void> {
+  await q('DELETE FROM time_entries WHERE id = $1', [entryId]);
 }
 
 /* -------------------------------------------------------------- Dashboard */

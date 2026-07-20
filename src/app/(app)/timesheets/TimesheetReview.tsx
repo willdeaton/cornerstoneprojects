@@ -5,6 +5,12 @@ import { useRouter } from 'next/navigation';
 import type { AdminWeek } from '@/lib/data';
 import { shortDate, dateTime, duration } from '@/lib/format';
 import { setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
+import {
+  TimeEntryModal,
+  type ProjectOption,
+  type UserOption,
+  type TimeEntryInit,
+} from '@/components/TimeEntryModal';
 
 function weekRange(weekStart: string): string {
   const start = new Date(weekStart + 'T00:00:00');
@@ -12,10 +18,25 @@ function weekRange(weekStart: string): string {
   return `${shortDate(weekStart)} – ${shortDate(end.toISOString().slice(0, 10))}`;
 }
 
-export function TimesheetReview({ weeks }: { weeks: AdminWeek[] }) {
+export function TimesheetReview({
+  weeks,
+  projects,
+  users,
+}: {
+  weeks: AdminWeek[];
+  projects: ProjectOption[];
+  users: UserOption[];
+}) {
   const [pending, start] = useTransition();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [addUserId, setAddUserId] = useState<number | undefined>(undefined);
+  const [editing, setEditing] = useState<TimeEntryInit | null>(null);
   const router = useRouter();
+
+  function refresh() {
+    router.refresh();
+  }
 
   function key(weekStart: string, userId: number) {
     return `${weekStart}:${userId}`;
@@ -43,17 +64,62 @@ export function TimesheetReview({ weeks }: { weeks: AdminWeek[] }) {
     });
   }
 
+  function openAdd(userId?: number) {
+    setAddUserId(userId);
+    setAdding(true);
+  }
+
+  const modals = (
+    <>
+      {adding && (
+        <TimeEntryModal
+          open={adding}
+          onClose={() => setAdding(false)}
+          onSaved={refresh}
+          projects={projects}
+          users={users}
+          defaultUserId={addUserId}
+        />
+      )}
+      {editing && (
+        <TimeEntryModal
+          open={!!editing}
+          onClose={() => setEditing(null)}
+          onSaved={refresh}
+          projects={projects}
+          entry={editing}
+        />
+      )}
+    </>
+  );
+
+  const addButton = (
+    <button
+      className="rounded-lg border border-brand-green/50 bg-brand-green/10 px-3 py-1.5 text-sm font-semibold text-brand-green-dark transition hover:bg-brand-green/20"
+      onClick={() => openAdd(undefined)}
+    >
+      + Add time entry
+    </button>
+  );
+
   if (weeks.length === 0) {
     return (
-      <div className="card flex flex-col items-center justify-center gap-1 p-10 text-center">
-        <p className="font-semibold text-brand-ink">No time logged yet</p>
-        <p className="text-sm text-brand-gray">Clocked-in shifts will show up here grouped by week.</p>
+      <div className="space-y-4">
+        <div className="flex justify-end">{addButton}</div>
+        <div className="card flex flex-col items-center justify-center gap-1 p-10 text-center">
+          <p className="font-semibold text-brand-ink">No time logged yet</p>
+          <p className="text-sm text-brand-gray">
+            Clocked-in shifts show up here grouped by week — or add one manually.
+          </p>
+        </div>
+        {modals}
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">{addButton}</div>
       {weeks.map((week) => (
         <div key={week.week_start} className="card overflow-hidden">
           {/* Week header */}
@@ -153,6 +219,7 @@ export function TimesheetReview({ weeks }: { weeks: AdminWeek[] }) {
                                   <th className="py-1.5 text-right font-semibold">Break</th>
                                   <th className="py-1.5 text-right font-semibold">Net</th>
                                   <th className="py-1.5 text-right font-semibold">Paid</th>
+                                  <th className="py-1.5 text-right font-semibold">Edit</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -187,8 +254,39 @@ export function TimesheetReview({ weeks }: { weeks: AdminWeek[] }) {
                                         onChange={(e) => markEntry(en.id, e.target.checked)}
                                       />
                                     </td>
+                                    <td className="py-2 text-right">
+                                      {en.clock_out ? (
+                                        <button
+                                          className="font-semibold text-brand-green-dark hover:underline"
+                                          onClick={() =>
+                                            setEditing({
+                                              id: en.id,
+                                              projectId: en.project_id,
+                                              clockIn: en.clock_in,
+                                              clockOut: en.clock_out,
+                                              note: en.note,
+                                              breakMinutes: Math.round(en.break_minutes || 0),
+                                            })
+                                          }
+                                        >
+                                          Edit
+                                        </button>
+                                      ) : (
+                                        <span className="text-brand-gray">—</span>
+                                      )}
+                                    </td>
                                   </tr>
                                 ))}
+                                <tr>
+                                  <td colSpan={7} className="pt-2">
+                                    <button
+                                      className="text-xs font-semibold text-brand-green-dark hover:underline"
+                                      onClick={() => openAdd(u.user_id)}
+                                    >
+                                      + Add entry for {u.user_name}
+                                    </button>
+                                  </td>
+                                </tr>
                               </tbody>
                             </table>
                           </td>
@@ -202,6 +300,7 @@ export function TimesheetReview({ weeks }: { weeks: AdminWeek[] }) {
           </div>
         </div>
       ))}
+      {modals}
     </div>
   );
 }
