@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { adminTimeByWeek } from '@/lib/data';
+import { adminTimeByWeek, listProjects, listActiveWorkers } from '@/lib/data';
 import { PageHeader, StatCard } from '@/components/ui';
 import { TimesheetReview } from './TimesheetReview';
 import { TimeTabs } from '../TimeTabs';
@@ -13,6 +13,8 @@ export default async function TimesheetsPage() {
   if (me.role !== 'admin' && me.role !== 'manager') redirect('/dashboard');
 
   const weeks = await adminTimeByWeek(8);
+  const projects = (await listProjects()).filter((p) => p.status !== 'completed');
+  const users = await listActiveWorkers();
 
   const totalHours = weeks.reduce((s, w) => s + w.total_hours, 0);
   const unpaidHours = weeks.reduce((s, w) => s + w.unpaid_hours, 0);
@@ -32,7 +34,11 @@ export default async function TimesheetsPage() {
         <StatCard label="Unpaid" value={`${unpaidHours.toFixed(1)}h`} accent="amber" />
       </div>
 
-      <TimesheetReview weeks={weeks} />
+      <TimesheetReview
+        weeks={weeks}
+        projects={projects.map((p) => ({ id: p.id, name: p.name, customer: p.customer }))}
+        users={users.map((u) => ({ id: u.id, name: u.name }))}
+      />
     </div>
   );
 }

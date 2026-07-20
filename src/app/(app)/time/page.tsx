@@ -1,8 +1,9 @@
 import { getCurrentUser } from '@/lib/auth';
 import { listProjects, listUserTime, activeEntry, listActiveClockIns, weekNetHours } from '@/lib/data';
 import { PageHeader } from '@/components/ui';
-import { dateTime, duration } from '@/lib/format';
+import { duration } from '@/lib/format';
 import { TimeClock } from './TimeClock';
+import { MyTimeList } from './MyTimeList';
 import { TimeTabs } from '../TimeTabs';
 
 export const dynamic = 'force-dynamic';
@@ -41,44 +42,20 @@ export default async function TimePage() {
             weekHours={weekHours}
           />
 
-          <div className="card mt-6 p-5">
-            <h2 className="brand-heading mb-4 text-sm text-brand-gray">My Recent Time</h2>
-            {myEntries.length === 0 ? (
-              <p className="py-3 text-center text-sm text-brand-gray">No time logged yet.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-sm">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-wide text-brand-gray">
-                      <th className="pb-2 font-semibold">Job</th>
-                      <th className="pb-2 font-semibold">Clocked In</th>
-                      <th className="pb-2 font-semibold">Clocked Out</th>
-                      <th className="pb-2 text-right font-semibold">Duration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {myEntries.map((e) => (
-                      <tr key={e.id} className="border-t border-black/5">
-                        <td className="py-2.5">
-                          <p className="font-medium text-brand-ink">
-                            {e.project_name ?? 'General (no job)'}
-                          </p>
-                          {e.customer && <p className="text-xs text-brand-gray">{e.customer}</p>}
-                        </td>
-                        <td className="py-2.5 text-brand-gray">{dateTime(e.clock_in)}</td>
-                        <td className="py-2.5 text-brand-gray">
-                          {e.clock_out ? dateTime(e.clock_out) : <span className="text-brand-green-dark">Active</span>}
-                        </td>
-                        <td className="py-2.5 text-right font-semibold text-brand-ink">
-                          {duration(e.clock_in, e.clock_out)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <MyTimeList
+            entries={myEntries.map((e) => ({
+              id: e.id,
+              project_id: e.project_id,
+              project_name: e.project_name ?? null,
+              customer: e.customer ?? null,
+              clock_in: e.clock_in,
+              clock_out: e.clock_out,
+              note: e.note,
+              paid: e.paid,
+              break_minutes: Math.round(e.break_minutes ?? 0),
+            }))}
+            projects={projects.map((p) => ({ id: p.id, name: p.name, customer: p.customer }))}
+          />
         </div>
 
         {/* Crew on the clock */}

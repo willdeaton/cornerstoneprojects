@@ -10,6 +10,10 @@ import {
   endBreak,
   setEntryPaid,
   setWeekPaid,
+  getTimeEntry,
+  addManualTimeEntry,
+  updateTimeEntry,
+  deleteTimeEntry,
 } from '@/lib/data';
 
 async function requireUser() {
@@ -75,5 +79,94 @@ export async function setWeekPaidAction(userId: number, weekStart: string, paid:
   if (!user) return { ok: false, error: 'Not authorized.' };
   await setWeekPaid(userId, weekStart, paid, user.id);
   revalidatePath('/timesheets');
+  return { ok: true };
+}
+
+interface TimeEntryInput {
+  projectId: number | null;
+  clockIn: string;
+  clockOut: string;
+  note?: string | null;
+  breakMinutes?: number;
+}
+
+/** Add a backdated / manual time entry. Managers may log time for anyone by
+ *  passing `userId`; everyone else can only log their own time. */
+export async function addTimeEntryAction(input: TimeEntryInput & { userId?: number }) {
+  const user = await requireUser();
+  const manager = user.role === 'admin' || user.role === 'manager';
+  if (!manager && input.userId && input.userId !== user.id) {
+    return { ok: false, error: 'Not authorized to add time for other people.' };
+  }
+  const targetUserId = manager && input.userId ? input.userId : user.id;
+
+  const res = await addManualTimeEntry({
+    userId: targetUserId,
+    projectId: input.projectId,
+    clockIn: input.clockIn,
+    clockOut: input.clockOut,
+    note: input.note,
+    breakMinutes: input.breakMinutes,
+  });
+
+  revalidatePath('/time');
+  revalidatePath('/timesheets');
+  if (input.projectId) revalidatePath(`/projects/${input.projectId}`);
+  revalidatePath('/', 'layout');
+  return res;
+}
+
+/** Edit an existing entry's times, job, note and break. Workers may only edit
+ *  their own shifts, and not once they've been marked paid. */
+export async function updateTimeEntryAction(input: TimeEntryInput & { entryId: number }) {
+  const user = await requireUser();
+  const entry = await getTimeEntry(input.entryId);
+  if (!entry) return { ok: false, error: 'That time entry no longer exists.' };
+
+  const manager = user.role === 'admin' || user.role === 'manager';
+  if (!manager) {
+    if (entry.user_id !== user.id) return { ok: false, error: 'Not authorized.' };
+    if (entry.paid) {
+      return { ok: false, error: 'This shift is already marked paid. Ask a manager to change it.' };
+    }
+  }
+
+  const res = await updateTimeEntry({
+    entryId: input.entryId,
+    projectId: input.projectId,
+    clockIn: input.clockIn,
+    clockOut: input.clockOut,
+    note: input.note,
+    breakMinutes: input.breakMinutes,
+  });
+
+  revalidatePath('/time');
+  revalidatePath('/timesheets');
+  if (entry.project_id) revalidatePath(`/projects/${entry.project_id}`);
+  if (input.projectId) revalidatePath(`/projects/${input.projectId}`);
+  revalidatePath('/', 'layout');
+  return res;
+}
+
+/** Delete a time entry. Same permission rules as editing. */
+export async function deleteTimeEntryAction(entryId: number) {
+  const user = await requireUser();
+  const entry = await getTimeEntry(entryId);
+  if (!entry) return { ok: false, error: 'That time entry no longer exists.' };
+
+  const manager = user.role === 'admin' || user.role === 'manager';
+  if (!manager) {
+    if (entry.user_id !== user.id) return { ok: false, error: 'Not authorized.' };
+    if (entry.paid) {
+      return { ok: false, error: 'This shift is already marked paid. Ask a manager to change it.' };
+    }
+  }
+
+  await deleteTimeEntry(entryId);
+
+  revalidatePath('/time');
+  revalidatePath('/timesheets');
+  if (entry.project_id) revalidatePath(`/projects/${entry.project_id}`);
+  revalidatePath('/', 'layout');
   return { ok: true };
 }

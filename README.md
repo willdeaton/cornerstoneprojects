@@ -118,9 +118,24 @@ in `src/lib/email/templates.ts` — fill in the real copy there.
 
 ## Excel upload format
 
-Any `.xlsx`/`.csv` with a header row works — columns are matched by name
-(Customer, Project/Description, Category, Bid Value/Amount). Grab a starter
-file from the **Download the template** link in the upload dialog.
+Any `.xlsx`/`.csv` with a header row works — columns are matched by name. Grab a
+starter file from the **Download the template** link in the upload dialog.
+
+- **Quote header** columns: `Customer` (required), `Quote Number`,
+  `Project`/`Description`, `Category`, `Date Received`, `Notes`, and optional
+  `Tax Rate %` / `Markup %`.
+- **Line items & pricing** (optional): add `Item Type`, `Item Description`,
+  `Qty`, `Unit`, `Unit Price`, and `Amount` columns to import a full quote
+  document. Rows that share the same **Quote Number** roll up into a single
+  quote with many line items — repeat the header fields on the first row of each
+  quote and leave them blank on the continuation rows.
+- **Item Type** is either `Line Item` (customer-facing, shown on the quote PDF,
+  priced from `Amount`) or `Pricing` (internal cost worksheet, priced from
+  `Qty × Unit Price`, never shown to the customer). A blank type defaults to
+  `Line Item`. A quote's bid value is recalculated from its line items.
+
+If a sheet has no line-item columns, each row imports as one simple pipeline
+quote, exactly as before (matched on Customer / Project / Category / Bid Value).
 
 ## Brand
 
