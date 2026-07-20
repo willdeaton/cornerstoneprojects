@@ -52,6 +52,30 @@ body {
   }
 }
 
+@layer utilities {
+  /* Horizontally-scrollable strips (nav sub-tabs, filter pills) that shouldn't
+     show a scrollbar. Momentum scrolling on touch devices. */
+  .no-scrollbar {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* On phones, iOS Safari zooms the page in whenever a focused form control has a
+   font-size below 16px. Our .input is text-sm (14px), so bump form controls to
+   16px on small screens to keep the viewport steady while typing. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 /* Rich-text: editor surface + rendered line-item descriptions on the quote. */
 .rte-content:empty::before {
   content: attr(data-placeholder);

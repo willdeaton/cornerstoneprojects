@@ -25,7 +25,7 @@ export function AddQuoteButton() {
       </button>
       <Modal open={open} onClose={() => setOpen(false)} title="Add Quote">
         <form action={submit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Quote #</label>
               <input name="quote_number" className="input" placeholder="e.g. Q-2601" />
@@ -43,7 +43,7 @@ export function AddQuoteButton() {
             <label className="label">Project / Description</label>
             <input name="project_name" className="input" placeholder="Scope of work" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Category</label>
               <input name="category" className="input" placeholder="Flooring" list="categories" />

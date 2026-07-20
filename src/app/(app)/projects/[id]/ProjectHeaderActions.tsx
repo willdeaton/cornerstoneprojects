@@ -40,7 +40,7 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
 
       <Modal open={open} onClose={() => setOpen(false)} title="Edit Project">
         <form action={save} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Quote #</label>
               <input name="quote_number" className="input" defaultValue={project.quote_number ?? ''} placeholder="e.g. Q-2601" />
@@ -54,7 +54,7 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
             <label className="label">Project Name</label>
             <input name="name" className="input" defaultValue={project.name} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Category</label>
               <input name="category" className="input" defaultValue={project.category ?? ''} />
@@ -64,7 +64,7 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
               <input name="location" className="input" defaultValue={project.location ?? ''} />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <label className="label">Start Date</label>
               <input name="start_date" type="date" className="input" defaultValue={project.start_date ?? ''} />

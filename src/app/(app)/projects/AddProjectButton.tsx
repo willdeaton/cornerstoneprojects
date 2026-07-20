@@ -59,7 +59,7 @@ export function AddProjectButton() {
             <label className="label">Location</label>
             <input name="location" className="input" placeholder="City, KY" />
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <label className="label">Start Date</label>
               <input name="start_date" type="date" className="input" />
