@@ -2,7 +2,6 @@ import Link from 'next/link';
 import { listQuotes } from '@/lib/data';
 import type { QuoteStatus } from '@/lib/types';
 import { PageHeader } from '@/components/ui';
-import { AddQuoteButton } from './AddQuoteButton';
 import { UploadButton } from './UploadButton';
 import { QuotesTable } from './QuotesTable';
 
@@ -28,7 +27,6 @@ export default async function QuotesPage({
     <div>
       <PageHeader title="Quotes" subtitle="Prospective work in the pipeline">
         <UploadButton />
-        <AddQuoteButton />
         <Link href="/quotes/new" className="btn-primary">
           + Create Quote
         </Link>

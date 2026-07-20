@@ -21,24 +21,6 @@ async function requireUser() {
   return user;
 }
 
-export async function createQuoteAction(formData: FormData) {
-  await requireUser();
-  const customer = String(formData.get('customer') ?? '').trim();
-  const bid = parseFloat(String(formData.get('bid_value') ?? '0').replace(/[$,]/g, ''));
-  if (!customer || isNaN(bid)) return;
-  await createQuote({
-    quote_number: String(formData.get('quote_number') ?? '').trim() || null,
-    customer,
-    project_name: String(formData.get('project_name') ?? '').trim() || null,
-    category: String(formData.get('category') ?? '').trim() || null,
-    bid_value: bid,
-    date_received: String(formData.get('date_received') ?? '') || null,
-    source: 'manual',
-  });
-  revalidatePath('/quotes');
-  revalidatePath('/dashboard');
-}
-
 export async function updateQuoteAction(id: number, formData: FormData) {
   await requireUser();
   const bidRaw = String(formData.get('bid_value') ?? '').replace(/[$,]/g, '').trim();
