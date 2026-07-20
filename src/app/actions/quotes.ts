@@ -14,6 +14,7 @@ import {
   getQuote,
 } from '@/lib/data';
 import type { QuoteDocInput, LineItemInput } from '@/lib/types';
+import { sendNewProjectEmail } from '@/lib/email/send';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -228,6 +229,8 @@ export async function deleteQuoteAction(id: number) {
 export async function convertQuoteAction(id: number) {
   await requireUser();
   const projectId = await convertQuoteToProject(id);
+  // Best-effort new-project notification; must not block the conversion.
+  if (projectId) await sendNewProjectEmail(projectId);
   revalidatePath('/quotes');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
@@ -271,7 +274,9 @@ export async function bulkMarkQuotesSoldAction(ids: number[]) {
   for (const id of ids) {
     const quote = await getQuote(id);
     if (quote && quote.status === 'open') {
-      await convertQuoteToProject(id);
+      const projectId = await convertQuoteToProject(id);
+      // Best-effort new-project notification per converted quote.
+      if (projectId) await sendNewProjectEmail(projectId);
       count++;
     }
   }

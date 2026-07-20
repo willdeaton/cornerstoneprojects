@@ -1036,23 +1036,21 @@ export interface UserRow {
   personal_email: string | null;
   work_email: string | null;
   // Per-user email subscription flags (one boolean column per email type).
-  receives_project_reminders: boolean;
-  receives_completion_report: boolean;
-  receives_schedule_change_emails: boolean;
+  receives_new_project_emails: boolean;
+  receives_completion_emails: boolean;
 }
 
 /** Column names ↔ payload keys for the per-user subscription flags. */
 export const USER_EMAIL_FLAGS = [
-  'receives_project_reminders',
-  'receives_completion_report',
-  'receives_schedule_change_emails',
+  'receives_new_project_emails',
+  'receives_completion_emails',
 ] as const;
 export type UserEmailFlag = (typeof USER_EMAIL_FLAGS)[number];
 
 const USER_SELECT =
   `id, name, email, role, active, created_at,
    personal_email, work_email,
-   receives_project_reminders, receives_completion_report, receives_schedule_change_emails`;
+   receives_new_project_emails, receives_completion_emails`;
 
 export async function listUsers(): Promise<UserRow[]> {
   return q<UserRow>(`SELECT ${USER_SELECT} FROM users ORDER BY active DESC, name`);
@@ -1072,9 +1070,8 @@ export async function emailExists(email: string): Promise<boolean> {
 export interface UserEmailFields {
   personal_email?: string | null;
   work_email?: string | null;
-  receives_project_reminders?: boolean;
-  receives_completion_report?: boolean;
-  receives_schedule_change_emails?: boolean;
+  receives_new_project_emails?: boolean;
+  receives_completion_emails?: boolean;
 }
 
 export async function createUserRow(u: {
@@ -1086,8 +1083,8 @@ export async function createUserRow(u: {
   const row = await one<{ id: number }>(
     `INSERT INTO users
        (name, email, password_hash, role, personal_email, work_email,
-        receives_project_reminders, receives_completion_report, receives_schedule_change_emails)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        receives_new_project_emails, receives_completion_emails)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
     [
       u.name,
       u.email.trim().toLowerCase(),
@@ -1095,9 +1092,8 @@ export async function createUserRow(u: {
       u.role,
       u.personal_email?.trim() || null,
       u.work_email?.trim() || null,
-      u.receives_project_reminders ?? false,
-      u.receives_completion_report ?? false,
-      u.receives_schedule_change_emails ?? false,
+      u.receives_new_project_emails ?? false,
+      u.receives_completion_emails ?? false,
     ]
   );
   return row!.id;
@@ -1113,16 +1109,14 @@ export async function updateUserEmailFields(id: number, fields: Required<UserEma
     `UPDATE users
         SET personal_email = $1,
             work_email     = $2,
-            receives_project_reminders      = $3,
-            receives_completion_report      = $4,
-            receives_schedule_change_emails = $5
-      WHERE id = $6`,
+            receives_new_project_emails = $3,
+            receives_completion_emails  = $4
+      WHERE id = $5`,
     [
       fields.personal_email?.trim() || null,
       fields.work_email?.trim() || null,
-      fields.receives_project_reminders,
-      fields.receives_completion_report,
-      fields.receives_schedule_change_emails,
+      fields.receives_new_project_emails,
+      fields.receives_completion_emails,
       id,
     ]
   );
