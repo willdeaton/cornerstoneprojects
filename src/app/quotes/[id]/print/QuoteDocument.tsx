@@ -17,22 +17,20 @@ function lineAmount(li: Pick<QuoteLineItem, 'amount' | 'quantity' | 'unit_price'
 }
 
 /**
- * Subtotal / tax / total exactly as printed. Markup is folded into each line
- * price (no separate markup row) and each shown amount is rounded to cents so
- * the printed subtotal equals the sum of the printed line prices. A quote with
- * no display line items falls back to its stored bid_value.
+ * Subtotal / total exactly as printed. Markup is per line and folded into each
+ * line price (no separate markup row), and each shown amount is rounded to cents
+ * so the printed total equals the sum of the printed line prices. There is no
+ * tax. A quote with no display line items falls back to its stored bid_value.
  */
 export function computeQuoteView(quote: QuoteWithItems) {
   const displayItems = quote.line_items.filter((li) => li.kind !== 'pricing');
   const hasItems = displayItems.length > 0;
-  const markupRate = quote.markup_rate || 0;
   const roundCents = (n: number) => Math.round(n * 100) / 100;
-  const shownAmounts = displayItems.map((li) => roundCents(lineAmount(li) * (1 + markupRate)));
-  const subtotal = hasItems ? shownAmounts.reduce((s, a) => s + a, 0) : quote.bid_value;
-  const tax = hasItems ? roundCents(subtotal * (quote.tax_rate || 0)) : 0;
-  const total = hasItems ? roundCents(subtotal + tax) : quote.bid_value;
-  const taxPct = +((quote.tax_rate || 0) * 100).toFixed(4);
-  return { displayItems, hasItems, shownAmounts, subtotal, tax, total, taxPct };
+  const shownAmounts = displayItems.map(
+    (li) => roundCents(lineAmount(li) * (1 + (li.markup_rate || 0)))
+  );
+  const total = hasItems ? shownAmounts.reduce((s, a) => s + a, 0) : quote.bid_value;
+  return { displayItems, hasItems, shownAmounts, total };
 }
 
 export function QuoteDocument({
@@ -42,8 +40,7 @@ export function QuoteDocument({
   quote: QuoteWithItems;
   company: CompanyInfo;
 }) {
-  const { displayItems, hasItems, shownAmounts, subtotal, tax, total, taxPct } =
-    computeQuoteView(quote);
+  const { displayItems, hasItems, shownAmounts, total } = computeQuoteView(quote);
 
   return (
     <div
@@ -59,9 +56,6 @@ export function QuoteDocument({
           {company.addressLines.map((l) => (
             <p key={l} className="text-xs text-brand-gray">{l}</p>
           ))}
-          <p className="text-xs text-brand-gray">
-            {[company.phone, company.email, company.website].filter(Boolean).join(' · ')}
-          </p>
         </div>
         <div className="text-right">
           <h1 className="brand-heading text-3xl text-brand-ink">Quote</h1>
@@ -77,6 +71,14 @@ export function QuoteDocument({
             <p className="text-xs text-brand-gray">
               Valid until <span className="font-medium text-brand-ink">{shortDate(quote.valid_until)}</span>
             </p>
+          )}
+          {/* Company phone / email / website, stacked one per line. */}
+          {(company.phone || company.email || company.website) && (
+            <div className="mt-3 text-xs text-brand-gray">
+              {company.phone && <p>{company.phone}</p>}
+              {company.email && <p>{company.email}</p>}
+              {company.website && <p>{company.website}</p>}
+            </div>
           )}
         </div>
       </div>
@@ -136,17 +138,9 @@ export function QuoteDocument({
         </tbody>
       </table>
 
-      {/* Totals */}
+      {/* Totals — markup is folded into each line price, so no separate rows. */}
       <div className="mt-4 flex justify-end">
         <div className="w-64 space-y-1.5 text-sm">
-          <div className="flex justify-between">
-            <span className="text-brand-gray">Subtotal</span>
-            <span className="font-semibold text-brand-ink">{money(subtotal, { cents: true })}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-brand-gray">Tax{taxPct ? ` (${taxPct}%)` : ''}</span>
-            <span className="font-semibold text-brand-ink">{money(tax, { cents: true })}</span>
-          </div>
           <div className="flex justify-between border-t-2 border-brand-green pt-2 text-base">
             <span className="font-semibold text-brand-ink">Total</span>
             <span className="font-bold text-brand-ink">{money(total, { cents: true })}</span>

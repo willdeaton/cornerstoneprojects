@@ -95,6 +95,7 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
         unit: clean(it.unit),
         unit_price: Number.isFinite(it.unit_price) ? it.unit_price : 0,
         amount: it.amount != null && Number.isFinite(it.amount) ? it.amount : null,
+        markup_rate: Number.isFinite(it.markup_rate) ? Math.max(0, it.markup_rate) : 0,
       })),
   };
 }

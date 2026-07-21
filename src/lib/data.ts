@@ -148,10 +148,14 @@ export function lineAmount(it: {
 }
 
 /**
- * Subtotal / tax / total for a quote. Only 'display' line items — the
+ * Subtotal / markup / total for a quote. Only 'display' line items — the
  * customer-facing lines — count toward the total; 'pricing' rows are an
  * internal worksheet and are ignored. Items with no kind are treated as
  * display for backward compatibility with quotes created before the split.
+ *
+ * Markup is per line: each line's amount is grown by its own markup_rate, then
+ * rounded to cents so the stored total matches the sum of the printed line
+ * prices on the customer PDF. There is no tax.
  */
 export function quoteTotals(
   items: {
@@ -159,19 +163,17 @@ export function quoteTotals(
     amount?: number | null;
     quantity?: number;
     unit_price?: number;
-  }[],
-  taxRate: number,
-  markupRate = 0
-): { subtotal: number; markup: number; tax: number; total: number } {
-  const subtotal = items
-    .filter((it) => (it.kind ?? 'display') === 'display')
-    .reduce((s, it) => s + lineAmount(it), 0);
-  // Markup is applied to the subtotal first; tax is then charged on the
-  // marked-up amount so the stored total matches the customer-facing PDF.
-  const markup = subtotal * (markupRate || 0);
-  const taxable = subtotal + markup;
-  const tax = taxable * (taxRate || 0);
-  return { subtotal, markup, tax, total: taxable + tax };
+    markup_rate?: number;
+  }[]
+): { subtotal: number; markup: number; total: number } {
+  const roundCents = (n: number) => Math.round(n * 100) / 100;
+  const display = items.filter((it) => (it.kind ?? 'display') === 'display');
+  const subtotal = display.reduce((s, it) => s + lineAmount(it), 0);
+  const total = display.reduce(
+    (s, it) => s + roundCents(lineAmount(it) * (1 + (it.markup_rate || 0))),
+    0
+  );
+  return { subtotal, markup: total - subtotal, total };
 }
 
 export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | undefined> {
@@ -189,8 +191,8 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
     const it = items[i];
     if (!it.description?.trim()) continue;
     await client.query(
-      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount, markup_rate)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         quoteId,
         i,
@@ -200,6 +202,7 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
         it.unit?.trim() || null,
         it.unit_price || 0,
         it.amount == null ? null : it.amount,
+        it.markup_rate || 0,
       ]
     );
   }
@@ -240,7 +243,7 @@ export async function createQuoteWithItems(
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const { total } = quoteTotals(input.items, input.tax_rate, input.markup_rate);
+    const { total } = quoteTotals(input.items);
     const res = await client.query(
       `INSERT INTO quotes
          (quote_number, customer, project_name, category, bid_value, date_received,
@@ -273,7 +276,7 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
     // quote (imported / quick-added, no line items) doesn't zero its total.
     let total: number;
     if (input.items.length > 0) {
-      total = quoteTotals(input.items, input.tax_rate, input.markup_rate).total;
+      total = quoteTotals(input.items).total;
     } else {
       const existing = await client.query('SELECT bid_value FROM quotes WHERE id = $1', [id]);
       total = (existing.rows[0]?.bid_value as number | undefined) ?? 0;

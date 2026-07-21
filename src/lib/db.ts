@@ -219,6 +219,11 @@ async function migrate(pool: Pool) {
     -- quantity * unit_price when rendering.
     ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'display';
     ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS amount DOUBLE PRECISION;
+    -- Per-line markup applied to a display line's amount, stored as a fraction
+    -- (0.15 = 15%). Folded into the printed line price on the customer PDF, so it
+    -- raises the total without showing as its own line. Replaces the old
+    -- quote-level markup_rate/tax_rate for customer-facing math.
+    ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS markup_rate DOUBLE PRECISION NOT NULL DEFAULT 0;
 
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
     CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_line_items(quote_id);
