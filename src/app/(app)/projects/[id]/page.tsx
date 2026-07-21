@@ -6,7 +6,6 @@ import {
   listNotes,
   listProjectTime,
   projectHours,
-  activeEntry,
   listProjectFiles,
 } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
@@ -30,9 +29,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const notes = await listNotes(id);
   const timeEntries = await listProjectTime(id);
   const hours = await projectHours(id);
-  const active = await activeEntry(user.id);
   const files = await listProjectFiles(id);
-  const clockedInHere = active?.project_id === id;
 
   return (
     <div>
@@ -102,17 +99,9 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
           <NotesSection projectId={project.id} notes={notes} currentUserId={user.id} />
         </div>
 
-        {/* Right: time clock + files */}
+        {/* Right: time summary + files */}
         <div className="space-y-6">
-          <ProjectTime
-            projectId={project.id}
-            entries={timeEntries}
-            clockedInHere={clockedInHere}
-            clockedInElsewhere={!!active && !clockedInHere}
-            activeElsewhereName={
-              active && !clockedInHere ? active.project_name ?? 'a general shift' : null
-            }
-          />
+          <ProjectTime entries={timeEntries} totalHours={hours} />
           <ProjectFiles projectId={project.id} files={files} />
         </div>
       </div>
