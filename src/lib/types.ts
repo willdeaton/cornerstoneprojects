@@ -49,6 +49,8 @@ export interface QuoteLineItem {
   unit: string | null;
   unit_price: number;
   amount: number | null;
+  /** Per-line markup applied to this line's amount, as a fraction (0.15 = 15%). */
+  markup_rate: number;
   created_at: string;
 }
 
@@ -62,6 +64,8 @@ export interface LineItemInput {
   unit: string | null;
   unit_price: number;
   amount: number | null;
+  /** Per-line markup applied to this line's amount, as a fraction (0.15 = 15%). */
+  markup_rate: number;
 }
 
 /** Full payload submitted when creating/updating a quote document. */

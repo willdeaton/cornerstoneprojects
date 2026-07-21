@@ -30,10 +30,12 @@ interface PricingRow {
   unit_price: string;
 }
 
-/** Customer-facing line printed on the PDF: a description and a total price. */
+/** Customer-facing line printed on the PDF: a description, price, and markup %. */
 interface DisplayRow {
   description: string;
   amount: string;
+  /** Per-line markup as a whole-number percent string (e.g. "15"). */
+  markup: string;
 }
 
 /** A worksheet row not yet in the price book, offered for saving on save. */
@@ -65,7 +67,7 @@ function blankPricingRow(): PricingRow {
   return { description: '', quantity: '1', unit: 'ea', unit_price: '' };
 }
 function blankDisplayRow(): DisplayRow {
-  return { description: '', amount: '' };
+  return { description: '', amount: '', markup: '0' };
 }
 
 export function QuoteBuilder({
@@ -120,13 +122,6 @@ export function QuoteBuilder({
     prepared_by: quote?.prepared_by ?? '',
     internal_notes: quote?.internal_notes ?? '',
   });
-  const [taxPercent, setTaxPercent] = useState<string>(
-    quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
-  );
-  const [markupPercent, setMarkupPercent] = useState<string>(
-    quote ? String(+(quote.markup_rate * 100).toFixed(4)) : '0'
-  );
-
   // Saved customers are held in state so a quick-add from the picker below shows
   // up immediately (and can be auto-selected) without a full page reload.
   const [customers, setCustomers] = useState<CustomerWithContacts[]>(customersProp);
@@ -396,6 +391,7 @@ export function QuoteBuilder({
           description: sanitizeRichText(li.description),
           // Fall back to quantity × unit price for pre-split quotes with no amount.
           amount: String(li.amount ?? li.quantity * li.unit_price),
+          markup: String(+((li.markup_rate ?? 0) * 100).toFixed(4)),
         }))
       : [blankDisplayRow()]
   );
@@ -409,15 +405,22 @@ export function QuoteBuilder({
   );
 
   const totals = useMemo(() => {
+    const roundCents = (n: number) => Math.round(n * 100) / 100;
+    // Markup is per line and folded into each line price on the PDF, so it never
+    // shows as its own line to the customer even though it raises the total.
+    // Each line is rounded to cents so this total matches the printed one.
     const subtotal = displayRows.reduce((s, r) => s + num(r.amount), 0);
-    // Markup is applied to the subtotal first; tax is charged on the marked-up
-    // amount. Markup is folded into line prices on the PDF, so it never shows as
-    // its own line to the customer even though it raises the total.
-    const markup = subtotal * (num(markupPercent) / 100);
-    const taxable = subtotal + markup;
-    const tax = taxable * (num(taxPercent) / 100);
-    return { subtotal, markup, taxable, tax, total: taxable + tax };
-  }, [displayRows, taxPercent, markupPercent]);
+    const total = displayRows.reduce(
+      (s, r) => s + roundCents(num(r.amount) * (1 + num(r.markup) / 100)),
+      0
+    );
+    return { subtotal, markup: total - subtotal, total };
+  }, [displayRows]);
+
+  const anyMarkup = useMemo(
+    () => displayRows.some((r) => num(r.markup) > 0),
+    [displayRows]
+  );
 
   /* ---- pricing rows ---- */
   function updatePricing(i: number, patch: Partial<PricingRow>) {
@@ -439,7 +442,7 @@ export function QuoteBuilder({
   function pricingToLine() {
     setDisplayRows((rs) => [
       ...rs.filter((r) => r.description.trim() || r.amount.trim()),
-      { description: header.project_name || 'Project total', amount: pricingSubtotal.toFixed(2) },
+      { description: header.project_name || 'Project total', amount: pricingSubtotal.toFixed(2), markup: '0' },
     ]);
   }
 
@@ -497,6 +500,7 @@ export function QuoteBuilder({
           unit: r.unit || null,
           unit_price: num(r.unit_price),
           amount: null,
+          markup_rate: 0,
         })),
       ...displayRows
         .filter((r) => !isRichTextEmpty(r.description))
@@ -507,6 +511,7 @@ export function QuoteBuilder({
           unit: null,
           unit_price: 0,
           amount: num(r.amount),
+          markup_rate: num(r.markup) / 100,
         })),
     ];
     const payload: QuoteDocInput = {
@@ -521,8 +526,9 @@ export function QuoteBuilder({
       category: header.category || null,
       issue_date: header.issue_date || null,
       valid_until: header.valid_until || null,
-      tax_rate: num(taxPercent) / 100,
-      markup_rate: num(markupPercent) / 100,
+      // Tax and quote-level markup are retired — markup is now per line item.
+      tax_rate: 0,
+      markup_rate: 0,
       terms: header.terms || null,
       notes: header.notes || null,
       prepared_by: header.prepared_by || null,
@@ -650,14 +656,17 @@ export function QuoteBuilder({
       <div className="card p-5">
         <h2 className="brand-heading mb-1 text-sm text-brand-ink">Line Items</h2>
         <p className="mb-4 text-xs text-brand-gray">
-          What the customer sees on the quote — a description and a total price per line.
+          What the customer sees on the quote — a description, price, and markup per line. Markup is
+          folded into the line price on the PDF; the customer only sees the marked-up total.
         </p>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] text-sm">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
                 <th className="px-2 py-2 font-semibold">Description</th>
-                <th className="px-2 py-2 text-right font-semibold w-40">Price</th>
+                <th className="px-2 py-2 text-right font-semibold w-32">Price</th>
+                <th className="px-2 py-2 text-right font-semibold w-24">Markup %</th>
+                <th className="px-2 py-2 text-right font-semibold w-32">Line Total</th>
                 <th className="px-2 py-2 w-24" />
               </tr>
             </thead>
@@ -679,6 +688,18 @@ export function QuoteBuilder({
                       onChange={(e) => updateDisplay(i, { amount: e.target.value })}
                       placeholder="0.00"
                     />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input text-right"
+                      inputMode="decimal"
+                      value={r.markup}
+                      onChange={(e) => updateDisplay(i, { markup: e.target.value })}
+                      placeholder="0"
+                    />
+                  </td>
+                  <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                    {money(num(r.amount) * (1 + num(r.markup) / 100), { cents: true })}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-end gap-1 text-brand-gray">
@@ -708,39 +729,19 @@ export function QuoteBuilder({
               <span className="text-brand-gray">Subtotal</span>
               <span className="font-semibold text-brand-ink">{money(totals.subtotal, { cents: true })}</span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-brand-gray">
-                Markup
-                <input
-                  className="input ml-2 inline-block w-16 px-2 py-1"
-                  inputMode="decimal"
-                  value={markupPercent}
-                  onChange={(e) => setMarkupPercent(e.target.value)}
-                />
-                <span className="ml-1">%</span>
-              </span>
-              <span className="font-semibold text-brand-ink">{money(totals.markup, { cents: true })}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-brand-gray">
-                Tax
-                <input
-                  className="input ml-2 inline-block w-16 px-2 py-1"
-                  inputMode="decimal"
-                  value={taxPercent}
-                  onChange={(e) => setTaxPercent(e.target.value)}
-                />
-                <span className="ml-1">%</span>
-              </span>
-              <span className="font-semibold text-brand-ink">{money(totals.tax, { cents: true })}</span>
-            </div>
+            {anyMarkup && (
+              <div className="flex justify-between">
+                <span className="text-brand-gray">Markup</span>
+                <span className="font-semibold text-brand-ink">{money(totals.markup, { cents: true })}</span>
+              </div>
+            )}
             <div className="flex justify-between border-t border-black/10 pt-2 text-base">
               <span className="font-semibold text-brand-ink">Total</span>
               <span className="font-bold text-brand-ink">{money(totals.total, { cents: true })}</span>
             </div>
-            {num(markupPercent) > 0 && (
+            {anyMarkup && (
               <p className="pt-1 text-xs text-brand-gray">
-                Markup is spread across line prices on the customer PDF — it raises the total but
+                Markup is folded into each line price on the customer PDF — it raises the total but
                 isn&apos;t shown as its own line.
               </p>
             )}
