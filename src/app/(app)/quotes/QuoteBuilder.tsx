@@ -45,6 +45,12 @@ interface NewPriceItem {
   unit_price: number;
 }
 
+/**
+ * Where the user lands after saving: `'stay'` persists in place and keeps the
+ * edit form open, `'list'` returns to the quotes list, `'pdf'` opens the PDF.
+ */
+type SaveMode = 'stay' | 'list' | 'pdf';
+
 const CATEGORIES = [
   'Flooring',
   'Painting',
@@ -99,9 +105,17 @@ export function QuoteBuilder({
   // price book yet and offer them all at once as checkboxes, instead of nagging
   // per row. `savePrompt` also remembers whether the pending save should open
   // the PDF, so we can resume the save after the user answers.
-  const [savePrompt, setSavePrompt] = useState<{ items: NewPriceItem[]; viewPdf: boolean } | null>(null);
+  const [savePrompt, setSavePrompt] = useState<{ items: NewPriceItem[]; mode: SaveMode } | null>(null);
   const [selectedNew, setSelectedNew] = useState<Set<number>>(new Set());
   const [addingToBook, setAddingToBook] = useState(false);
+
+  // A plain Save on an existing quote now persists in place instead of leaving
+  // the page. Once it has saved at least once, the "Cancel" button becomes
+  // "Close"; leaving with unsaved edits prompts to save first. `savedSnapshot`
+  // is the serialized form state as of the last save (or initial load) so we
+  // can tell whether anything has changed since.
+  const [hasSavedInPlace, setHasSavedInPlace] = useState(false);
+  const [closePrompt, setClosePrompt] = useState(false);
 
   const [header, setHeader] = useState({
     quote_number: quote?.quote_number ?? '',
@@ -341,7 +355,7 @@ export function QuoteBuilder({
   /** Persist the checked price-book candidates, then return to finish the save. */
   async function confirmSavePrompt() {
     if (!savePrompt) return;
-    const { items, viewPdf } = savePrompt;
+    const { items, mode } = savePrompt;
     const chosen = items.filter((_, i) => selectedNew.has(i));
     if (chosen.length) {
       setAddingToBook(true);
@@ -357,15 +371,15 @@ export function QuoteBuilder({
       setAddingToBook(false);
     }
     setSavePrompt(null);
-    await doSave(viewPdf);
+    await doSave(mode);
   }
 
   /** Dismiss the prompt without saving any prices, then finish the save. */
   async function skipSavePrompt() {
     if (!savePrompt) return;
-    const { viewPdf } = savePrompt;
+    const { mode } = savePrompt;
     setSavePrompt(null);
-    await doSave(viewPdf);
+    await doSave(mode);
   }
 
   // Existing quotes store both kinds in one list; split them for editing. Rows
@@ -398,6 +412,16 @@ export function QuoteBuilder({
 
   const set = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setHeader((h) => ({ ...h, [k]: e.target.value }));
+
+  // Serialized view of everything we persist, used to detect unsaved edits. The
+  // baseline starts at the initial load and is reset to the current view after
+  // each successful in-place save.
+  const snapshot = useMemo(
+    () => JSON.stringify({ header, pricingRows, displayRows }),
+    [header, pricingRows, displayRows]
+  );
+  const [savedSnapshot, setSavedSnapshot] = useState(snapshot);
+  const dirty = snapshot !== savedSnapshot;
 
   const pricingSubtotal = useMemo(
     () => pricingRows.reduce((s, r) => s + num(r.quantity) * num(r.unit_price), 0),
@@ -468,7 +492,7 @@ export function QuoteBuilder({
    * the book — opens the single "add to pricing list?" prompt before saving.
    * Otherwise it saves straight away.
    */
-  function save(viewPdf: boolean) {
+  function save(mode: SaveMode) {
     setError(null);
     if (!header.customer.trim()) {
       setError('Customer is required.');
@@ -478,13 +502,13 @@ export function QuoteBuilder({
     if (newItems.length > 0) {
       // Default every candidate to checked — the common case is "yes, save these".
       setSelectedNew(new Set(newItems.map((_, i) => i)));
-      setSavePrompt({ items: newItems, viewPdf });
+      setSavePrompt({ items: newItems, mode });
       return;
     }
-    void doSave(viewPdf);
+    void doSave(mode);
   }
 
-  async function doSave(viewPdf: boolean) {
+  async function doSave(mode: SaveMode) {
     setError(null);
     if (!header.customer.trim()) {
       setError('Customer is required.');
@@ -538,12 +562,21 @@ export function QuoteBuilder({
     setSaving(true);
     try {
       const res = quote
-        ? await updateQuoteDocAction(quote.id, payload, viewPdf)
-        : await createQuoteDocAction(payload, viewPdf);
-      // A successful action redirects server-side; only errors return here.
+        ? await updateQuoteDocAction(quote.id, payload, mode)
+        : await createQuoteDocAction(payload, mode === 'pdf');
       if (res?.error) {
         setError(res.error);
         setSaving(false);
+        return;
+      }
+      // 'stay' saves in place and returns here; 'list'/'pdf' redirect
+      // server-side (this component unmounts before we get here).
+      if (mode === 'stay') {
+        setSaving(false);
+        // Mark the just-saved state as the new clean baseline so the form no
+        // longer reads as having unsaved edits, and flip Cancel → Close.
+        setSavedSnapshot(snapshot);
+        setHasSavedInPlace(true);
       }
     } catch (err) {
       // NEXT_REDIRECT is thrown on success — let it bubble to navigate.
@@ -553,6 +586,18 @@ export function QuoteBuilder({
       setError('Could not save the quote. Please try again.');
       setSaving(false);
     }
+  }
+
+  /**
+   * Leave the builder. If there are unsaved edits, prompt to save first;
+   * otherwise go straight back to the quotes list.
+   */
+  function handleClose() {
+    if (dirty) {
+      setClosePrompt(true);
+      return;
+    }
+    router.push('/quotes');
   }
 
   return (
@@ -1041,17 +1086,74 @@ export function QuoteBuilder({
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-      <div className="flex flex-wrap justify-end gap-2">
-        <button type="button" className="btn-secondary" onClick={() => router.push('/quotes')} disabled={saving}>
-          Cancel
-        </button>
-        <button type="button" className="btn-secondary" onClick={() => save(false)} disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-        <button type="button" className="btn-primary" onClick={() => save(true)} disabled={saving}>
-          {saving ? 'Saving…' : quote ? 'Save & View PDF' : 'Create & View PDF'}
-        </button>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {quote && hasSavedInPlace && !dirty && !saving && (
+          <span className="mr-auto text-sm font-medium text-brand-green">Saved ✓</span>
+        )}
+        {quote ? (
+          <>
+            <button type="button" className="btn-secondary" onClick={handleClose} disabled={saving}>
+              {hasSavedInPlace ? 'Close' : 'Cancel'}
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => save('stay')} disabled={saving || !dirty}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" className="btn-primary" onClick={() => save('pdf')} disabled={saving}>
+              {saving ? 'Saving…' : 'Save & View PDF'}
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="btn-secondary" onClick={() => router.push('/quotes')} disabled={saving}>
+              Cancel
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => save('list')} disabled={saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" className="btn-primary" onClick={() => save('pdf')} disabled={saving}>
+              {saving ? 'Saving…' : 'Create & View PDF'}
+            </button>
+          </>
+        )}
       </div>
+
+      {closePrompt && (
+        <Modal open onClose={() => setClosePrompt(false)} title="Save changes before closing?">
+          <div className="space-y-4">
+            <p className="text-sm text-brand-gray">
+              This quote has unsaved changes. Do you want to save them before closing?
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={() => setClosePrompt(false)} disabled={saving}>
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className="btn-secondary text-red-600"
+                onClick={() => {
+                  setClosePrompt(false);
+                  router.push('/quotes');
+                }}
+                disabled={saving}
+              >
+                Discard &amp; close
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  setClosePrompt(false);
+                  // 'list' saves and returns to the quotes list — i.e. save & close.
+                  save('list');
+                }}
+                disabled={saving}
+              >
+                {saving ? 'Saving…' : 'Save & close'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
