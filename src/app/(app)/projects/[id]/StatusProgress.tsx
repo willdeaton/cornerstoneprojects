@@ -32,9 +32,16 @@ export function StatusProgress({
     });
   }
 
+  function clamp(v: number) {
+    if (Number.isNaN(v)) return 0;
+    return Math.max(0, Math.min(100, Math.round(v)));
+  }
+
   function commitProgress(v: number) {
+    const next = clamp(v);
+    setLocalProgress(next);
     start(async () => {
-      await setProjectProgressAction(id, v);
+      await setProjectProgressAction(id, next);
       router.refresh();
     });
   }
@@ -66,19 +73,29 @@ export function StatusProgress({
           <p className="label mb-0">Progress</p>
           <span className="text-sm font-semibold text-brand-ink">{localProgress}%</span>
         </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={localProgress}
-          disabled={pending}
-          onChange={(e) => setLocalProgress(Number(e.target.value))}
-          onMouseUp={(e) => commitProgress(Number((e.target as HTMLInputElement).value))}
-          onTouchEnd={(e) => commitProgress(Number((e.target as HTMLInputElement).value))}
-          className="w-full accent-brand-green"
-        />
-        <div className="mt-2">
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step={1}
+            value={localProgress}
+            disabled={pending}
+            onChange={(e) => setLocalProgress(clamp(Number(e.target.value)))}
+            onBlur={(e) => commitProgress(Number(e.target.value))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitProgress(Number((e.target as HTMLInputElement).value));
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            className="input w-24"
+            aria-label="Percent of job complete"
+          />
+          <span className="text-sm text-brand-gray">% complete</span>
+        </div>
+        <div className="mt-3">
           <ProgressBar value={localProgress} />
         </div>
       </div>
