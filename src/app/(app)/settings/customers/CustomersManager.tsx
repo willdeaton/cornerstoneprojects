@@ -59,13 +59,6 @@ export function CustomersManager({ customers }: { customers: CustomerWithContact
                   <h3 className="font-semibold text-brand-ink">{c.name}</h3>
                   <div className="mt-1 space-y-0.5 text-sm text-brand-gray">
                     {c.address && <p className="whitespace-pre-line">{c.address}</p>}
-                    {(c.phone || c.email) && (
-                      <p>
-                        {c.phone}
-                        {c.phone && c.email ? ' · ' : ''}
-                        {c.email}
-                      </p>
-                    )}
                     {c.notes && <p className="italic">{c.notes}</p>}
                   </div>
                 </div>
@@ -181,8 +174,6 @@ function CustomerFormModal({
 }) {
   const [name, setName] = useState(customer?.name ?? '');
   const [address, setAddress] = useState(customer?.address ?? '');
-  const [phone, setPhone] = useState(customer?.phone ?? '');
-  const [email, setEmail] = useState(customer?.email ?? '');
   const [notes, setNotes] = useState(customer?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -194,8 +185,6 @@ function CustomerFormModal({
       id: customer?.id,
       name,
       address,
-      phone,
-      email,
       notes,
     });
     if (res.ok) onSaved();
@@ -220,16 +209,6 @@ function CustomerFormModal({
             onChange={(e) => setAddress(e.target.value)}
             placeholder={'Street, Suite\nCity, ST ZIP'}
           />
-        </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className="label">Phone</label>
-            <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 555-0100" />
-          </div>
-          <div>
-            <label className="label">Email</label>
-            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="office@example.com" />
-          </div>
         </div>
         <div>
           <label className="label">Notes</label>

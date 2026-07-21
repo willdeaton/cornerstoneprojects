@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { money } from '@/lib/format';
 import { sanitizeRichText, isRichTextEmpty } from '@/lib/richtext';
 import { Modal } from '@/components/Modal';
+import { Combobox } from '@/components/Combobox';
 import { RichTextEditor } from '@/components/RichTextEditor';
 import { UnitSelect } from '@/components/UnitSelect';
 import type {
@@ -147,6 +148,43 @@ export function QuoteBuilder({
   const customerSelValue = customerId ? customerId : hasUnsavedCurrent ? '__current__' : '';
   const contactSelValue = contactId ? contactId : customerSelValue === '__current__' ? '__current__' : '';
 
+  // Typeahead option lists for the customer + contact pickers.
+  const customerOptions = useMemo(() => {
+    const opts = customers.map((c) => ({
+      value: String(c.id),
+      label: c.name,
+      detail: c.address ?? undefined,
+    }));
+    if (hasUnsavedCurrent) {
+      opts.unshift({
+        value: '__current__',
+        label: quote?.customer ?? '',
+        detail: 'current — not saved',
+      });
+    }
+    return opts;
+  }, [customers, hasUnsavedCurrent, quote?.customer]);
+
+  const contactOptions = useMemo(() => {
+    if (selectedCustomer) {
+      return selectedCustomer.contacts.map((ct) => ({
+        value: String(ct.id),
+        label: ct.name,
+        detail: [ct.title, ct.email].filter(Boolean).join(' · ') || undefined,
+      }));
+    }
+    if (customerSelValue === '__current__') {
+      return [
+        {
+          value: '__current__',
+          label: quote?.customer_contact || '(no contact)',
+          detail: 'current — not saved',
+        },
+      ];
+    }
+    return [];
+  }, [selectedCustomer, customerSelValue, quote?.customer_contact]);
+
   // Add-customer / add-contact modal state.
   const [addMode, setAddMode] = useState<null | 'customer' | 'contact'>(null);
   const blankAddForm = { name: '', title: '', email: '', phone: '', address: '', contactName: '' };
@@ -195,9 +233,13 @@ export function QuoteBuilder({
     applyCustomerContact(selectedCustomer, ct);
   }
 
-  function openAdd(mode: 'customer' | 'contact') {
+  function openAdd(mode: 'customer' | 'contact', prefillName = '') {
     setAddError(null);
-    setAddForm(blankAddForm);
+    setAddForm(
+      mode === 'customer'
+        ? { ...blankAddForm, name: prefillName }
+        : { ...blankAddForm, contactName: prefillName }
+    );
     setAddMode(mode);
   }
 
@@ -509,67 +551,39 @@ export function QuoteBuilder({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className="label">Customer *</label>
-            <select className="input" value={customerSelValue} onChange={(e) => onSelectCustomer(e.target.value)}>
-              <option value="">Select a customer…</option>
-              {hasUnsavedCurrent && (
-                <option value="__current__">
-                  {quote?.customer} (current — not saved)
-                </option>
-              )}
-              {customers.map((c) => (
-                <option key={c.id} value={String(c.id)}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <Combobox
+              value={customerSelValue}
+              options={customerOptions}
+              onSelect={onSelectCustomer}
+              onAddNew={(typed) => openAdd('customer', typed)}
+              addNewLabel={(typed) => `Add “${typed}” as new customer`}
+              placeholder="Search customers…"
+              emptyText="No matching customers"
+            />
           </div>
           <div>
             <label className="label">Contact</label>
-            <select
-              className="input"
+            <Combobox
               value={contactSelValue}
-              onChange={(e) => onSelectContact(e.target.value)}
+              options={contactOptions}
+              onSelect={onSelectContact}
+              onAddNew={
+                selectedCustomer ? (typed) => openAdd('contact', typed) : undefined
+              }
+              addNewLabel={(typed) => `Add “${typed}” as new contact`}
+              placeholder={
+                selectedCustomer || customerSelValue === '__current__'
+                  ? 'Search contacts…'
+                  : 'Select a customer first…'
+              }
+              emptyText="No contacts yet"
               disabled={!selectedCustomer && customerSelValue !== '__current__'}
-            >
-              {selectedCustomer ? (
-                <>
-                  <option value="">(no contact)</option>
-                  {selectedCustomer.contacts.map((ct) => (
-                    <option key={ct.id} value={String(ct.id)}>
-                      {ct.name}
-                      {ct.title ? ` (${ct.title})` : ''}
-                    </option>
-                  ))}
-                </>
-              ) : customerSelValue === '__current__' ? (
-                <option value="__current__">{quote?.customer_contact || '(no contact)'}</option>
-              ) : (
-                <option value="">Select a customer first…</option>
-              )}
-            </select>
+            />
           </div>
           <div className="sm:col-span-2">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-              <button
-                type="button"
-                className="font-semibold text-brand-green-dark hover:underline"
-                onClick={() => openAdd('customer')}
-              >
-                + Add new customer
-              </button>
-              {selectedCustomer && (
-                <button
-                  type="button"
-                  className="font-semibold text-brand-green-dark hover:underline"
-                  onClick={() => openAdd('contact')}
-                >
-                  + Add contact to {selectedCustomer.name}
-                </button>
-              )}
-              <span className="text-brand-gray">
-                Not listed? Add a new customer or contact — free-typed names aren&apos;t saved.
-              </span>
-            </div>
+            <p className="text-xs text-brand-gray">
+              Type to search. Not listed? Choose “Add … as new” to save it.
+            </p>
           </div>
           <div>
             <label className="label">Contact Email</label>
