@@ -51,15 +51,25 @@ export async function createQuoteDocAction(input: QuoteDocInput, viewPdf = true)
   redirect(viewPdf ? `/quotes/${id}/print` : '/quotes');
 }
 
-/** Update an existing quote document, optionally viewing its printable page. */
-export async function updateQuoteDocAction(id: number, input: QuoteDocInput, viewPdf = true) {
+/**
+ * Update an existing quote document. `after` controls where the user lands:
+ * `'pdf'` opens the printable page, `'list'` returns to the quotes list, and
+ * `'stay'` keeps them on the edit page (returning `{ ok: true }` instead of
+ * redirecting) so a plain Save can persist without leaving the form.
+ */
+export async function updateQuoteDocAction(
+  id: number,
+  input: QuoteDocInput,
+  after: 'pdf' | 'list' | 'stay' = 'pdf'
+) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
   await updateQuoteWithItems(id, sanitizeDoc(input));
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
   revalidatePath(`/quotes/${id}/print`);
-  redirect(viewPdf ? `/quotes/${id}/print` : '/quotes');
+  if (after === 'stay') return { ok: true };
+  redirect(after === 'pdf' ? `/quotes/${id}/print` : '/quotes');
 }
 
 /** Trim strings, coerce numbers, and drop blank line items before persisting. */
