@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { activeEntry } from '@/lib/data';
 import { getBranding } from '@/lib/branding-store';
 import { AppShell } from './AppShell';
+import { BackupReminder } from './BackupReminder';
 
 export default async function AuthedLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -33,6 +34,7 @@ export default async function AuthedLayout({ children }: { children: React.React
       iconSrc={branding.icon}
     >
       {children}
+      <BackupReminder isAdmin={(user.realRole ?? user.role) === 'admin'} />
     </AppShell>
   );
 }
