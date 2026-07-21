@@ -1,7 +1,13 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { getQuoteWithItems, listCustomersWithContacts, listPricingItems, listUnits } from '@/lib/data';
+import {
+  getQuoteWithItems,
+  listCustomersWithContacts,
+  listPricingItems,
+  listUnits,
+  listQuoteFiles,
+} from '@/lib/data';
 import { PageHeader } from '@/components/ui';
 import { QuoteBuilder } from '../../QuoteBuilder';
 
@@ -14,11 +20,12 @@ export default async function EditQuotePage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const numId = Number(id);
   if (!Number.isFinite(numId)) notFound();
-  const [quote, customers, pricingItems, units] = await Promise.all([
+  const [quote, customers, pricingItems, units, quoteFiles] = await Promise.all([
     getQuoteWithItems(numId),
     listCustomersWithContacts(),
     listPricingItems(),
     listUnits(),
+    listQuoteFiles(numId),
   ]);
   if (!quote) notFound();
 
@@ -30,7 +37,13 @@ export default async function EditQuotePage({ params }: { params: Promise<{ id: 
         </Link>
       </div>
       <PageHeader title="Edit Quote" subtitle={quote.customer} />
-      <QuoteBuilder quote={quote} customers={customers} pricingItems={pricingItems} units={units} />
+      <QuoteBuilder
+        quote={quote}
+        customers={customers}
+        pricingItems={pricingItems}
+        units={units}
+        quoteFiles={quoteFiles}
+      />
     </div>
   );
 }

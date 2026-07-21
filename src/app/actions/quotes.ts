@@ -85,6 +85,7 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
     terms: clean(input.terms),
     notes: clean(input.notes),
     prepared_by: clean(input.prepared_by),
+    internal_notes: clean(input.internal_notes),
     items: (input.items ?? [])
       .filter((it) => (it.description ?? '').trim() !== '')
       .map((it) => ({
