@@ -162,6 +162,21 @@ async function migrate(pool: Pool) {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Supporting documentation attached to a quote for INTERNAL reference only
+    -- (never shown on the customer PDF). Mirrors project_files: the file bytes
+    -- are stored inline as a base64 data URL in the data column.
+    CREATE TABLE IF NOT EXISTS quote_files (
+      id            SERIAL PRIMARY KEY,
+      quote_id      INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+      filename      TEXT NOT NULL,
+      mime          TEXT,
+      size          INTEGER NOT NULL DEFAULT 0,
+      data          TEXT NOT NULL,
+      uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploader_name TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key        TEXT PRIMARY KEY,
       value      TEXT,
@@ -193,6 +208,9 @@ async function migrate(pool: Pool) {
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS markup_rate       DOUBLE PRECISION NOT NULL DEFAULT 0;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS terms             TEXT;
     ALTER TABLE quotes ADD COLUMN IF NOT EXISTS prepared_by       TEXT;
+    -- Internal-only notes kept alongside the quote for the team's reference.
+    -- Never rendered on the customer-facing PDF.
+    ALTER TABLE quotes ADD COLUMN IF NOT EXISTS internal_notes    TEXT;
 
     -- Line items split into an internal pricing worksheet ('pricing', hidden
     -- from the customer PDF) and customer-facing lines ('display', shown on the
@@ -209,6 +227,7 @@ async function migrate(pool: Pool) {
     CREATE INDEX IF NOT EXISTS idx_time_project ON time_entries(project_id);
     CREATE INDEX IF NOT EXISTS idx_time_user ON time_entries(user_id);
     CREATE INDEX IF NOT EXISTS idx_files_project ON project_files(project_id);
+    CREATE INDEX IF NOT EXISTS idx_quote_files_quote ON quote_files(quote_id);
     CREATE INDEX IF NOT EXISTS idx_breaks_entry ON time_breaks(time_entry_id);
 
     /* ==================================================================

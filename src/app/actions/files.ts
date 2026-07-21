@@ -3,7 +3,14 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { addProjectFile, deleteProjectFile, getProjectFile } from '@/lib/data';
+import {
+  addProjectFile,
+  deleteProjectFile,
+  getProjectFile,
+  addQuoteFile,
+  deleteQuoteFile,
+  getQuoteFile,
+} from '@/lib/data';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -59,4 +66,50 @@ export async function deleteProjectFileAction(fileId: number, projectId: number)
     await deleteProjectFile(fileId);
   }
   revalidatePath(`/projects/${projectId}`);
+}
+
+/* ------------------------------------------- Quote supporting documentation */
+
+/** Upload a supporting document attached to a quote (internal reference only). */
+export async function uploadQuoteFileAction(
+  _prev: FileUploadState,
+  formData: FormData
+): Promise<FileUploadState> {
+  const user = await requireUser();
+  const quoteId = Number(formData.get('quote_id'));
+  if (!quoteId) return { error: 'Missing quote.' };
+
+  const file = formData.get('file');
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: 'Choose a file to upload.' };
+  }
+  if (file.size > MAX_BYTES) {
+    return { error: 'File must be under 10 MB.' };
+  }
+
+  const buf = Buffer.from(await file.arrayBuffer());
+  const mime = file.type || 'application/octet-stream';
+  const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+
+  await addQuoteFile({
+    quote_id: quoteId,
+    filename: file.name || 'upload',
+    mime,
+    size: file.size,
+    data: dataUrl,
+    uploaded_by: user.id,
+    uploader_name: user.name,
+  });
+
+  revalidatePath(`/quotes/${quoteId}/edit`);
+  return { success: `Uploaded ${file.name}.` };
+}
+
+export async function deleteQuoteFileAction(fileId: number, quoteId: number) {
+  await requireUser();
+  const file = await getQuoteFile(fileId);
+  if (file && file.quote_id === quoteId) {
+    await deleteQuoteFile(fileId);
+  }
+  revalidatePath(`/quotes/${quoteId}/edit`);
 }

@@ -12,6 +12,7 @@ import type {
   Note,
   TimeEntry,
   ProjectFile,
+  QuoteFile,
   QuoteStatus,
   ProjectStatus,
   Customer,
@@ -227,6 +228,7 @@ function headerValues(input: QuoteDocInput, total: number): unknown[] {
     input.terms ?? null,
     input.notes ?? null,
     input.prepared_by ?? null,
+    input.internal_notes ?? null,
   ];
 }
 
@@ -244,8 +246,8 @@ export async function createQuoteWithItems(
          (quote_number, customer, project_name, category, bid_value, date_received,
           customer_contact, customer_email, customer_phone, customer_address,
           project_location, issue_date, valid_until, tax_rate, markup_rate, terms, notes,
-          prepared_by, source, week_of)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+          prepared_by, internal_notes, source, week_of)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        RETURNING id`,
       [...headerValues(input, total), opts?.source ?? 'manual', opts?.week_of ?? null]
     );
@@ -281,8 +283,9 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
          quote_number=$1, customer=$2, project_name=$3, category=$4, bid_value=$5,
          date_received=$6, customer_contact=$7, customer_email=$8, customer_phone=$9,
          customer_address=$10, project_location=$11, issue_date=$12, valid_until=$13,
-         tax_rate=$14, markup_rate=$15, terms=$16, notes=$17, prepared_by=$18, updated_at=now()
-       WHERE id=$19`,
+         tax_rate=$14, markup_rate=$15, terms=$16, notes=$17, prepared_by=$18,
+         internal_notes=$19, updated_at=now()
+       WHERE id=$20`,
       [...headerValues(input, total), id]
     );
     await client.query('DELETE FROM quote_line_items WHERE quote_id = $1', [id]);
@@ -294,6 +297,44 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
   } finally {
     client.release();
   }
+}
+
+/* ---------------------------------------------------- Quote supporting files */
+
+export async function listQuoteFiles(quoteId: number): Promise<QuoteFile[]> {
+  // Deliberately omit `data` (the base64 blob) from listings.
+  return q<QuoteFile>(
+    `SELECT id, quote_id, filename, mime, size, uploaded_by, uploader_name, created_at
+     FROM quote_files WHERE quote_id = $1 ORDER BY created_at DESC`,
+    [quoteId]
+  );
+}
+
+export async function getQuoteFile(
+  id: number
+): Promise<(QuoteFile & { data: string }) | undefined> {
+  return one<QuoteFile & { data: string }>('SELECT * FROM quote_files WHERE id = $1', [id]);
+}
+
+export async function addQuoteFile(f: {
+  quote_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  data: string;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+}): Promise<number> {
+  const row = await one<{ id: number }>(
+    `INSERT INTO quote_files (quote_id, filename, mime, size, data, uploaded_by, uploader_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [f.quote_id, f.filename, f.mime, f.size, f.data, f.uploaded_by, f.uploader_name]
+  );
+  return row!.id;
+}
+
+export async function deleteQuoteFile(id: number): Promise<void> {
+  await q('DELETE FROM quote_files WHERE id = $1', [id]);
 }
 
 /* --------------------------------------------------------------- Projects */

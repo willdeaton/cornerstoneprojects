@@ -12,6 +12,7 @@ import type {
   LineItemInput,
   QuoteDocInput,
   QuoteWithItems,
+  QuoteFile,
   CustomerWithContacts,
   CustomerContact,
   PricingItem,
@@ -19,6 +20,7 @@ import type {
 } from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
 import { quickAddPricingItemAction, quickAddCustomerAction, quickAddContactAction } from '@/app/actions/catalog';
+import { QuoteFiles } from './QuoteFiles';
 
 /** Internal cost worksheet row — never printed on the customer PDF. */
 interface PricingRow {
@@ -72,12 +74,14 @@ export function QuoteBuilder({
   pricingItems: pricingItemsProp = [],
   units: unitsProp = [],
   defaultTerms = '',
+  quoteFiles = [],
 }: {
   quote?: QuoteWithItems;
   customers?: CustomerWithContacts[];
   pricingItems?: PricingItem[];
   units?: Unit[];
   defaultTerms?: string;
+  quoteFiles?: QuoteFile[];
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -114,6 +118,7 @@ export function QuoteBuilder({
     terms: quote ? quote.terms ?? '' : defaultTerms,
     notes: quote?.notes ?? '',
     prepared_by: quote?.prepared_by ?? '',
+    internal_notes: quote?.internal_notes ?? '',
   });
   const [taxPercent, setTaxPercent] = useState<string>(
     quote ? String(+(quote.tax_rate * 100).toFixed(4)) : '0'
@@ -521,6 +526,7 @@ export function QuoteBuilder({
       terms: header.terms || null,
       notes: header.notes || null,
       prepared_by: header.prepared_by || null,
+      internal_notes: header.internal_notes || null,
       items,
     };
     setSaving(true);
@@ -866,6 +872,36 @@ export function QuoteBuilder({
           <div>
             <label className="label">Notes (shown on quote)</label>
             <textarea className="input" rows={4} value={header.notes} onChange={set('notes')} placeholder="Anything the customer should know." />
+          </div>
+        </div>
+      </div>
+
+      {/* Internal notes & supporting documents — never shown on the PDF */}
+      <div className="card p-5">
+        <h2 className="brand-heading mb-1 text-sm text-brand-ink">Internal Notes &amp; Documents</h2>
+        <p className="mb-4 text-xs text-brand-gray">
+          For your team only — <span className="font-semibold">never shown on the quote PDF</span> or shared with the customer.
+        </p>
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <div>
+            <label className="label">Internal Notes</label>
+            <textarea
+              className="input"
+              rows={6}
+              value={header.internal_notes}
+              onChange={set('internal_notes')}
+              placeholder="Cost assumptions, follow-ups, competitor info, anything the team should know…"
+            />
+          </div>
+          <div>
+            <label className="label">Supporting Documents</label>
+            {quote ? (
+              <QuoteFiles quoteId={quote.id} files={quoteFiles} />
+            ) : (
+              <p className="rounded-xl border-2 border-dashed border-black/15 bg-black/[0.02] px-4 py-6 text-center text-sm text-brand-gray">
+                Save the quote first, then reopen it to attach supporting documents.
+              </p>
+            )}
           </div>
         </div>
       </div>

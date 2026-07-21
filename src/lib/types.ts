@@ -26,6 +26,8 @@ export interface Quote {
   markup_rate: number;
   terms: string | null;
   prepared_by: string | null;
+  /** Internal-only notes — never shown on the customer PDF. */
+  internal_notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -80,6 +82,7 @@ export interface QuoteDocInput {
   terms: string | null;
   notes: string | null;
   prepared_by: string | null;
+  internal_notes: string | null;
   items: LineItemInput[];
 }
 
@@ -152,6 +155,19 @@ export interface Project {
 export interface ProjectFile {
   id: number;
   project_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+  created_at: string;
+  data?: string;
+}
+
+/** Supporting documentation attached to a quote — internal reference only. */
+export interface QuoteFile {
+  id: number;
+  quote_id: number;
   filename: string;
   mime: string | null;
   size: number;
