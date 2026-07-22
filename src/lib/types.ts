@@ -39,6 +39,15 @@ export interface Quote {
  */
 export type QuoteItemKind = 'pricing' | 'display';
 
+/** Cost categories selectable on internal pricing-worksheet rows. */
+export const COST_TYPES = [
+  'Subcontractor',
+  'Material',
+  'Equipment Rentals',
+  'Travel',
+  'Project Management',
+] as const;
+
 export interface QuoteLineItem {
   id: number;
   quote_id: number;
@@ -51,6 +60,8 @@ export interface QuoteLineItem {
   amount: number | null;
   /** Per-line markup applied to this line's amount, as a fraction (0.15 = 15%). */
   markup_rate: number;
+  /** Cost category for 'pricing' rows (see COST_TYPES); NULL for display rows. */
+  cost_type: string | null;
   created_at: string;
 }
 
@@ -66,6 +77,8 @@ export interface LineItemInput {
   amount: number | null;
   /** Per-line markup applied to this line's amount, as a fraction (0.15 = 15%). */
   markup_rate: number;
+  /** Cost category for 'pricing' rows (see COST_TYPES); null for display rows. */
+  cost_type: string | null;
 }
 
 /** Full payload submitted when creating/updating a quote document. */

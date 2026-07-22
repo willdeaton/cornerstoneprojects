@@ -18,6 +18,7 @@ import type {
   PricingItem,
   Unit,
 } from '@/lib/types';
+import { COST_TYPES } from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
 import { quickAddPricingItemAction, quickAddCustomerAction, quickAddContactAction } from '@/app/actions/catalog';
 import { QuoteFiles } from './QuoteFiles';
@@ -25,6 +26,8 @@ import { QuoteFiles } from './QuoteFiles';
 /** Internal cost worksheet row — never printed on the customer PDF. */
 interface PricingRow {
   description: string;
+  /** Cost category (Subcontractor, Material, …); '' when not chosen. */
+  cost_type: string;
   quantity: string;
   unit: string;
   unit_price: string;
@@ -70,7 +73,7 @@ function num(v: string): number {
 const normDesc = (v: string) => v.trim().toLowerCase();
 
 function blankPricingRow(): PricingRow {
-  return { description: '', quantity: '1', unit: 'ea', unit_price: '' };
+  return { description: '', cost_type: '', quantity: '1', unit: 'ea', unit_price: '' };
 }
 function blankDisplayRow(): DisplayRow {
   return { description: '', amount: '', markup: '0' };
@@ -94,7 +97,12 @@ export function QuoteBuilder({
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Collapsible cards — everything starts open; collapsing only hides the
+  // inputs on screen, it never changes what gets saved.
   const [pricingOpen, setPricingOpen] = useState(true);
+  const [lineItemsOpen, setLineItemsOpen] = useState(true);
+  const [termsOpen, setTermsOpen] = useState(true);
+  const [internalOpen, setInternalOpen] = useState(true);
 
   // Price book and unit list are held in state so quick-adds from the worksheet
   // (a new price-book entry, a new unit) show up immediately without a reload.
@@ -391,6 +399,7 @@ export function QuoteBuilder({
     existingPricing.length
       ? existingPricing.map((li) => ({
           description: li.description,
+          cost_type: li.cost_type ?? '',
           quantity: String(li.quantity),
           unit: li.unit ?? '',
           unit_price: String(li.unit_price),
@@ -525,6 +534,7 @@ export function QuoteBuilder({
           unit_price: num(r.unit_price),
           amount: null,
           markup_rate: 0,
+          cost_type: r.cost_type || null,
         })),
       ...displayRows
         .filter((r) => !isRichTextEmpty(r.description))
@@ -536,6 +546,7 @@ export function QuoteBuilder({
           unit_price: 0,
           amount: num(r.amount),
           markup_rate: num(r.markup) / 100,
+          cost_type: null,
         })),
     ];
     const payload: QuoteDocInput = {
@@ -699,8 +710,18 @@ export function QuoteBuilder({
 
       {/* Customer-facing line items — shown on the PDF */}
       <div className="card p-5">
-        <h2 className="brand-heading mb-1 text-sm text-brand-ink">Line Items</h2>
-        <p className="mb-4 text-xs text-brand-gray">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left"
+          onClick={() => setLineItemsOpen((o) => !o)}
+          aria-expanded={lineItemsOpen}
+        >
+          <span className="text-brand-gray transition-transform">{lineItemsOpen ? '▾' : '▸'}</span>
+          <h2 className="brand-heading text-sm text-brand-ink">Line Items</h2>
+        </button>
+        {lineItemsOpen ? (
+          <>
+        <p className="mb-4 mt-1 text-xs text-brand-gray">
           What the customer sees on the quote — a description, price, and markup per line. Markup is
           folded into the line price on the PDF; the customer only sees the marked-up total.
         </p>
@@ -792,6 +813,13 @@ export function QuoteBuilder({
             )}
           </div>
         </div>
+          </>
+        ) : (
+          <p className="mt-1 text-xs text-brand-gray">
+            Collapsed · Total{' '}
+            <span className="font-semibold text-brand-ink">{money(totals.total, { cents: true })}</span>
+          </p>
+        )}
       </div>
 
       {/* Internal pricing worksheet — not shown on the PDF */}
@@ -813,10 +841,11 @@ export function QuoteBuilder({
               to add any new prices to your pricing list. Then enter what the customer sees in Line Items above.
             </p>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
+              <table className="w-full min-w-[880px] text-sm">
                 <thead>
                   <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
                     <th className="px-2 py-2 font-semibold">Description</th>
+                    <th className="px-2 py-2 font-semibold w-44">Type</th>
                     <th className="px-2 py-2 font-semibold w-20">Qty</th>
                     <th className="px-2 py-2 font-semibold w-24">Unit</th>
                     <th className="px-2 py-2 font-semibold w-32">Unit Price</th>
@@ -835,6 +864,22 @@ export function QuoteBuilder({
                           onChange={(e) => applyPriceBook(i, e.target.value)}
                           placeholder="Carpet tile, adhesive, labor …"
                         />
+                      </td>
+                      <td className="px-2 py-2">
+                        <select
+                          className="input"
+                          value={r.cost_type}
+                          onChange={(e) => updatePricing(i, { cost_type: e.target.value })}
+                        >
+                          <option value="">— Select —</option>
+                          {COST_TYPES.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                          {/* Keep an unexpected stored value selectable instead of dropping it. */}
+                          {r.cost_type && !COST_TYPES.includes(r.cost_type as (typeof COST_TYPES)[number]) && (
+                            <option value={r.cost_type}>{r.cost_type}</option>
+                          )}
+                        </select>
                       </td>
                       <td className="px-2 py-2">
                         <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => updatePricing(i, { quantity: e.target.value })} />
@@ -909,23 +954,45 @@ export function QuoteBuilder({
 
       {/* Terms & notes */}
       <div className="card p-5">
-        <h2 className="brand-heading mb-4 text-sm text-brand-ink">Terms &amp; Notes</h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className="label">Terms &amp; Conditions</label>
-            <textarea className="input" rows={4} value={header.terms} onChange={set('terms')} placeholder="Payment due within 30 days. Pricing valid for 30 days." />
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left"
+          onClick={() => setTermsOpen((o) => !o)}
+          aria-expanded={termsOpen}
+        >
+          <span className="text-brand-gray transition-transform">{termsOpen ? '▾' : '▸'}</span>
+          <h2 className="brand-heading text-sm text-brand-ink">Terms &amp; Notes</h2>
+        </button>
+        {termsOpen ? (
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Terms &amp; Conditions</label>
+              <textarea className="input" rows={4} value={header.terms} onChange={set('terms')} placeholder="Payment due within 30 days. Pricing valid for 30 days." />
+            </div>
+            <div>
+              <label className="label">Notes (shown on quote)</label>
+              <textarea className="input" rows={4} value={header.notes} onChange={set('notes')} placeholder="Anything the customer should know." />
+            </div>
           </div>
-          <div>
-            <label className="label">Notes (shown on quote)</label>
-            <textarea className="input" rows={4} value={header.notes} onChange={set('notes')} placeholder="Anything the customer should know." />
-          </div>
-        </div>
+        ) : (
+          <p className="mt-1 text-xs text-brand-gray">Collapsed</p>
+        )}
       </div>
 
       {/* Internal notes & supporting documents — never shown on the PDF */}
       <div className="card p-5">
-        <h2 className="brand-heading mb-1 text-sm text-brand-ink">Internal Notes &amp; Documents</h2>
-        <p className="mb-4 text-xs text-brand-gray">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left"
+          onClick={() => setInternalOpen((o) => !o)}
+          aria-expanded={internalOpen}
+        >
+          <span className="text-brand-gray transition-transform">{internalOpen ? '▾' : '▸'}</span>
+          <h2 className="brand-heading text-sm text-brand-ink">Internal Notes &amp; Documents</h2>
+        </button>
+        {internalOpen ? (
+          <>
+        <p className="mb-4 mt-1 text-xs text-brand-gray">
           For your team only — <span className="font-semibold">never shown on the quote PDF</span> or shared with the customer.
         </p>
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -950,6 +1017,20 @@ export function QuoteBuilder({
             )}
           </div>
         </div>
+          </>
+        ) : (
+          <p className="mt-1 text-xs text-brand-gray">
+            Collapsed
+            {quoteFiles.length > 0 && (
+              <>
+                {' · '}
+                <span className="font-semibold text-brand-ink">
+                  {quoteFiles.length} document{quoteFiles.length === 1 ? '' : 's'}
+                </span>
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       {savePrompt && (
