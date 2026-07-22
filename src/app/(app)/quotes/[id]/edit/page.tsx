@@ -14,11 +14,18 @@ import { QuoteBuilder } from '../../QuoteBuilder';
 
 export const dynamic = 'force-dynamic';
 
-export default async function EditQuotePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EditQuotePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ saved?: string }>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
 
   const { id } = await params;
+  const { saved } = await searchParams;
   const numId = Number(id);
   if (!Number.isFinite(numId)) notFound();
   const [quote, customers, pricingItems, units, categories, quoteFiles] = await Promise.all([
@@ -46,6 +53,7 @@ export default async function EditQuotePage({ params }: { params: Promise<{ id: 
         units={units}
         categories={categories}
         quoteFiles={quoteFiles}
+        initialSaved={saved === '1'}
       />
     </div>
   );

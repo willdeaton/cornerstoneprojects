@@ -42,7 +42,16 @@ export async function updateQuoteAction(id: number, formData: FormData) {
  * the user is taken to the printable page; otherwise they return to the quotes
  * list so the quote can be saved without downloading a PDF.
  */
-export async function createQuoteDocAction(input: QuoteDocInput, viewPdf = true) {
+/**
+ * Create a quote document. `after` controls where the user lands: `'pdf'`
+ * opens the printable page, `'list'` returns to the quotes list, and `'stay'`
+ * returns `{ ok: true, id }` instead of redirecting so the builder can move
+ * to the new quote's edit page without leaving the form.
+ */
+export async function createQuoteDocAction(
+  input: QuoteDocInput,
+  after: 'pdf' | 'list' | 'stay' = 'pdf'
+) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
   if (!input.quote_number?.trim()) return { error: 'Quote # is required.' };
@@ -50,7 +59,8 @@ export async function createQuoteDocAction(input: QuoteDocInput, viewPdf = true)
   const id = await createQuoteWithItems(sanitizeDoc(input));
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
-  redirect(viewPdf ? `/quotes/${id}/print` : '/quotes');
+  if (after === 'stay') return { ok: true, id };
+  redirect(after === 'pdf' ? `/quotes/${id}/print` : '/quotes');
 }
 
 /**
