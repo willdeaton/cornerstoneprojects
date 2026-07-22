@@ -91,6 +91,7 @@ export function QuoteBuilder({
   defaultTerms = '',
   currentUserName = '',
   quoteFiles = [],
+  initialSaved = false,
 }: {
   quote?: QuoteWithItems;
   customers?: CustomerWithContacts[];
@@ -101,6 +102,8 @@ export function QuoteBuilder({
   /** Name of the signed-in user — pre-fills Prepared By on new quotes. */
   currentUserName?: string;
   quoteFiles?: QuoteFile[];
+  /** Start in the just-saved state — set when arriving from a new-quote save. */
+  initialSaved?: boolean;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
@@ -132,7 +135,7 @@ export function QuoteBuilder({
   // "Close"; leaving with unsaved edits prompts to save first. `savedSnapshot`
   // is the serialized form state as of the last save (or initial load) so we
   // can tell whether anything has changed since.
-  const [hasSavedInPlace, setHasSavedInPlace] = useState(false);
+  const [hasSavedInPlace, setHasSavedInPlace] = useState(initialSaved);
   const [closePrompt, setClosePrompt] = useState(false);
 
   const initialIssueDate = quote?.issue_date ?? new Date().toISOString().slice(0, 10);
@@ -605,7 +608,7 @@ export function QuoteBuilder({
     try {
       const res = quote
         ? await updateQuoteDocAction(quote.id, payload, mode)
-        : await createQuoteDocAction(payload, mode === 'pdf');
+        : await createQuoteDocAction(payload, mode);
       if (res?.error) {
         setError(res.error);
         setSaving(false);
@@ -614,6 +617,13 @@ export function QuoteBuilder({
       // 'stay' saves in place and returns here; 'list'/'pdf' redirect
       // server-side (this component unmounts before we get here).
       if (mode === 'stay') {
+        // A brand-new quote has no edit URL yet — move onto the created
+        // quote's edit page so the next Save updates it instead of creating
+        // a duplicate. `saved=1` keeps the "Saved ✓" state across the swap.
+        if (!quote && res && 'id' in res) {
+          router.replace(`/quotes/${res.id}/edit?saved=1`);
+          return;
+        }
         setSaving(false);
         // Mark the just-saved state as the new clean baseline so the form no
         // longer reads as having unsaved edits, and flip Cancel → Close.
@@ -1239,10 +1249,10 @@ export function QuoteBuilder({
           </>
         ) : (
           <>
-            <button type="button" className="btn-secondary" onClick={() => router.push('/quotes')} disabled={saving}>
+            <button type="button" className="btn-secondary" onClick={handleClose} disabled={saving}>
               Cancel
             </button>
-            <button type="button" className="btn-secondary" onClick={() => save('list')} disabled={saving}>
+            <button type="button" className="btn-secondary" onClick={() => save('stay')} disabled={saving}>
               {saving ? 'Saving…' : 'Save'}
             </button>
             <button type="button" className="btn-primary" onClick={() => save('pdf')} disabled={saving}>
