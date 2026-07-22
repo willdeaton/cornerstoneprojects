@@ -6,6 +6,7 @@ import {
   listCustomersWithContacts,
   listPricingItems,
   listUnits,
+  listCategories,
   listQuoteFiles,
 } from '@/lib/data';
 import { PageHeader } from '@/components/ui';
@@ -20,11 +21,12 @@ export default async function EditQuotePage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const numId = Number(id);
   if (!Number.isFinite(numId)) notFound();
-  const [quote, customers, pricingItems, units, quoteFiles] = await Promise.all([
+  const [quote, customers, pricingItems, units, categories, quoteFiles] = await Promise.all([
     getQuoteWithItems(numId),
     listCustomersWithContacts(),
     listPricingItems(),
     listUnits(),
+    listCategories(),
     listQuoteFiles(numId),
   ]);
   if (!quote) notFound();
@@ -42,6 +44,7 @@ export default async function EditQuotePage({ params }: { params: Promise<{ id: 
         customers={customers}
         pricingItems={pricingItems}
         units={units}
+        categories={categories}
         quoteFiles={quoteFiles}
       />
     </div>

@@ -138,6 +138,14 @@ export interface Unit {
   created_at: string;
 }
 
+/** A quote/work category (Flooring, Painting, …), addable from the quote builder. */
+export interface Category {
+  id: number;
+  name: string;
+  position: number;
+  created_at: string;
+}
+
 /** A price-book entry: a line item with a default unit and unit price. */
 export interface PricingItem {
   id: number;
