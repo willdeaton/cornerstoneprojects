@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser, hashPassword } from '@/lib/auth';
 import type { Role } from '@/lib/auth';
+import { sendWelcomeEmail } from '@/lib/email/send';
+import { appOrigin } from '@/lib/app-origin';
 import {
   createUserRow,
   updateUserEmailFields,
@@ -61,15 +63,29 @@ export async function createUserAction(
   if (!ROLES.includes(role)) return { error: 'Invalid role.' };
   if (await emailExists(email)) return { error: 'A user with that email already exists.' };
 
+  const emailFields = readEmailFields(formData);
   await createUserRow({
     name,
     email,
     password_hash: hashPassword(password),
     role,
-    ...readEmailFields(formData),
+    ...emailFields,
   });
+
+  // Welcome the new user by email (best-effort — the account already exists).
+  // Same address fallback the subscription emails use: personal -> work -> login.
+  const to = emailFields.personal_email || emailFields.work_email || email;
+  const firstName = name.split(/\s+/)[0] || '';
+  const origin = await appOrigin();
+  const sent = await sendWelcomeEmail(to, firstName, email, `${origin}/login`);
+
   revalidatePath('/settings/users');
-  return { success: `Added ${name}.` };
+  return {
+    success:
+      sent.status === 'sent'
+        ? `Added ${name}. Welcome email sent to ${to}.`
+        : `Added ${name}. (Welcome email not sent: ${sent.reason ?? 'unknown'})`,
+  };
 }
 
 export async function updateUserSubscriptionsAction(
