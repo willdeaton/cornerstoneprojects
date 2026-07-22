@@ -8,6 +8,7 @@ import { Modal } from '@/components/Modal';
 import { Combobox } from '@/components/Combobox';
 import { RichTextEditor } from '@/components/RichTextEditor';
 import { UnitSelect } from '@/components/UnitSelect';
+import { CategorySelect } from '@/components/CategorySelect';
 import type {
   LineItemInput,
   QuoteDocInput,
@@ -17,6 +18,7 @@ import type {
   CustomerContact,
   PricingItem,
   Unit,
+  Category,
 } from '@/lib/types';
 import { COST_TYPES } from '@/lib/types';
 import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
@@ -54,16 +56,8 @@ interface NewPriceItem {
  */
 type SaveMode = 'stay' | 'list' | 'pdf';
 
-const CATEGORIES = [
-  'Flooring',
-  'Painting',
-  'Renovation',
-  'Roofing',
-  'Restoration',
-  'Maintenance',
-  'Janitorial',
-  'Grounds',
-];
+/** Default per-line markup for new customer-facing lines, as a whole percent. */
+const DEFAULT_MARKUP = '32';
 
 function num(v: string): number {
   const n = parseFloat(v.replace(/[$,\s]/g, ''));
@@ -72,11 +66,20 @@ function num(v: string): number {
 
 const normDesc = (v: string) => v.trim().toLowerCase();
 
+/** Add `days` to a YYYY-MM-DD date string, returning the same format. */
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00`);
+  if (isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() + days);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function blankPricingRow(): PricingRow {
   return { description: '', cost_type: '', quantity: '1', unit: 'ea', unit_price: '' };
 }
 function blankDisplayRow(): DisplayRow {
-  return { description: '', amount: '', markup: '0' };
+  return { description: '', amount: '', markup: DEFAULT_MARKUP };
 }
 
 export function QuoteBuilder({
@@ -84,14 +87,19 @@ export function QuoteBuilder({
   customers: customersProp = [],
   pricingItems: pricingItemsProp = [],
   units: unitsProp = [],
+  categories: categoriesProp = [],
   defaultTerms = '',
+  currentUserName = '',
   quoteFiles = [],
 }: {
   quote?: QuoteWithItems;
   customers?: CustomerWithContacts[];
   pricingItems?: PricingItem[];
   units?: Unit[];
+  categories?: Category[];
   defaultTerms?: string;
+  /** Name of the signed-in user — pre-fills Prepared By on new quotes. */
+  currentUserName?: string;
   quoteFiles?: QuoteFile[];
 }) {
   const router = useRouter();
@@ -104,10 +112,12 @@ export function QuoteBuilder({
   const [termsOpen, setTermsOpen] = useState(true);
   const [internalOpen, setInternalOpen] = useState(true);
 
-  // Price book and unit list are held in state so quick-adds from the worksheet
-  // (a new price-book entry, a new unit) show up immediately without a reload.
+  // Price book, unit list, and category list are held in state so quick-adds
+  // (a new price-book entry, unit, or category) show up immediately without a
+  // reload.
   const [pricingItems, setPricingItems] = useState<PricingItem[]>(pricingItemsProp);
   const [units, setUnits] = useState<Unit[]>(unitsProp);
+  const [categories, setCategories] = useState<Category[]>(categoriesProp);
 
   // Save-time prompt: on save we gather every worksheet row that isn't in the
   // price book yet and offer them all at once as checkboxes, instead of nagging
@@ -125,6 +135,7 @@ export function QuoteBuilder({
   const [hasSavedInPlace, setHasSavedInPlace] = useState(false);
   const [closePrompt, setClosePrompt] = useState(false);
 
+  const initialIssueDate = quote?.issue_date ?? new Date().toISOString().slice(0, 10);
   const [header, setHeader] = useState({
     quote_number: quote?.quote_number ?? '',
     customer: quote?.customer ?? '',
@@ -135,15 +146,22 @@ export function QuoteBuilder({
     project_name: quote?.project_name ?? '',
     project_location: quote?.project_location ?? '',
     category: quote?.category ?? '',
-    issue_date: quote?.issue_date ?? new Date().toISOString().slice(0, 10),
-    valid_until: quote?.valid_until ?? '',
+    issue_date: initialIssueDate,
+    // New quotes default Valid Until to 60 days after the issue date; existing
+    // quotes keep whatever was saved on them.
+    valid_until: quote ? quote.valid_until ?? '' : addDays(initialIssueDate, 60),
     // New quotes pre-fill the company-wide default terms; existing quotes keep
     // whatever was saved on them (including an intentionally blank value).
     terms: quote ? quote.terms ?? '' : defaultTerms,
     notes: quote?.notes ?? '',
-    prepared_by: quote?.prepared_by ?? '',
+    // New quotes default Prepared By to whoever is creating the quote; it stays
+    // editable, and existing quotes keep their saved value.
+    prepared_by: quote ? quote.prepared_by ?? '' : currentUserName,
     internal_notes: quote?.internal_notes ?? '',
   });
+  // Once the user edits Valid Until by hand we stop auto-syncing it to
+  // issue date + 60 days. Existing quotes never auto-sync.
+  const [validUntilEdited, setValidUntilEdited] = useState(!!quote);
   // Saved customers are held in state so a quick-add from the picker below shows
   // up immediately (and can be auto-selected) without a full page reload.
   const [customers, setCustomers] = useState<CustomerWithContacts[]>(customersProp);
@@ -475,7 +493,7 @@ export function QuoteBuilder({
   function pricingToLine() {
     setDisplayRows((rs) => [
       ...rs.filter((r) => r.description.trim() || r.amount.trim()),
-      { description: header.project_name || 'Project total', amount: pricingSubtotal.toFixed(2), markup: '0' },
+      { description: header.project_name || 'Project total', amount: pricingSubtotal.toFixed(2), markup: DEFAULT_MARKUP },
     ]);
   }
 
@@ -496,31 +514,44 @@ export function QuoteBuilder({
     });
   }
 
+  /** Shared header validation for both save paths. Returns an error or null. */
+  function validateHeader(): string | null {
+    if (!header.customer.trim()) return 'Customer is required.';
+    if (!quote && !header.quote_number.trim()) return 'Quote # is required.';
+    if (!header.project_name.trim()) return 'Project / Description is required.';
+    return null;
+  }
+
   /**
-   * Save entry point. Validates, then — if the worksheet has prices not yet in
-   * the book — opens the single "add to pricing list?" prompt before saving.
-   * Otherwise it saves straight away.
+   * Save entry point. Validates, then — on the quote's FIRST save only, if the
+   * worksheet has prices not yet in the book — opens the single "add to pricing
+   * list?" prompt before saving. Once a quote has been saved (i.e. we're
+   * editing an existing one), it saves straight away without asking again.
    */
   function save(mode: SaveMode) {
     setError(null);
-    if (!header.customer.trim()) {
-      setError('Customer is required.');
+    const invalid = validateHeader();
+    if (invalid) {
+      setError(invalid);
       return;
     }
-    const newItems = collectNewPricingItems();
-    if (newItems.length > 0) {
-      // Default every candidate to checked — the common case is "yes, save these".
-      setSelectedNew(new Set(newItems.map((_, i) => i)));
-      setSavePrompt({ items: newItems, mode });
-      return;
+    if (!quote) {
+      const newItems = collectNewPricingItems();
+      if (newItems.length > 0) {
+        // Default every candidate to checked — the common case is "yes, save these".
+        setSelectedNew(new Set(newItems.map((_, i) => i)));
+        setSavePrompt({ items: newItems, mode });
+        return;
+      }
     }
     void doSave(mode);
   }
 
   async function doSave(mode: SaveMode) {
     setError(null);
-    if (!header.customer.trim()) {
-      setError('Customer is required.');
+    const invalid = validateHeader();
+    if (invalid) {
+      setError(invalid);
       return;
     }
     const items: LineItemInput[] = [
@@ -666,7 +697,7 @@ export function QuoteBuilder({
             <textarea className="input" rows={2} value={header.customer_address} onChange={set('customer_address')} placeholder="Street, City, ST ZIP" />
           </div>
           <div>
-            <label className="label">Project / Description</label>
+            <label className="label">Project / Description *</label>
             <input className="input" value={header.project_name} onChange={set('project_name')} placeholder="Corridor Flooring Replacement" />
           </div>
           <div>
@@ -675,12 +706,12 @@ export function QuoteBuilder({
           </div>
           <div>
             <label className="label">Category</label>
-            <input className="input" value={header.category} onChange={set('category')} list="qb-categories" placeholder="Flooring" />
-            <datalist id="qb-categories">
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
+            <CategorySelect
+              categories={categories}
+              value={header.category}
+              onChange={(name) => setHeader((h) => ({ ...h, category: name }))}
+              onCategoryAdded={(c) => setCategories((cs) => [...cs, c])}
+            />
           </div>
           <div>
             <label className="label">Prepared By</label>
@@ -694,16 +725,39 @@ export function QuoteBuilder({
         <h2 className="brand-heading mb-4 text-sm text-brand-ink">Quote Details</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <label className="label">Quote #</label>
+            <label className="label">Quote # {quote ? '' : '*'}</label>
             <input className="input" value={header.quote_number} onChange={set('quote_number')} placeholder="Q-2601" />
           </div>
           <div>
             <label className="label">Issue Date</label>
-            <input className="input" type="date" value={header.issue_date} onChange={set('issue_date')} />
+            <input
+              className="input"
+              type="date"
+              value={header.issue_date}
+              onChange={(e) => {
+                const issue = e.target.value;
+                // Until Valid Until is edited by hand, keep it tracking 60 days
+                // after the issue date.
+                setHeader((h) => ({
+                  ...h,
+                  issue_date: issue,
+                  valid_until:
+                    !validUntilEdited && issue ? addDays(issue, 60) : h.valid_until,
+                }));
+              }}
+            />
           </div>
           <div>
             <label className="label">Valid Until</label>
-            <input className="input" type="date" value={header.valid_until} onChange={set('valid_until')} />
+            <input
+              className="input"
+              type="date"
+              value={header.valid_until}
+              onChange={(e) => {
+                setValidUntilEdited(true);
+                setHeader((h) => ({ ...h, valid_until: e.target.value }));
+              }}
+            />
           </div>
         </div>
       </div>
@@ -837,8 +891,8 @@ export function QuoteBuilder({
           <>
             <p className="mb-4 mt-1 text-xs text-brand-gray">
               Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Pick a saved
-              price from the Description dropdown, or type your own — when you save the quote you&apos;ll be asked whether
-              to add any new prices to your pricing list. Then enter what the customer sees in Line Items above.
+              price from the Description dropdown, or type your own — when you first save the quote you&apos;ll be asked
+              whether to add any new prices to your pricing list. Then enter what the customer sees in Line Items above.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[880px] text-sm">

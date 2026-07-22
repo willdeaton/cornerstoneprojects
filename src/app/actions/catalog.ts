@@ -17,8 +17,9 @@ import {
   updatePricingItem,
   deletePricingItem,
   createUnit,
+  createCategory,
 } from '@/lib/data';
-import type { CustomerContact, CustomerWithContacts, PricingItem, Unit } from '@/lib/types';
+import type { Category, CustomerContact, CustomerWithContacts, PricingItem, Unit } from '@/lib/types';
 
 /** Result of a save/delete action. */
 export interface ActionResult {
@@ -272,4 +273,20 @@ export async function addUnitAction(label: string): Promise<ActionResult & { uni
   const unit = await createUnit(clean);
   revalidatePath('/settings/pricing');
   return { ok: true, unit };
+}
+
+/* ---------------------------------------------------------- Categories */
+
+/**
+ * Add a quote/work category from the quote builder. Idempotent by name, so
+ * re-adding an existing category just returns it. Returns the category so
+ * callers can update their local list immediately.
+ */
+export async function addCategoryAction(name: string): Promise<ActionResult & { category?: Category }> {
+  await requireUser();
+  const cleanName = (name ?? '').trim();
+  if (!cleanName) return { ok: false, error: 'Category is required.' };
+  if (cleanName.length > 60) return { ok: false, error: 'Category is too long.' };
+  const category = await createCategory(cleanName);
+  return { ok: true, category };
 }

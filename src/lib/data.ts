@@ -20,6 +20,7 @@ import type {
   CustomerWithContacts,
   PricingItem,
   Unit,
+  Category,
 } from './types';
 import type {
   BackupData,
@@ -1490,6 +1491,29 @@ export async function createUnit(label: string): Promise<Unit> {
   const row = await one<Unit>(
     `INSERT INTO units (label, position)
      VALUES ($1, COALESCE((SELECT MAX(position) FROM units), 0) + 1)
+     RETURNING *`,
+    [clean]
+  );
+  return row!;
+}
+
+/* ------------------------------------------------------------- Categories */
+
+export async function listCategories(): Promise<Category[]> {
+  return q<Category>('SELECT * FROM categories ORDER BY position, lower(name)');
+}
+
+/**
+ * Add a quote/work category. Idempotent by (case-insensitive) name, mirroring
+ * createUnit, so quick-adds from the quote builder never fail on a duplicate.
+ */
+export async function createCategory(name: string): Promise<Category> {
+  const clean = name.trim();
+  const existing = await one<Category>('SELECT * FROM categories WHERE lower(name) = lower($1)', [clean]);
+  if (existing) return existing;
+  const row = await one<Category>(
+    `INSERT INTO categories (name, position)
+     VALUES ($1, COALESCE((SELECT MAX(position) FROM categories), 0) + 1)
      RETURNING *`,
     [clean]
   );

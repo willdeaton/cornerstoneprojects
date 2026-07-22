@@ -425,6 +425,17 @@ Your City, ST 00000',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_units_label ON units(lower(label));
+
+    -- Quote/work categories (Flooring, Painting, …). Editable from the quote
+    -- builder ("+ Add new category…"), so like units they live in a table
+    -- rather than a hard-coded array.
+    CREATE TABLE IF NOT EXISTS categories (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      position   INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_name ON categories(lower(name));
   `);
 
   // Seed the default units once, on an empty table. ON CONFLICT keeps this safe
@@ -433,5 +444,24 @@ Your City, ST 00000',
     `INSERT INTO units (label, position)
      VALUES ('ea',1),('sf',2),('lf',3),('sy',4),('hr',5),('day',6),('ls',7),('gal',8)
      ON CONFLICT (lower(label)) DO NOTHING`
+  );
+
+  // Seed the default categories (previously a hard-coded list in the quote
+  // builder), then backfill any custom category names already stored on quotes
+  // or price-book items so they stay selectable in the new dropdown.
+  await pool.query(
+    `INSERT INTO categories (name, position)
+     VALUES ('Flooring',1),('Painting',2),('Renovation',3),('Roofing',4),
+            ('Restoration',5),('Maintenance',6),('Janitorial',7),('Grounds',8)
+     ON CONFLICT (lower(name)) DO NOTHING`
+  );
+  await pool.query(
+    `INSERT INTO categories (name, position)
+     SELECT DISTINCT btrim(category), 100
+       FROM (SELECT category FROM quotes
+             UNION ALL
+             SELECT category FROM pricing_items) src
+      WHERE category IS NOT NULL AND btrim(category) <> ''
+     ON CONFLICT (lower(name)) DO NOTHING`
   );
 }

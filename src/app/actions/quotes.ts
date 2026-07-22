@@ -45,6 +45,8 @@ export async function updateQuoteAction(id: number, formData: FormData) {
 export async function createQuoteDocAction(input: QuoteDocInput, viewPdf = true) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
+  if (!input.quote_number?.trim()) return { error: 'Quote # is required.' };
+  if (!input.project_name?.trim()) return { error: 'Project / Description is required.' };
   const id = await createQuoteWithItems(sanitizeDoc(input));
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
@@ -64,6 +66,7 @@ export async function updateQuoteDocAction(
 ) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
+  if (!input.project_name?.trim()) return { error: 'Project / Description is required.' };
   await updateQuoteWithItems(id, sanitizeDoc(input));
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
