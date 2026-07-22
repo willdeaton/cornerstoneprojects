@@ -224,6 +224,10 @@ async function migrate(pool: Pool) {
     -- raises the total without showing as its own line. Replaces the old
     -- quote-level markup_rate/tax_rate for customer-facing math.
     ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS markup_rate DOUBLE PRECISION NOT NULL DEFAULT 0;
+    -- Cost category for internal 'pricing' worksheet rows (Subcontractor,
+    -- Material, Equipment Rentals, Travel, Project Management). NULL for
+    -- display rows and older worksheet rows created before the field existed.
+    ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS cost_type TEXT;
 
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
     CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_line_items(quote_id);

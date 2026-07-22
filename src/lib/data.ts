@@ -191,8 +191,8 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
     const it = items[i];
     if (!it.description?.trim()) continue;
     await client.query(
-      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount, markup_rate)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount, markup_rate, cost_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         quoteId,
         i,
@@ -203,6 +203,7 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
         it.unit_price || 0,
         it.amount == null ? null : it.amount,
         it.markup_rate || 0,
+        it.cost_type?.trim() || null,
       ]
     );
   }
