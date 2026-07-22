@@ -13,6 +13,7 @@ import {
   buildNewProjectEmail,
   buildJobCompletedEmail,
   buildPasswordResetEmail,
+  buildWelcomeEmail,
 } from './templates';
 
 /*
@@ -69,6 +70,34 @@ export async function sendPasswordResetEmail(
   const { subject, html } = buildPasswordResetEmail(firstName, resetUrl);
   await sendEmail(loaded.cfg, toEmail, subject, html);
   return { status: 'sent', count: 1, attempted: 1 };
+}
+
+/* --------------------------------------------------- Event-driven: welcome */
+
+/**
+ * EVENT-DRIVEN, best-effort. Called inline after an admin creates a new user —
+ * sends the new user a welcome email with a sign-in link. Never throws: the
+ * account creation must complete regardless of email outcome.
+ */
+export async function sendWelcomeEmail(
+  toEmail: string,
+  firstName: string,
+  loginEmail: string,
+  loginUrl: string
+): Promise<SendResult> {
+  try {
+    const loaded = await loadConfigOrReason();
+    if (!loaded.ok) {
+      console.warn(`[email] welcome not sent: ${loaded.reason}`);
+      return { status: 'error', count: 0, attempted: 1, reason: loaded.reason };
+    }
+    const { subject, html } = buildWelcomeEmail(firstName, loginEmail, loginUrl);
+    await sendEmail(loaded.cfg, toEmail, subject, html);
+    return { status: 'sent', count: 1, attempted: 1 };
+  } catch (err) {
+    console.error('[email] welcome failed:', err);
+    return { status: 'error', count: 0, attempted: 1, reason: (err as Error).message };
+  }
 }
 
 /* --------------------------------------------- Event-driven subscription emails */

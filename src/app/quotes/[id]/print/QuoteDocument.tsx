@@ -156,6 +156,29 @@ export function QuoteDocument({
         </div>
       )}
 
+      {/* Acceptance — signature block the customer fills in to accept the quote */}
+      <div className="mt-8 break-inside-avoid border-t border-black/10 pt-5 text-sm text-brand-ink">
+        <p className="mb-5 font-semibold">Accepted By:</p>
+        <div className="grid grid-cols-2 gap-x-12 gap-y-8">
+          <div className="flex items-end gap-2">
+            <span className="whitespace-nowrap">Name:</span>
+            <span className="flex-1 border-b border-brand-ink" />
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="whitespace-nowrap">Date:</span>
+            <span className="flex-1 border-b border-brand-ink" />
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="whitespace-nowrap">Signature:</span>
+            <span className="flex-1 border-b border-brand-ink" />
+          </div>
+          <div className="flex items-end gap-2">
+            <span className="whitespace-nowrap">PO Number:</span>
+            <span className="flex-1 border-b border-brand-ink" />
+          </div>
+        </div>
+      </div>
+
       <p className="mt-10 text-center text-xs text-brand-gray">
         Thank you for the opportunity to earn your business. — {company.name}
       </p>

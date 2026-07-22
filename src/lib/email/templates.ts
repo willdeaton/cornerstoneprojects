@@ -117,6 +117,42 @@ export function buildJobCompletedEmail(recipient: Recipient, project: Project): 
   };
 }
 
+/** EVENT-DRIVEN: an admin created a new account. Sent to the new user. */
+export function buildWelcomeEmail(
+  firstName: string,
+  loginEmail: string,
+  loginUrl: string
+): RenderedEmail {
+  const hello = firstName ? `Hi ${firstName},` : 'Hi,';
+  return {
+    subject: 'Welcome to the Cornerstone Project Tracker',
+    html: `
+      <div style="${WRAP}">
+        <p>${hello}</p>
+        <p>An account has been created for you on the Cornerstone Project
+        Tracker. Sign in with the email address
+        <strong>${loginEmail}</strong> and the temporary password your
+        administrator gave you.</p>
+        <p style="margin:24px 0">
+          <a href="${loginUrl}"
+             style="background:#7ab648;color:#1f2421;text-decoration:none;font-weight:bold;padding:12px 20px;border-radius:8px;display:inline-block">
+            Sign in
+          </a>
+        </p>
+        <p style="${MUTED}">
+          If the button doesn't work, copy and paste this link into your browser:<br />
+          <a href="${loginUrl}" style="color:#4a7a2b">${loginUrl}</a>
+        </p>
+        <p style="${MUTED}">
+          Once you're in, we recommend setting a password of your own — use
+          &ldquo;Forgot password&rdquo; on the sign-in page at any time.
+        </p>
+        ${SIGNOFF}
+      </div>
+    `,
+  };
+}
+
 /** EVENT-DRIVEN: a user requested a password reset link. */
 export function buildPasswordResetEmail(firstName: string, resetUrl: string): RenderedEmail {
   const hello = firstName ? `Hi ${firstName},` : 'Hi,';

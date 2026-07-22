@@ -1,10 +1,10 @@
 'use server';
 
 import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
 import { authenticate, createSession, destroySession } from '@/lib/auth';
 import { requestPasswordReset, resetPasswordWithToken } from '@/lib/password-reset';
 import { sendPasswordResetEmail } from '@/lib/email/send';
+import { appOrigin } from '@/lib/app-origin';
 
 export interface LoginState {
   error?: string;
@@ -30,16 +30,6 @@ export async function logoutAction(): Promise<void> {
 }
 
 /* ------------------------------------------------------- Password reset */
-
-/** Resolve the app's public origin for building absolute links in emails. */
-async function appOrigin(): Promise<string> {
-  const configured = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL;
-  if (configured) return configured.replace(/\/+$/, '');
-  const h = await headers();
-  const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:3000';
-  const proto = h.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https');
-  return `${proto}://${host}`;
-}
 
 export interface ForgotPasswordState {
   error?: string;
