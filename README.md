@@ -137,6 +137,30 @@ starter file from the **Download the template** link in the upload dialog.
 If a sheet has no line-item columns, each row imports as one simple pipeline
 quote, exactly as before (matched on Customer / Project / Category / Bid Value).
 
+## Bulk Upload (temporary import tool)
+
+A one-time importer for loading a backlog of quotes from **PDFs and Excel
+files**, one quote at a time. It lives under **Bulk Upload** in the sidebar and
+is **admin-only**. It is intentionally self-contained so it can be removed after
+the initial data load.
+
+- **Drop a quote PDF** — its text is read in the browser (via `unpdf`) to
+  pre-fill the header (quote #, customer, project, dates, total). Extraction is
+  best-effort and every field is editable; a scanned/image PDF simply yields
+  blank fields to fill in by hand.
+- **Drop the pricing Excel** (optional) — rows are parsed into editable line
+  items (`xlsx`), auto-detecting the header row and columns (Item Description,
+  Qty, Unit, Unit Price, Amount, Type). A per-quote toggle sets whether rows are
+  customer-facing **line items** or internal **pricing**.
+- **Choose create vs. update** — save as a new quote, or update an existing one
+  (matched automatically by quote number when the PDF carries it).
+- **Every uploaded file is attached** to the quote as a supporting document.
+
+**To remove the tool** after importing: delete `src/app/(app)/bulk-upload/`,
+delete `src/app/api/bulk-upload/`, remove the `bulkUploadEntry` nav line (and
+`UploadIcon`) in `src/app/(app)/AppShell.tsx`, and optionally `npm uninstall
+unpdf`. No schema changes were made, so imported quotes and their files remain.
+
 ## Brand
 
 Colors and logo from the Cornerstone Brand Guidelines — primary green
