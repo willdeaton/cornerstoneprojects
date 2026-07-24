@@ -3,15 +3,20 @@
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Combobox, type ComboboxOption } from '@/components/Combobox';
+import { Modal } from '@/components/Modal';
 import { money } from '@/lib/format';
-import type { QuoteItemKind } from '@/lib/types';
+import type { QuoteItemKind, CustomerWithContacts } from '@/lib/types';
+import { quickAddCustomerAction } from '@/app/actions/catalog';
 import {
   extractHeaderFromPdfText,
+  extractProposal,
+  groupItemsIntoLines,
   parseSheet,
   parseNumber,
   toIsoDate,
   type DraftHeader,
   type DraftLine,
+  type PdfTextItem,
 } from './parse';
 
 export interface ExistingQuote {
@@ -57,6 +62,8 @@ interface Attachment {
 const PDF_RE = /\.pdf$/i;
 const EXCEL_RE = /\.(xlsx?|xlsm|csv)$/i;
 
+const norm = (s: string) => s.trim().toLowerCase();
+
 /** Total of a single line: explicit amount, else qty × unit price. */
 function lineTotal(l: DraftLine): number {
   const amt = parseNumber(l.amount);
@@ -66,7 +73,15 @@ function lineTotal(l: DraftLine): number {
 
 let nextId = 1;
 
-export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
+const blankAddForm = { name: '', address: '', contactName: '', email: '', phone: '' };
+
+export function BulkUpload({
+  existing,
+  customers: customersProp = [],
+}: {
+  existing: ExistingQuote[];
+  customers?: CustomerWithContacts[];
+}) {
   const [header, setHeader] = useState<DraftHeader>({ ...EMPTY_HEADER });
   const [extra, setExtra] = useState<ExtraHeader>({ ...EMPTY_EXTRA });
   const [showExtra, setShowExtra] = useState(false);
@@ -75,6 +90,21 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
   const [mode, setMode] = useState<'create' | 'update'>('create');
   const [updateId, setUpdateId] = useState('');
   const [defaultKind, setDefaultKind] = useState<QuoteItemKind>('display');
+
+  // Saved customers held in state so a quick-add shows up immediately.
+  const [customers, setCustomers] = useState<CustomerWithContacts[]>(customersProp);
+
+  // Excel worksheets: every sheet's rows are parsed up front and kept in a ref;
+  // picking a sheet re-runs the parse and swaps the Excel-sourced lines.
+  const sheetsRef = useRef<Record<string, unknown[][]>>({});
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState('');
+
+  // Add-customer modal.
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState(blankAddForm);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const [pdfNoText, setPdfNoText] = useState(false);
   const [busy, setBusy] = useState<null | string>(null);
@@ -95,11 +125,88 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
     [existing]
   );
 
-  const displayLines = lines.filter((l) => l.kind === 'display' && l.description.trim());
-  const displayTotal = displayLines.reduce((s, l) => s + lineTotal(l), 0);
-  const hasDisplay = displayLines.length > 0;
-  const manualBid = parseNumber(header.bid_value) ?? 0;
-  const effectiveBid = hasDisplay ? displayTotal : manualBid;
+  /* ------------------------------------------------------------ customers */
+
+  const matchedCustomer = customers.find((c) => norm(c.name) === norm(header.customer));
+  // When the customer name came from the PDF (or was typed) and isn't a saved
+  // record, offer it as a "current" option so the field shows it.
+  const customerSelValue = matchedCustomer
+    ? String(matchedCustomer.id)
+    : header.customer.trim()
+      ? '__current__'
+      : '';
+
+  const customerOptions: ComboboxOption[] = useMemo(() => {
+    const opts: ComboboxOption[] = customers
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((c) => ({ value: String(c.id), label: c.name, detail: c.address ?? undefined }));
+    if (!matchedCustomer && header.customer.trim()) {
+      opts.unshift({ value: '__current__', label: header.customer, detail: 'From PDF · not saved yet' });
+    }
+    return opts;
+  }, [customers, matchedCustomer, header.customer]);
+
+  function onSelectCustomer(value: string) {
+    if (value === '__current__') return;
+    const c = customers.find((x) => String(x.id) === value);
+    if (!c) return;
+    setHeader((h) => ({ ...h, customer: c.name }));
+    // Prefill address/contact from the saved customer when empty.
+    const first = c.contacts[0];
+    setExtra((x) => ({
+      ...x,
+      customer_address: x.customer_address || c.address || '',
+      customer_contact: x.customer_contact || first?.name || '',
+      customer_email: x.customer_email || first?.email || '',
+      customer_phone: x.customer_phone || first?.phone || '',
+    }));
+  }
+
+  function openAddCustomer(typed: string) {
+    setAddError(null);
+    setAddForm({ ...blankAddForm, name: typed });
+    setAddOpen(true);
+  }
+
+  async function confirmAddCustomer() {
+    setAddError(null);
+    if (!addForm.name.trim()) {
+      setAddError('Customer name is required.');
+      return;
+    }
+    setAddSaving(true);
+    try {
+      const res = await quickAddCustomerAction({
+        name: addForm.name,
+        address: addForm.address || null,
+        contact: addForm.contactName
+          ? { name: addForm.contactName, email: addForm.email, phone: addForm.phone }
+          : null,
+      });
+      if (!res.ok || !res.customer) {
+        setAddError(res.error ?? 'Could not add the customer.');
+        setAddSaving(false);
+        return;
+      }
+      const created = res.customer;
+      setCustomers((cs) => [...cs, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setHeader((h) => ({ ...h, customer: created.name }));
+      const first = created.contacts[0];
+      setExtra((x) => ({
+        ...x,
+        customer_address: created.address ?? x.customer_address,
+        customer_contact: first?.name ?? x.customer_contact,
+        customer_email: first?.email ?? x.customer_email,
+        customer_phone: first?.phone ?? x.customer_phone,
+      }));
+      setAddOpen(false);
+    } catch {
+      setAddError('Could not save. You may not have permission to add customers.');
+    } finally {
+      setAddSaving(false);
+    }
+  }
 
   /* --------------------------------------------------------------- files */
 
@@ -130,20 +237,47 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
       const { extractText, getDocumentProxy } = await import('unpdf');
       const data = new Uint8Array(await file.arrayBuffer());
       const pdf = await getDocumentProxy(data);
+
+      // Positioned text, page by page → visual lines for the fixed template.
+      const items: PdfTextItem[] = [];
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        for (const it of content.items as Array<{ str?: string; transform?: number[] }>) {
+          if (!it.str || !it.transform) continue;
+          items.push({ str: it.str, x: it.transform[4], y: it.transform[5] });
+        }
+      }
+      const visualLines = groupItemsIntoLines(items);
+
+      // Merged plain text as a fallback for anything the template misses.
       const { text } = await extractText(pdf, { mergePages: true });
       const clean = (text || '').trim();
-      setPdfNoText(clean.length === 0);
-      if (clean.length === 0) return;
+      setPdfNoText(clean.length === 0 && visualLines.length === 0);
+      if (clean.length === 0 && visualLines.length === 0) return;
 
-      const parsed = extractHeaderFromPdfText(clean);
-      // Fill only empty fields so a manual edit or a prior file isn't clobbered.
-      setHeader((h) => fillEmpty(h, parsed));
+      const proposal = extractProposal(visualLines.length ? visualLines : clean.split(/\n+/));
+      const fallback = extractHeaderFromPdfText(clean);
+
+      // Fill only empty header fields so a prior file or manual edit isn't clobbered.
+      setHeader((h) => fillEmpty(fillEmpty(h, proposal.header), fallback));
+      setExtra((x) =>
+        fillEmptyExtra(x, {
+          customer_contact: proposal.contact,
+          customer_address: proposal.address,
+          notes: proposal.scope,
+        })
+      );
+
+      // Replace any previously imported PDF lines with this file's.
+      if (proposal.lines.length) {
+        setLines((prev) => [...prev.filter((l) => l.source !== 'pdf'), ...proposal.lines]);
+      }
 
       // Auto-match to an existing quote by quote number.
-      if (parsed.quote_number) {
-        const match = existing.find(
-          (q) => (q.quote_number || '').toLowerCase() === parsed.quote_number.toLowerCase()
-        );
+      const qnum = proposal.header.quote_number || fallback.quote_number;
+      if (qnum) {
+        const match = existing.find((q) => (q.quote_number || '').toLowerCase() === qnum.toLowerCase());
         if (match) {
           setMode('update');
           setUpdateId(String(match.id));
@@ -160,24 +294,52 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
       const XLSX = await import('xlsx');
       const data = new Uint8Array(await file.arrayBuffer());
       const wb = XLSX.read(data, { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      if (!sheet) return;
-      const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-        header: 1,
-        blankrows: false,
-        defval: '',
-      });
-      const { lines: parsedLines, header: parsedHeader } = parseSheet(aoa, defaultKind);
-      if (parsedLines.length) setLines((prev) => [...prev, ...parsedLines]);
-      setHeader((h) => fillEmpty(h, parsedHeader));
+      const map: Record<string, unknown[][]> = {};
+      for (const name of wb.SheetNames) {
+        const sheet = wb.Sheets[name];
+        if (!sheet) continue;
+        map[name] = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+          header: 1,
+          blankrows: false,
+          defval: '',
+        });
+      }
+      sheetsRef.current = map;
+      setSheetNames(wb.SheetNames);
+      const first = wb.SheetNames[0] ?? '';
+      setSelectedSheet(first);
+      if (first) applySheet(first);
     } finally {
       setBusy(null);
     }
   }
 
+  /** Parse one worksheet into line items, replacing any prior Excel rows. */
+  function applySheet(name: string) {
+    const aoa = sheetsRef.current[name];
+    if (!aoa) return;
+    const { lines: parsedLines, header: parsedHeader } = parseSheet(aoa, defaultKind);
+    setLines((prev) => [...prev.filter((l) => l.source !== 'excel'), ...parsedLines]);
+    setHeader((h) => fillEmpty(h, parsedHeader));
+  }
+
+  function onSelectSheet(name: string) {
+    setSelectedSheet(name);
+    applySheet(name);
+  }
+
   function fillEmpty(current: DraftHeader, incoming: Partial<DraftHeader>): DraftHeader {
     const next = { ...current };
     (Object.keys(incoming) as (keyof DraftHeader)[]).forEach((k) => {
+      const v = incoming[k];
+      if (v && !next[k]) next[k] = v;
+    });
+    return next;
+  }
+
+  function fillEmptyExtra(current: ExtraHeader, incoming: Partial<ExtraHeader>): ExtraHeader {
+    const next = { ...current };
+    (Object.keys(incoming) as (keyof ExtraHeader)[]).forEach((k) => {
       const v = incoming[k];
       if (v && !next[k]) next[k] = v;
     });
@@ -193,7 +355,7 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
   function addLine() {
     setLines((prev) => [
       ...prev,
-      { kind: defaultKind, description: '', quantity: '', unit: '', unit_price: '', amount: '', cost_type: '' },
+      { kind: defaultKind, description: '', quantity: '', unit: '', unit_price: '', amount: '', cost_type: '', source: 'manual' },
     ]);
   }
   function updateLine(i: number, patch: Partial<DraftLine>) {
@@ -202,6 +364,17 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
   function removeLine(i: number) {
     setLines((prev) => prev.filter((_, idx) => idx !== i));
   }
+
+  const displayLines = lines.filter((l) => l.kind === 'display' && l.description.trim());
+  const optionLines = lines.filter((l) => l.kind === 'alternate' && (l.description.trim() || l.amount.trim()));
+  const displayTotal = displayLines.reduce((s, l) => s + lineTotal(l), 0);
+  const hasDisplay = displayLines.length > 0;
+  const manualBid = parseNumber(header.bid_value) ?? 0;
+  const firstOption = optionLines.length ? lineTotal(optionLines[0]) : 0;
+  // Options are alternatives, never summed. Bid = base line total, else the
+  // first option's price, else the manual bid value.
+  const effectiveBid = hasDisplay ? displayTotal : optionLines.length ? firstOption : manualBid;
+  const bidLocked = hasDisplay || optionLines.length > 0;
 
   /* --------------------------------------------------------------- save */
 
@@ -215,6 +388,9 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
     setPdfNoText(false);
     setError('');
     setResult(null);
+    sheetsRef.current = {};
+    setSheetNames([]);
+    setSelectedSheet('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -264,7 +440,8 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
     const payload = {
       mode,
       quoteId: mode === 'update' ? Number(updateId) : undefined,
-      bidValue: parseNumber(header.bid_value),
+      // Only meaningful when there are no display lines (options-only / header-only).
+      bidValue: hasDisplay ? null : effectiveBid,
       doc,
     };
 
@@ -339,8 +516,9 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
             Drop the quote PDF and its Excel here, or click to choose
           </p>
           <p className="mt-1 text-xs text-brand-gray">
-            The PDF fills the header; the Excel fills the line items. Every file is attached to the
-            quote. PDF · Excel/CSV · up to 10 MB each.
+            The PDF fills the header, project title, and one line item per price; the Excel
+            fills line items (pick the worksheet below). Every file is attached. PDF ·
+            Excel/CSV · up to 10 MB each.
           </p>
           <input
             ref={fileInputRef}
@@ -376,6 +554,28 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Worksheet picker — shown when the workbook has more than one sheet. */}
+        {sheetNames.length > 1 && (
+          <div className="mt-4 max-w-md">
+            <label className="label">Excel worksheet</label>
+            <select
+              className="input"
+              value={selectedSheet}
+              onChange={(e) => onSelectSheet(e.target.value)}
+            >
+              {sheetNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-brand-gray">
+              Line items are pulled from this sheet. Switching sheets replaces the imported
+              rows; rows you added by hand stay.
+            </p>
+          </div>
         )}
 
         {pdfNoText && (
@@ -431,7 +631,18 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
         <label className="label">Quote details</label>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Field label="Quote #" value={header.quote_number} onChange={(v) => setHeader((h) => ({ ...h, quote_number: v }))} />
-          <Field label="Customer *" value={header.customer} onChange={(v) => setHeader((h) => ({ ...h, customer: v }))} />
+          <div>
+            <label className="label">Customer *</label>
+            <Combobox
+              options={customerOptions}
+              value={customerSelValue}
+              onSelect={onSelectCustomer}
+              onAddNew={openAddCustomer}
+              addNewLabel={(typed) => `Add “${typed}” as new customer`}
+              placeholder="Search customers…"
+              emptyText="No matching customers"
+            />
+          </div>
           <Field label="Project / Description" value={header.project_name} onChange={(v) => setHeader((h) => ({ ...h, project_name: v }))} />
           <Field label="Category" value={header.category} onChange={(v) => setHeader((h) => ({ ...h, category: v }))} />
           <div>
@@ -440,18 +651,36 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
               className="input"
               inputMode="decimal"
               value={header.bid_value}
-              disabled={hasDisplay}
+              disabled={bidLocked}
               onChange={(e) => setHeader((h) => ({ ...h, bid_value: e.target.value }))}
               placeholder="$0"
             />
             <p className="mt-1 text-xs text-brand-gray">
               {hasDisplay
                 ? `Calculated from line items: ${money(displayTotal)}`
-                : 'Used when there are no customer-facing line items.'}
+                : optionLines.length
+                  ? `From the first option: ${money(firstOption)}`
+                  : 'Used when there are no line items or options.'}
             </p>
           </div>
-          <Field label="Issue date" value={header.issue_date} onChange={(v) => setHeader((h) => ({ ...h, issue_date: v }))} placeholder="YYYY-MM-DD" />
-          <Field label="Valid until" value={header.valid_until} onChange={(v) => setHeader((h) => ({ ...h, valid_until: v }))} placeholder="YYYY-MM-DD" />
+          <div>
+            <label className="label">Issue date</label>
+            <input
+              className="input"
+              type="date"
+              value={toIsoDate(header.issue_date)}
+              onChange={(e) => setHeader((h) => ({ ...h, issue_date: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="label">Valid until</label>
+            <input
+              className="input"
+              type="date"
+              value={toIsoDate(header.valid_until)}
+              onChange={(e) => setHeader((h) => ({ ...h, valid_until: e.target.value }))}
+            />
+          </div>
         </div>
 
         <button
@@ -476,7 +705,7 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
       {/* Line items */}
       <div className="card p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <label className="label mb-0">Line items</label>
+          <label className="label mb-0">Line items &amp; options</label>
           <div className="flex items-center gap-2 text-xs text-brand-gray">
             <span>New Excel rows import as</span>
             <select
@@ -485,6 +714,7 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
               onChange={(e) => setDefaultKind(e.target.value as QuoteItemKind)}
             >
               <option value="display">Line items (on quote)</option>
+              <option value="alternate">Options (pick one)</option>
               <option value="pricing">Internal pricing</option>
             </select>
           </div>
@@ -492,7 +722,7 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
 
         {lines.length === 0 ? (
           <p className="text-sm text-brand-gray">
-            No line items yet. Add an Excel file above, or add rows manually.
+            No line items yet. Add a PDF/Excel file above, or add rows manually.
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -519,6 +749,7 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
                         onChange={(e) => updateLine(i, { kind: e.target.value as QuoteItemKind })}
                       >
                         <option value="display">Line</option>
+                        <option value="alternate">Option</option>
                         <option value="pricing">Pricing</option>
                       </select>
                     </td>
@@ -553,6 +784,13 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
         <button onClick={addLine} className="btn-secondary mt-3 !py-1.5 text-xs">
           + Add line
         </button>
+
+        {optionLines.length > 0 && (
+          <p className="mt-3 text-xs text-brand-gray">
+            {optionLines.length} option{optionLines.length === 1 ? '' : 's'} (full-price
+            alternatives) — shown separately on the quote, never added into the total.
+          </p>
+        )}
       </div>
 
       {/* Footer / save */}
@@ -571,6 +809,71 @@ export function BulkUpload({ existing }: { existing: ExistingQuote[] }) {
           </button>
         </div>
       </div>
+
+      {/* Add-customer modal — same quick-add the quote builder uses. */}
+      {addOpen && (
+        <Modal open onClose={() => setAddOpen(false)} title="Add new customer">
+          <div className="space-y-4">
+            <div>
+              <label className="label">Customer Name *</label>
+              <input
+                className="input"
+                value={addForm.name}
+                onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Sonoco Products"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="label">Customer Address</label>
+              <input
+                className="input"
+                value={addForm.address}
+                onChange={(e) => setAddForm((f) => ({ ...f, address: e.target.value }))}
+                placeholder="Street, City, ST ZIP"
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div>
+                <label className="label">Contact name</label>
+                <input
+                  className="input"
+                  value={addForm.contactName}
+                  onChange={(e) => setAddForm((f) => ({ ...f, contactName: e.target.value }))}
+                  placeholder="Jane Doe"
+                />
+              </div>
+              <div>
+                <label className="label">Contact email</label>
+                <input
+                  className="input"
+                  value={addForm.email}
+                  onChange={(e) => setAddForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="jane@example.com"
+                />
+              </div>
+              <div>
+                <label className="label">Contact phone</label>
+                <input
+                  className="input"
+                  value={addForm.phone}
+                  onChange={(e) => setAddForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="(555) 555-0123"
+                />
+              </div>
+            </div>
+            {addError && <p className="text-sm font-medium text-red-600">{addError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={() => setAddOpen(false)} disabled={addSaving}>
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={confirmAddCustomer} disabled={addSaving}>
+                {addSaving ? 'Saving…' : 'Add customer'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

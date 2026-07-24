@@ -23,14 +23,19 @@ function lineAmount(li: Pick<QuoteLineItem, 'amount' | 'quantity' | 'unit_price'
  * tax. A quote with no display line items falls back to its stored bid_value.
  */
 export function computeQuoteView(quote: QuoteWithItems) {
-  const displayItems = quote.line_items.filter((li) => li.kind !== 'pricing');
-  const hasItems = displayItems.length > 0;
   const roundCents = (n: number) => Math.round(n * 100) / 100;
-  const shownAmounts = displayItems.map(
-    (li) => roundCents(lineAmount(li) * (1 + (li.markup_rate || 0)))
+  const shown = (li: QuoteLineItem) => roundCents(lineAmount(li) * (1 + (li.markup_rate || 0)));
+  // Base customer-facing lines (legacy rows with no kind count as display);
+  // 'alternate' rows are full-price options shown separately, never summed.
+  const displayItems = quote.line_items.filter(
+    (li) => li.kind !== 'pricing' && li.kind !== 'alternate'
   );
+  const alternates = quote.line_items.filter((li) => li.kind === 'alternate');
+  const hasItems = displayItems.length > 0;
+  const shownAmounts = displayItems.map(shown);
+  const altAmounts = alternates.map(shown);
   const total = hasItems ? shownAmounts.reduce((s, a) => s + a, 0) : quote.bid_value;
-  return { displayItems, hasItems, shownAmounts, total };
+  return { displayItems, alternates, hasItems, shownAmounts, altAmounts, total };
 }
 
 export function QuoteDocument({
@@ -40,7 +45,8 @@ export function QuoteDocument({
   quote: QuoteWithItems;
   company: CompanyInfo;
 }) {
-  const { displayItems, hasItems, shownAmounts, total } = computeQuoteView(quote);
+  const { displayItems, alternates, hasItems, shownAmounts, altAmounts, total } =
+    computeQuoteView(quote);
 
   return (
     <div
@@ -106,47 +112,77 @@ export function QuoteDocument({
         </div>
       </div>
 
-      {/* Line items */}
-      <table className="mt-6 w-full text-sm">
-        <thead>
-          <tr className="border-b-2 border-black/10 text-left text-xs uppercase tracking-wide text-brand-gray">
-            <th className="py-2 pr-2 font-semibold">Description</th>
-            <th className="py-2 pl-2 text-right font-semibold">Price</th>
-          </tr>
-        </thead>
-        <tbody>
-          {!hasItems ? (
-            <tr className="border-b border-black/5 align-top">
-              <td className="py-2 pr-2 text-brand-ink whitespace-pre-line">
-                {quote.project_name || quote.customer}
-              </td>
-              <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">{money(quote.bid_value, { cents: true })}</td>
-            </tr>
-          ) : (
-            displayItems.map((li, idx) => (
-              <tr key={li.id} className="border-b border-black/5 align-top">
-                <td
-                  className="rich-text py-2 pr-2 text-brand-ink"
-                  dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
-                />
-                <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
-                  {money(shownAmounts[idx], { cents: true })}
-                </td>
+      {/* Line items + Total. Skipped when the quote is options-only (the
+          Pricing Options block below carries the prices instead). */}
+      {(hasItems || alternates.length === 0) && (
+        <>
+          <table className="mt-6 w-full text-sm">
+            <thead>
+              <tr className="border-b-2 border-black/10 text-left text-xs uppercase tracking-wide text-brand-gray">
+                <th className="py-2 pr-2 font-semibold">Description</th>
+                <th className="py-2 pl-2 text-right font-semibold">Price</th>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {!hasItems ? (
+                <tr className="border-b border-black/5 align-top">
+                  <td className="py-2 pr-2 text-brand-ink whitespace-pre-line">
+                    {quote.project_name || quote.customer}
+                  </td>
+                  <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">{money(quote.bid_value, { cents: true })}</td>
+                </tr>
+              ) : (
+                displayItems.map((li, idx) => (
+                  <tr key={li.id} className="border-b border-black/5 align-top">
+                    <td
+                      className="rich-text py-2 pr-2 text-brand-ink"
+                      dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
+                    />
+                    <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                      {money(shownAmounts[idx], { cents: true })}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
 
-      {/* Totals — markup is folded into each line price, so no separate rows. */}
-      <div className="mt-4 flex justify-end">
-        <div className="w-64 space-y-1.5 text-sm">
-          <div className="flex justify-between border-t-2 border-brand-green pt-2 text-base">
-            <span className="font-semibold text-brand-ink">Total</span>
-            <span className="font-bold text-brand-ink">{money(total, { cents: true })}</span>
+          {/* Totals — markup is folded into each line price, so no separate rows. */}
+          <div className="mt-4 flex justify-end">
+            <div className="w-64 space-y-1.5 text-sm">
+              <div className="flex justify-between border-t-2 border-brand-green pt-2 text-base">
+                <span className="font-semibold text-brand-ink">Total</span>
+                <span className="font-bold text-brand-ink">{money(total, { cents: true })}</span>
+              </div>
+            </div>
           </div>
+        </>
+      )}
+
+      {/* Pricing options — full-price alternatives the customer picks between.
+          Never summed into the base Total. */}
+      {alternates.length > 0 && (
+        <div className="mt-6">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+            Pricing Options{alternates.length > 1 ? ' — select one' : ''}
+          </p>
+          <table className="w-full text-sm">
+            <tbody>
+              {alternates.map((li, idx) => (
+                <tr key={li.id} className="border-b border-black/5 align-top">
+                  <td
+                    className="rich-text py-2 pr-2 text-brand-ink"
+                    dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
+                  />
+                  <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                    {money(altAmounts[idx], { cents: true })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
+      )}
 
       {/* Notes */}
       {quote.notes && (

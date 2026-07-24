@@ -43,6 +43,13 @@ interface DisplayRow {
   markup: string;
 }
 
+/** A full-price option the customer picks between (kind 'alternate'). Shown on
+ *  the PDF in its own "Pricing Options" block, never summed into the Total. */
+interface OptionRow {
+  description: string;
+  amount: string;
+}
+
 /** A worksheet row not yet in the price book, offered for saving on save. */
 interface NewPriceItem {
   description: string;
@@ -81,6 +88,9 @@ function blankPricingRow(): PricingRow {
 function blankDisplayRow(): DisplayRow {
   return { description: '', amount: '', markup: DEFAULT_MARKUP };
 }
+function blankOptionRow(): OptionRow {
+  return { description: '', amount: '' };
+}
 
 export function QuoteBuilder({
   quote,
@@ -112,6 +122,7 @@ export function QuoteBuilder({
   // inputs on screen, it never changes what gets saved.
   const [pricingOpen, setPricingOpen] = useState(true);
   const [lineItemsOpen, setLineItemsOpen] = useState(true);
+  const [optionsOpen, setOptionsOpen] = useState(true);
   const [termsOpen, setTermsOpen] = useState(true);
   const [internalOpen, setInternalOpen] = useState(true);
 
@@ -414,7 +425,10 @@ export function QuoteBuilder({
   // Existing quotes store both kinds in one list; split them for editing. Rows
   // without an explicit kind predate the split and were customer-facing.
   const existingPricing = (quote?.line_items ?? []).filter((li) => li.kind === 'pricing');
-  const existingDisplay = (quote?.line_items ?? []).filter((li) => li.kind !== 'pricing');
+  const existingAlternate = (quote?.line_items ?? []).filter((li) => li.kind === 'alternate');
+  const existingDisplay = (quote?.line_items ?? []).filter(
+    (li) => li.kind !== 'pricing' && li.kind !== 'alternate'
+  );
 
   const [pricingRows, setPricingRows] = useState<PricingRow[]>(
     existingPricing.length
@@ -440,6 +454,13 @@ export function QuoteBuilder({
       : [blankDisplayRow()]
   );
 
+  const [optionRows, setOptionRows] = useState<OptionRow[]>(
+    existingAlternate.map((li) => ({
+      description: li.description,
+      amount: String(li.amount ?? li.quantity * li.unit_price),
+    }))
+  );
+
   const set = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setHeader((h) => ({ ...h, [k]: e.target.value }));
 
@@ -447,8 +468,8 @@ export function QuoteBuilder({
   // baseline starts at the initial load and is reset to the current view after
   // each successful in-place save.
   const snapshot = useMemo(
-    () => JSON.stringify({ header, pricingRows, displayRows }),
-    [header, pricingRows, displayRows]
+    () => JSON.stringify({ header, pricingRows, displayRows, optionRows }),
+    [header, pricingRows, displayRows, optionRows]
   );
   const [savedSnapshot, setSavedSnapshot] = useState(snapshot);
   const dirty = snapshot !== savedSnapshot;
@@ -509,6 +530,22 @@ export function QuoteBuilder({
     setDisplayRows((rs) => (rs.length === 1 ? rs : rs.filter((_, idx) => idx !== i)));
   function moveDisplay(i: number, dir: -1 | 1) {
     setDisplayRows((rs) => {
+      const j = i + dir;
+      if (j < 0 || j >= rs.length) return rs;
+      const copy = [...rs];
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+      return copy;
+    });
+  }
+
+  /* ---- option (alternate) rows ---- */
+  function updateOption(i: number, patch: Partial<OptionRow>) {
+    setOptionRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  const addOption = () => setOptionRows((rs) => [...rs, blankOptionRow()]);
+  const removeOption = (i: number) => setOptionRows((rs) => rs.filter((_, idx) => idx !== i));
+  function moveOption(i: number, dir: -1 | 1) {
+    setOptionRows((rs) => {
       const j = i + dir;
       if (j < 0 || j >= rs.length) return rs;
       const copy = [...rs];
@@ -580,6 +617,18 @@ export function QuoteBuilder({
           unit_price: 0,
           amount: num(r.amount),
           markup_rate: num(r.markup) / 100,
+          cost_type: null,
+        })),
+      ...optionRows
+        .filter((r) => r.description.trim() || r.amount.trim())
+        .map<LineItemInput>((r) => ({
+          kind: 'alternate',
+          description: r.description.trim(),
+          quantity: 1,
+          unit: null,
+          unit_price: 0,
+          amount: num(r.amount),
+          markup_rate: 0,
           cost_type: null,
         })),
     ];
@@ -882,6 +931,82 @@ export function QuoteBuilder({
           <p className="mt-1 text-xs text-brand-gray">
             Collapsed · Total{' '}
             <span className="font-semibold text-brand-ink">{money(totals.total, { cents: true })}</span>
+          </p>
+        )}
+      </div>
+
+      {/* Pricing options — full-price alternatives the customer picks between */}
+      <div className="card p-5">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left"
+          onClick={() => setOptionsOpen((o) => !o)}
+          aria-expanded={optionsOpen}
+        >
+          <span className="text-brand-gray transition-transform">{optionsOpen ? '▾' : '▸'}</span>
+          <h2 className="brand-heading text-sm text-brand-ink">Pricing Options</h2>
+        </button>
+        {optionsOpen ? (
+          <>
+            <p className="mb-4 mt-1 text-xs text-brand-gray">
+              Optional. Full-price alternatives the customer picks between (e.g. “2025 Pricing”,
+              “2026 Pricing”). Each shows as its own price on the quote and is{' '}
+              <span className="font-semibold">never added into the Total above</span>.
+            </p>
+            {optionRows.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[520px] text-sm">
+                  <thead>
+                    <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
+                      <th className="px-2 py-2 font-semibold">Option name / description</th>
+                      <th className="px-2 py-2 text-right font-semibold w-40">Price</th>
+                      <th className="px-2 py-2 w-24" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {optionRows.map((r, i) => (
+                      <tr key={i} className="border-b border-black/5 last:border-0 align-top">
+                        <td className="px-2 py-2">
+                          <input
+                            className="input"
+                            value={r.description}
+                            onChange={(e) => updateOption(i, { description: e.target.value })}
+                            placeholder="2026 Pricing (projected material increase)"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            className="input text-right"
+                            inputMode="decimal"
+                            value={r.amount}
+                            onChange={(e) => updateOption(i, { amount: e.target.value })}
+                            placeholder="0.00"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex items-center justify-end gap-1 text-brand-gray">
+                            <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveOption(i, -1)} disabled={i === 0}>↑</button>
+                            <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveOption(i, 1)} disabled={i === optionRows.length - 1}>↓</button>
+                            <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50" onClick={() => removeOption(i)}>✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <button
+              type="button"
+              className="mt-2 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
+              onClick={addOption}
+            >
+              + Add Option
+            </button>
+          </>
+        ) : (
+          <p className="mt-1 text-xs text-brand-gray">
+            Collapsed · {optionRows.length} option{optionRows.length === 1 ? '' : 's'}
           </p>
         )}
       </div>

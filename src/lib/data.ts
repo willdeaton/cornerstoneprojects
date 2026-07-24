@@ -177,6 +177,30 @@ export function quoteTotals(
   return { subtotal, markup: total - subtotal, total };
 }
 
+/**
+ * The single headline number stored on the quote (`bid_value`) and used across
+ * the pipeline/dashboard. Normally the display-line total; but a quote made of
+ * only 'alternate' options (full-price alternatives the customer picks between)
+ * has no display lines, so we fall back to the first option's price so the quote
+ * still shows a value instead of $0.
+ */
+export function headlineBid(
+  items: {
+    kind?: QuoteItemKind;
+    amount?: number | null;
+    quantity?: number;
+    unit_price?: number;
+    markup_rate?: number;
+  }[]
+): number {
+  const { total } = quoteTotals(items);
+  const hasDisplay = items.some((it) => (it.kind ?? 'display') === 'display');
+  if (hasDisplay) return total;
+  const roundCents = (n: number) => Math.round(n * 100) / 100;
+  const firstAlt = items.find((it) => it.kind === 'alternate');
+  return firstAlt ? roundCents(lineAmount(firstAlt) * (1 + (firstAlt.markup_rate || 0))) : 0;
+}
+
 export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | undefined> {
   const quote = await getQuote(id);
   if (!quote) return undefined;
@@ -197,7 +221,7 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
       [
         quoteId,
         i,
-        it.kind === 'pricing' ? 'pricing' : 'display',
+        it.kind === 'pricing' ? 'pricing' : it.kind === 'alternate' ? 'alternate' : 'display',
         it.description.trim(),
         it.quantity || 0,
         it.unit?.trim() || null,
@@ -245,7 +269,7 @@ export async function createQuoteWithItems(
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const { total } = quoteTotals(input.items);
+    const total = headlineBid(input.items);
     const res = await client.query(
       `INSERT INTO quotes
          (quote_number, customer, project_name, category, bid_value, date_received,
@@ -278,7 +302,7 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
     // quote (imported / quick-added, no line items) doesn't zero its total.
     let total: number;
     if (input.items.length > 0) {
-      total = quoteTotals(input.items).total;
+      total = headlineBid(input.items);
     } else {
       const existing = await client.query('SELECT bid_value FROM quotes WHERE id = $1', [id]);
       total = (existing.rows[0]?.bid_value as number | undefined) ?? 0;
