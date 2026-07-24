@@ -11,6 +11,7 @@ import type { QuoteItemKind, CustomerWithContacts } from '@/lib/types';
 import { quickAddCustomerAction } from '@/app/actions/catalog';
 import {
   extractHeaderFromPdfText,
+  extractMarkupPercent,
   extractProposal,
   groupItemsIntoLines,
   parseSheet,
@@ -101,6 +102,10 @@ export function BulkUpload({
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [pricingSheet, setPricingSheet] = useState('');
   const [lineSheet, setLineSheet] = useState('');
+  // Markup % for the pricing worksheet, read off the Excel's Estimate Summary
+  // ("Markup (%)" row) and editable. Comparison-only: it is never applied to
+  // the saved items — imported line prices already include markup.
+  const [markup, setMarkup] = useState('');
   // Where customer-facing line items come from. PDFs fill them directly; with
   // no PDF the user can point Line Items at an Excel worksheet instead.
   const [lineSource, setLineSource] = useState<'pdf' | 'excel'>('pdf');
@@ -334,6 +339,8 @@ export function BulkUpload({
       ...pricing,
     ]);
     setHeader((h) => fillEmpty(h, parsedHeader));
+    const m = extractMarkupPercent(aoa);
+    if (m) setMarkup(m);
   }
 
   /** Parse one worksheet into customer-facing line items, replacing prior Excel
@@ -430,6 +437,13 @@ export function BulkUpload({
   const pricingRows = lines.map((l, i) => ({ l, i })).filter((x) => x.l.kind === 'pricing');
   const hasExcel = sheetNames.length > 0;
 
+  // Pricing-side totals: direct costs plus markup, to sanity-check against the
+  // customer-facing quote total. Display-only — never saved with the quote.
+  const pricingTotal = pricingRows.reduce((s, x) => s + lineTotal(x.l), 0);
+  const markupPct = parseNumber(markup) ?? 0;
+  const pricingWithMarkup = pricingTotal * (1 + markupPct / 100);
+  const pricingDiff = pricingWithMarkup - effectiveBid;
+
   /* --------------------------------------------------------------- save */
 
   function reset() {
@@ -447,6 +461,7 @@ export function BulkUpload({
     setPricingSheet('');
     setLineSheet('');
     setLineSource('pdf');
+    setMarkup('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -937,6 +952,48 @@ export function BulkUpload({
         <button onClick={() => addLine('pricing')} className="btn-secondary mt-3 !py-1.5 text-xs">
           + Add pricing row
         </button>
+
+        {pricingRows.length > 0 && (
+          <div className="mt-4 flex flex-col items-end gap-1.5 border-t border-black/10 pt-3 text-sm">
+            <div className="flex w-80 items-center justify-between">
+              <span className="text-brand-gray">Direct costs</span>
+              <span className="font-medium text-brand-ink">{money(pricingTotal, { cents: true })}</span>
+            </div>
+            <div className="flex w-80 items-center justify-between">
+              <span className="text-brand-gray">
+                Markup % <span className="text-xs">(from the Estimate Summary)</span>
+              </span>
+              <input
+                className="input !w-20 !py-1 text-right"
+                inputMode="decimal"
+                value={markup}
+                onChange={(e) => setMarkup(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+            <div className="flex w-80 items-center justify-between">
+              <span className="text-brand-gray">Total with markup</span>
+              <span className="font-semibold text-brand-ink">{money(pricingWithMarkup, { cents: true })}</span>
+            </div>
+            <div className="flex w-80 items-center justify-between">
+              <span className="text-brand-gray">Quote total</span>
+              <span className="font-semibold text-brand-ink">{money(effectiveBid, { cents: true })}</span>
+            </div>
+            {effectiveBid > 0 && (
+              <p
+                className={`text-xs font-medium ${
+                  Math.abs(pricingDiff) < 1 ? 'text-brand-green-dark' : 'text-amber-700'
+                }`}
+              >
+                {Math.abs(pricingDiff) < 1
+                  ? 'Pricing aligns with the quote total.'
+                  : `${money(Math.abs(pricingDiff), { cents: true })} ${
+                      pricingDiff > 0 ? 'over' : 'under'
+                    } the quote total.`}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Footer / save */}
