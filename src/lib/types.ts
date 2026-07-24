@@ -35,9 +35,11 @@ export interface Quote {
 /**
  * 'pricing' rows are an internal cost worksheet — never shown on the customer
  * PDF. 'display' rows are the customer-facing lines printed on the quote, each
- * with a description and a total price.
+ * with a description and a total price. 'alternate' rows are customer-facing
+ * full-price options (name + price) the customer picks between — they are shown
+ * on the quote but never summed into the base Total.
  */
-export type QuoteItemKind = 'pricing' | 'display';
+export type QuoteItemKind = 'pricing' | 'display' | 'alternate';
 
 /** Cost categories selectable on internal pricing-worksheet rows. */
 export const COST_TYPES = [

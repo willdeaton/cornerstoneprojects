@@ -32,7 +32,8 @@ function coerceItems(items: unknown): LineItemInput[] {
   if (!Array.isArray(items)) return [];
   return items.map((raw) => {
     const it = (raw ?? {}) as Record<string, unknown>;
-    const kind: QuoteItemKind = it.kind === 'pricing' ? 'pricing' : 'display';
+    const kind: QuoteItemKind =
+      it.kind === 'pricing' ? 'pricing' : it.kind === 'alternate' ? 'alternate' : 'display';
     const numOr = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
     return {
       kind,

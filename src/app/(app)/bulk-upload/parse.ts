@@ -10,6 +10,10 @@
 
 import type { QuoteItemKind } from '@/lib/types';
 
+/** Where a draft line came from — lets us swap out imported rows without
+ *  touching rows the user typed or that came from a different source. */
+export type LineSource = 'manual' | 'excel' | 'pdf';
+
 /** One editable line-item row in the Bulk Upload card (all values as strings). */
 export interface DraftLine {
   kind: QuoteItemKind;
@@ -19,6 +23,8 @@ export interface DraftLine {
   unit_price: string;
   amount: string;
   cost_type: string;
+  /** Origin of the row; defaults to 'manual' for hand-added rows. */
+  source: LineSource;
 }
 
 /** Header fields the parsers try to pre-fill. All optional / best-effort. */
@@ -180,6 +186,156 @@ function extractTotal(text: string): string {
   return max == null ? '' : String(max);
 }
 
+/* ------------------------------------ positioned PDF text → visual lines */
+
+/** A text fragment from pdf.js `getTextContent()`, reduced to what we need to
+ *  rebuild visual lines: the string and its baseline position. */
+export interface PdfTextItem {
+  str: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * Rebuild visual text lines from positioned PDF fragments. pdf.js yields text
+ * in reading order but without reliable line breaks, so we group fragments
+ * whose baseline (y) is within `tol` points, order each line left-to-right, and
+ * return trimmed non-empty lines top-to-bottom. This gives the fixed proposal
+ * template a stable line structure to anchor on.
+ */
+export function groupItemsIntoLines(items: PdfTextItem[], tol = 3): string[] {
+  const rows: { y: number; items: PdfTextItem[] }[] = [];
+  for (const it of items) {
+    if (!it.str) continue;
+    const row = rows.find((r) => Math.abs(r.y - it.y) <= tol);
+    if (row) row.items.push(it);
+    else rows.push({ y: it.y, items: [it] });
+  }
+  rows.sort((a, b) => b.y - a.y); // PDF y grows upward → top of page first
+  return rows
+    .map((r) =>
+      r.items
+        .sort((a, b) => a.x - b.x)
+        .map((i) => i.str)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter((s) => s.length > 0);
+}
+
+/* ------------------------------ proposal PDF (fixed Cornerstone template) */
+
+export interface ProposalExtract {
+  /** quote_number, customer, project_name, issue_date, bid_value (best-effort). */
+  header: Partial<DraftHeader>;
+  contact: string;
+  address: string;
+  /** Scope-of-Work summary; used as the line/option description and as notes. */
+  scope: string;
+  /** One line per price in the Quote section: 'alternate' when there are
+   *  several (full-price options), 'display' when there's just one (base bid). */
+  lines: DraftLine[];
+}
+
+const MONTHS = 'january|february|march|april|may|june|july|august|september|october|november|december';
+const LONG_DATE_RE = new RegExp(`\\b(\\d{1,2}\\s+(?:${MONTHS})\\s+\\d{4})\\b`, 'i');
+
+/**
+ * End-client name from the addressee company line: the text after the last "/"
+ * or spaced dash (e.g. `Cornerstone Facilities/Sonoco Products` → `Sonoco
+ * Products`), else the whole line. Editable in the UI afterwards.
+ */
+export function endClient(company: string): string {
+  const c = company.trim();
+  const slash = c.lastIndexOf('/');
+  if (slash >= 0) return c.slice(slash + 1).trim();
+  const dash = c.match(/\s[–—-]\s(.+)$/);
+  if (dash) return dash[1].trim();
+  return c;
+}
+
+/**
+ * Extract the fixed Cornerstone/HMC "SERVICE PROPOSAL" fields from reconstructed
+ * text lines. Anchors: `Quote# NN-NNNN`, a "D Month YYYY" date near the top,
+ * the `RE:` subject (project title), the `Scope of Work:` bullets, and every `$`
+ * amount in the `Quote:`→`Exclusions:` span (each becomes a line item). All
+ * values are best-effort and editable; empty fields fall back to the generic
+ * `extractHeaderFromPdfText` in the caller.
+ */
+export function extractProposal(lines: string[]): ProposalExtract {
+  const header: Partial<DraftHeader> = {};
+  let contact = '';
+  let address = '';
+  let scope = '';
+  const draft: DraftLine[] = [];
+  const text = lines.join('\n');
+
+  // Quote number (YY-NNNN), tolerant of "Quote#" / "Quote #".
+  const qn = text.match(/quote\s*#?\s*[:#-]?\s*(\d{2}-\d{3,4})/i);
+  if (qn) header.quote_number = qn[1];
+
+  // Issue date — a "16 October 2025" style date, else a numeric one.
+  const dm = text.match(LONG_DATE_RE) || text.match(/\b(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})\b/);
+  if (dm) header.issue_date = toIsoDate(dm[1]);
+
+  // RE: subject line → project / description.
+  const reLine = lines.find((l) => /^\s*re\s*[:\-]/i.test(l));
+  if (reLine) header.project_name = reLine.replace(/^\s*re\s*[:\-]\s*/i, '').trim();
+
+  // Contact / customer / address sit between the quote-number line and RE:.
+  const quoteLineIdx = lines.findIndex((l) => /quote\s*#/i.test(l) || /quote#/i.test(l));
+  const reIdx = lines.findIndex((l) => /^\s*re\s*[:\-]/i.test(l));
+  if (quoteLineIdx >= 0 && reIdx > quoteLineIdx) {
+    const block = lines.slice(quoteLineIdx + 1, reIdx).map((l) => l.trim()).filter(Boolean);
+    if (block[0]) contact = block[0].replace(/^(mr|mrs|ms|dr)\.?\s+/i, '').trim();
+    if (block[1]) header.customer = endClient(block[1]);
+    if (block.length > 2) address = block.slice(2).join(', ');
+  }
+
+  // Scope of Work → summary (bullets joined), up to the pricing "Quote:" line.
+  const scopeMatch = text.match(
+    /scope of work\s*:?\s*([\s\S]*?)(?=quote\s*:|exclusions|conditions|$)/i
+  );
+  if (scopeMatch) {
+    scope = scopeMatch[1]
+      .split(/\n|•|•/)
+      .map((s) => s.replace(/^[\s•\-*]+/, '').trim())
+      .filter(Boolean)
+      .join('; ');
+  }
+
+  // Prices → line items: every $ amount in the Quote:→Exclusions: span.
+  const priceSection = text.match(
+    /quote\s*:\s*([\s\S]*?)(?=exclusions|conditions|$)/i
+  );
+  const priceText = priceSection ? priceSection[1] : '';
+  const amounts: number[] = [];
+  for (const m of priceText.matchAll(/\$\s*([\d,]+(?:\.\d{1,2})?)/g)) {
+    const n = parseNumber(m[1]);
+    if (n != null && n > 0) amounts.push(n);
+  }
+  const desc = scope || header.project_name || '';
+  // One price → a normal base line; multiple → full-price options (alternates)
+  // so they aren't summed into the total.
+  const kind: QuoteItemKind = amounts.length > 1 ? 'alternate' : 'display';
+  for (const amt of amounts) {
+    draft.push({
+      kind,
+      description: desc,
+      quantity: '',
+      unit: '',
+      unit_price: '',
+      amount: String(amt),
+      cost_type: '',
+      source: 'pdf',
+    });
+  }
+  if (amounts.length) header.bid_value = String(amounts[0]);
+
+  return { header, contact, address, scope, lines: draft };
+}
+
 /* --------------------------------------------------- Excel rows → items */
 
 const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -252,6 +408,7 @@ function normalizeKind(v: unknown, fallback: QuoteItemKind): QuoteItemKind {
   const s = norm(v);
   if (!s) return fallback;
   if (s.startsWith('pric') || s.startsWith('cost') || s.startsWith('internal')) return 'pricing';
+  if (s.startsWith('alt') || s.startsWith('opt')) return 'alternate';
   if (s.startsWith('line') || s.startsWith('disp') || s.startsWith('item')) return 'display';
   return fallback;
 }
@@ -306,6 +463,7 @@ export function parseSheet(aoa: unknown[][], defaultKind: QuoteItemKind): Parsed
       unit_price: unitPrice == null ? '' : String(unitPrice),
       amount: amount == null ? '' : String(amount),
       cost_type: String(cell(items.cost_type) ?? '').trim(),
+      source: 'excel',
     });
   }
 

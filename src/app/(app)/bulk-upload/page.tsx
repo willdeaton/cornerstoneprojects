@@ -9,7 +9,7 @@
  */
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { listQuotes } from '@/lib/data';
+import { listQuotes, listCustomersWithContacts } from '@/lib/data';
 import { PageHeader } from '@/components/ui';
 import { BulkUpload, type ExistingQuote } from './BulkUpload';
 
@@ -20,7 +20,7 @@ export default async function BulkUploadPage() {
   if (!me) redirect('/login');
   if (me.role !== 'admin') redirect('/dashboard');
 
-  const quotes = await listQuotes();
+  const [quotes, customers] = await Promise.all([listQuotes(), listCustomersWithContacts()]);
   const existing: ExistingQuote[] = quotes.map((q) => ({
     id: q.id,
     quote_number: q.quote_number,
@@ -34,7 +34,7 @@ export default async function BulkUploadPage() {
         title="Bulk Upload"
         subtitle="Import quotes from PDFs and Excel files — one quote at a time. Temporary tool for the initial data load."
       />
-      <BulkUpload existing={existing} />
+      <BulkUpload existing={existing} customers={customers} />
     </div>
   );
 }
