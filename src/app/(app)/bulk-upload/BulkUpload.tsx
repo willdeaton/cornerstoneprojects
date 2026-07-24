@@ -58,12 +58,22 @@ const EMPTY_EXTRA: ExtraHeader = {
 
 interface Attachment {
   id: number;
-  file: File;
+  name: string;
+  size: number;
+  /** Snapshot of the file's bytes taken when it was added. Uploading this copy
+   *  (instead of the live File handle) means the save can't fail with a
+   *  "file changed" network error when the original is re-saved on disk —
+   *  e.g. an Excel still open in Excel, or a OneDrive-synced folder. */
+  blob: Blob;
   role: 'pdf' | 'excel' | 'other';
+  /** Over the server's 10 MB cap — kept in the list but never uploaded. */
+  tooBig: boolean;
 }
 
 const PDF_RE = /\.pdf$/i;
 const EXCEL_RE = /\.(xlsx?|xlsm|csv)$/i;
+/** Per-file upload cap, matching the commit endpoint's MAX_BYTES. */
+const MAX_FILE_BYTES = 10_000_000;
 
 const norm = (s: string) => s.trim().toLowerCase();
 
@@ -229,11 +239,33 @@ export function BulkUpload({
         : EXCEL_RE.test(file.name)
           ? 'excel'
           : 'other';
-      setAttachments((prev) => [...prev, { id: nextId++, file, role }]);
+
+      // Read the bytes NOW and keep the copy — parsing and the eventual upload
+      // both use the snapshot, never the live file handle.
+      let buf: ArrayBuffer;
+      try {
+        buf = await file.arrayBuffer();
+      } catch (err) {
+        console.error(err);
+        setError(`Could not read ${file.name} — it wasn't added. Check the file and try again.`);
+        continue;
+      }
+      const blob = new Blob([buf], { type: file.type || 'application/octet-stream' });
+      setAttachments((prev) => [
+        ...prev,
+        {
+          id: nextId++,
+          name: file.name,
+          size: blob.size,
+          blob,
+          role,
+          tooBig: blob.size > MAX_FILE_BYTES,
+        },
+      ]);
 
       try {
-        if (role === 'pdf') await ingestPdf(file);
-        else if (role === 'excel') await ingestExcel(file);
+        if (role === 'pdf') await ingestPdf(file.name, new Uint8Array(buf));
+        else if (role === 'excel') await ingestExcel(file.name, new Uint8Array(buf));
       } catch (err) {
         console.error(err);
         setError(`Could not read ${file.name}. You can still enter its details by hand.`);
@@ -241,11 +273,10 @@ export function BulkUpload({
     }
   }
 
-  async function ingestPdf(file: File) {
-    setBusy(`Reading ${file.name}…`);
+  async function ingestPdf(filename: string, data: Uint8Array) {
+    setBusy(`Reading ${filename}…`);
     try {
       const { extractText, getDocumentProxy } = await import('unpdf');
-      const data = new Uint8Array(await file.arrayBuffer());
       const pdf = await getDocumentProxy(data);
 
       // Positioned text, page by page → visual lines for the fixed template.
@@ -298,11 +329,10 @@ export function BulkUpload({
     }
   }
 
-  async function ingestExcel(file: File) {
-    setBusy(`Reading ${file.name}…`);
+  async function ingestExcel(filename: string, data: Uint8Array) {
+    setBusy(`Reading ${filename}…`);
     try {
       const XLSX = await import('xlsx');
-      const data = new Uint8Array(await file.arrayBuffer());
       const wb = XLSX.read(data, { type: 'array' });
       const map: Record<string, unknown[][]> = {};
       for (const name of wb.SheetNames) {
@@ -519,24 +549,34 @@ export function BulkUpload({
 
     const form = new FormData();
     form.append('payload', JSON.stringify(payload));
-    for (const a of attachments) form.append('file', a.file, a.file.name);
+    // Upload the byte snapshots taken when each file was added; files over the
+    // server's cap are left out (it would discard them anyway).
+    const clientSkipped = attachments.filter((a) => a.tooBig).map((a) => a.name);
+    for (const a of attachments) {
+      if (!a.tooBig) form.append('file', a.blob, a.name);
+    }
 
     setBusy('Saving quote…');
     try {
       const res = await fetch('/api/bulk-upload/commit', { method: 'POST', body: form });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
-        setError(json.error || 'Save failed. Please try again.');
+        setError(json.error || `Save failed (HTTP ${res.status}). Please try again.`);
         return;
       }
       setResult({
         quoteId: json.quoteId,
         mode,
         attached: Array.isArray(json.attached) ? json.attached.length : 0,
-        skipped: Array.isArray(json.skipped) ? json.skipped : [],
+        skipped: [...clientSkipped, ...(Array.isArray(json.skipped) ? json.skipped : [])],
       });
-    } catch {
-      setError('Network error while saving. Please try again.');
+    } catch (err) {
+      console.error('bulk-upload save failed', err);
+      const detail = err instanceof Error && err.message ? ` (${err.message})` : '';
+      setError(
+        `The save didn't reach the server${detail}. Check your internet connection and try again; ` +
+          'if it keeps happening, try removing the attached files, re-adding them, and saving again.'
+      );
     } finally {
       setBusy(null);
     }
@@ -615,7 +655,12 @@ export function BulkUpload({
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="badge bg-black/5 text-brand-gray uppercase">{a.role}</span>
-                  <span className="truncate text-brand-ink">{a.file.name}</span>
+                  <span className="truncate text-brand-ink">{a.name}</span>
+                  {a.tooBig && (
+                    <span className="badge shrink-0 bg-red-50 text-red-700">
+                      Over 10 MB — won&apos;t be attached
+                    </span>
+                  )}
                 </span>
                 <button
                   onClick={() => removeAttachment(a.id)}

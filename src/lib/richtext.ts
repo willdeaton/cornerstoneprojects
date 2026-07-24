@@ -34,15 +34,23 @@ export function sanitizeRichText(input: string | null | undefined): string {
     return escapeHtml(raw).replace(/\r?\n/g, '<br>');
   }
 
-  return raw
-    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<\s*(\/?)\s*([a-zA-Z0-9]+)\b[^>]*?>/g, (_m, slash: string, name: string) => {
-      const tag = name.toLowerCase();
-      if (!ALLOWED_TAGS.has(tag)) return '';
-      if (tag === 'br') return '<br>';
-      return `<${slash ? '/' : ''}${tag}>`;
-    });
+  return (
+    raw
+      .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<\s*(\/?)\s*([a-zA-Z0-9]+)\b[^>]*?>/g, (_m, slash: string, name: string) => {
+        const tag = name.toLowerCase();
+        // contentEditable wraps each new line in a <div>; keep the line break
+        // (as <br>) instead of silently joining the lines when dropping the tag.
+        if (tag === 'div') return slash ? '' : '<br>';
+        if (!ALLOWED_TAGS.has(tag)) return '';
+        if (tag === 'br') return '<br>';
+        return `<${slash ? '/' : ''}${tag}>`;
+      })
+      // The first line often gets div-wrapped too — don't let it become a
+      // leading blank line.
+      .replace(/^(\s*<br>)+/, '')
+  );
 }
 
 /**
