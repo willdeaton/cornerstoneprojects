@@ -4,7 +4,9 @@ import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Combobox, type ComboboxOption } from '@/components/Combobox';
 import { Modal } from '@/components/Modal';
+import { RichTextEditor } from '@/components/RichTextEditor';
 import { money } from '@/lib/format';
+import { isRichTextEmpty, sanitizeRichText } from '@/lib/richtext';
 import type { QuoteItemKind, CustomerWithContacts } from '@/lib/types';
 import { quickAddCustomerAction } from '@/app/actions/catalog';
 import {
@@ -268,7 +270,7 @@ export function BulkUpload({
         fillEmptyExtra(x, {
           customer_contact: proposal.contact,
           customer_address: proposal.address,
-          notes: proposal.scope,
+          notes: proposal.clientNotes,
         })
       );
 
@@ -409,8 +411,10 @@ export function BulkUpload({
     setLines((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  const displayLines = lines.filter((l) => l.kind === 'display' && l.description.trim());
-  const optionLines = lines.filter((l) => l.kind === 'alternate' && (l.description.trim() || l.amount.trim()));
+  const displayLines = lines.filter((l) => l.kind === 'display' && !isRichTextEmpty(l.description));
+  const optionLines = lines.filter(
+    (l) => l.kind === 'alternate' && (!isRichTextEmpty(l.description) || l.amount.trim())
+  );
   const displayTotal = displayLines.reduce((s, l) => s + lineTotal(l), 0);
   const hasDisplay = displayLines.length > 0;
   const manualBid = parseNumber(header.bid_value) ?? 0;
@@ -476,10 +480,11 @@ export function BulkUpload({
       prepared_by: null,
       internal_notes: null,
       items: lines
-        .filter((l) => l.description.trim())
+        // Pricing rows hold plain text; customer-facing rows hold rich HTML.
+        .filter((l) => (l.kind === 'pricing' ? l.description.trim() : !isRichTextEmpty(l.description)))
         .map((l) => ({
           kind: l.kind,
-          description: l.description.trim(),
+          description: l.kind === 'pricing' ? l.description.trim() : sanitizeRichText(l.description),
           quantity: parseNumber(l.quantity) ?? 0,
           unit: l.unit.trim() || null,
           unit_price: parseNumber(l.unit_price) ?? 0,
@@ -713,12 +718,28 @@ export function BulkUpload({
           </div>
         </div>
 
+        <div className="mt-4">
+          <label className="label">Notes to client (shown on the quote)</label>
+          <textarea
+            className="input"
+            rows={3}
+            value={extra.notes}
+            onChange={(e) => setExtra((x) => ({ ...x, notes: e.target.value }))}
+            placeholder={
+              'Work to be completed under a hard-walled ICRA Class IV containment.\nAny asbestos encountered will be the owner’s responsibility.'
+            }
+          />
+          <p className="mt-1 text-xs text-brand-gray">
+            One note per line — filled from the PDF&apos;s “Notes to Client” section when present.
+          </p>
+        </div>
+
         <button
           type="button"
           onClick={() => setShowExtra((s) => !s)}
           className="mt-4 text-xs font-semibold text-brand-green-dark hover:underline"
         >
-          {showExtra ? 'Hide' : 'Show'} contact &amp; notes fields
+          {showExtra ? 'Hide' : 'Show'} contact fields
         </button>
         {showExtra && (
           <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -727,7 +748,6 @@ export function BulkUpload({
             <Field label="Contact phone" value={extra.customer_phone} onChange={(v) => setExtra((x) => ({ ...x, customer_phone: v }))} />
             <Field label="Customer address" value={extra.customer_address} onChange={(v) => setExtra((x) => ({ ...x, customer_address: v }))} />
             <Field label="Project location" value={extra.project_location} onChange={(v) => setExtra((x) => ({ ...x, project_location: v }))} />
-            <Field label="Notes" value={extra.notes} onChange={(v) => setExtra((x) => ({ ...x, notes: v }))} />
           </div>
         )}
       </div>
@@ -802,7 +822,11 @@ export function BulkUpload({
                       </select>
                     </td>
                     <td className="py-1.5 pr-2">
-                      <input className="input !py-1" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} />
+                      <RichTextEditor
+                        value={l.description}
+                        onChange={(html) => updateLine(i, { description: html })}
+                        placeholder="Work included — use the bullet-list button for multiple items"
+                      />
                     </td>
                     <td className="py-1.5 pr-2">
                       <input className="input !py-1" inputMode="decimal" value={l.amount} onChange={(e) => updateLine(i, { amount: e.target.value })} placeholder="0.00" />

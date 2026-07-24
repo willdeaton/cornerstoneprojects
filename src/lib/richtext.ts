@@ -46,6 +46,17 @@ export function sanitizeRichText(input: string | null | undefined): string {
 }
 
 /**
+ * Build a bullet-list description (the RichTextEditor's HTML shape) from plain
+ * text lines — used by imports that read bullets out of a PDF. Empty lines are
+ * dropped; returns '' when nothing remains.
+ */
+export function bulletsToRichText(lines: string[]): string {
+  const items = lines.map((l) => l.trim()).filter(Boolean);
+  if (items.length === 0) return '';
+  return `<ul>${items.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`;
+}
+
+/**
  * Plain-text projection of a description, used to decide whether a field is
  * effectively empty (an "empty" contentEditable often still holds <br> etc.).
  */
