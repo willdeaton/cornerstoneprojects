@@ -391,8 +391,8 @@ const COLS = {
   description: ['itemdescription', 'description', 'lineitem', 'item', 'scope', 'service', 'workdescription', 'work'],
   quantity: ['qty', 'quantity', 'quan', 'qnty'],
   unit: ['unit', 'uom', 'unitofmeasure', 'units'],
-  unit_price: ['unitprice', 'priceeach', 'unitcost', 'rate', 'price', 'each'],
-  amount: ['amount', 'linetotal', 'extendedprice', 'extended', 'ext', 'total', 'lineamount'],
+  unit_price: ['priceperunit', 'unitprice', 'priceeach', 'unitcost', 'rate', 'price', 'each'],
+  amount: ['totalbudgetedprice', 'budgetedprice', 'amount', 'linetotal', 'extendedprice', 'extended', 'ext', 'total', 'lineamount'],
   type: ['itemtype', 'type', 'kind'],
   cost_type: ['costtype', 'costcategory', 'category'],
 } as const;
@@ -476,7 +476,45 @@ const IGNORE_DESCRIPTIONS = new Set([
   'name',
   'quote $',
   'quote$',
+  // Repeated section-header cells and labels on the estimate template.
+  'item',
+  'equipment',
+  // Estimate Summary / Performance Summary block — totals, not line items.
+  'estimate summary',
+  'direct costs',
+  'markup',
+  'markup (%)',
+  'markup %',
+  'bid amount before bond',
+  'performance and payment bond',
+  'total bid amount',
+  'performance summary',
+  'job price',
 ]);
+
+/**
+ * Pull the markup percentage off the estimate's summary block: the first row
+ * with a cell reading "Markup (%)" (or similar), taking the next numeric cell
+ * to its right. Excel percent cells arrive as fractions (32% → 0.32), plain
+ * numbers as-is ("32" → 32); both are returned as a whole-percent string
+ * ("32"), or '' when no markup row is found.
+ */
+export function extractMarkupPercent(aoa: unknown[][]): string {
+  for (const row of aoa) {
+    if (!row) continue;
+    const idx = row.findIndex((c) => norm(c).startsWith('markup'));
+    if (idx < 0) continue;
+    for (let c = idx + 1; c < row.length; c++) {
+      const raw = row[c];
+      const n = parseNumber(typeof raw === 'string' ? raw.replace('%', '') : raw);
+      if (n == null) continue;
+      const hasPercentSign = typeof raw === 'string' && raw.includes('%');
+      const pct = !hasPercentSign && n <= 1 ? n * 100 : n;
+      return String(+pct.toFixed(2));
+    }
+  }
+  return '';
+}
 
 /**
  * Turn a spreadsheet (array-of-arrays) into draft line items plus any header
@@ -515,7 +553,7 @@ export function parseSheet(aoa: unknown[][], defaultKind: QuoteItemKind): Parsed
     // Skip an obvious totals/summary row (no description but has an amount).
     if (!description) continue;
     // Skip the estimate template's summary/section labels — they aren't line items.
-    if (IGNORE_DESCRIPTIONS.has(description.toLowerCase())) continue;
+    if (IGNORE_DESCRIPTIONS.has(description.toLowerCase().replace(/\s+/g, ' '))) continue;
 
     lines.push({
       kind: normalizeKind(cell(items.type), defaultKind),
