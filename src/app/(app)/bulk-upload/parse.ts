@@ -419,6 +419,21 @@ export interface ParsedSheet {
 }
 
 /**
+ * Summary / section-label cells on the estimate template that look like data
+ * rows but aren't line items. Compared against the trimmed, lower-cased
+ * description. Extend as new junk labels turn up.
+ */
+const IGNORE_DESCRIPTIONS = new Set([
+  'total',
+  'subtotal',
+  'grand total',
+  'percentage of bid amount before bond',
+  'name',
+  'quote $',
+  'quote$',
+]);
+
+/**
  * Turn a spreadsheet (array-of-arrays) into draft line items plus any header
  * fields it happens to carry (customer / quote # / project / category).
  * `defaultKind` classifies rows with no explicit "Type" column.
@@ -454,6 +469,8 @@ export function parseSheet(aoa: unknown[][], defaultKind: QuoteItemKind): Parsed
     if (!description && qty == null && unitPrice == null && amount == null) continue;
     // Skip an obvious totals/summary row (no description but has an amount).
     if (!description) continue;
+    // Skip the estimate template's summary/section labels — they aren't line items.
+    if (IGNORE_DESCRIPTIONS.has(description.toLowerCase())) continue;
 
     lines.push({
       kind: normalizeKind(cell(items.type), defaultKind),
