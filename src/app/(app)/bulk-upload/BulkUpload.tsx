@@ -89,16 +89,19 @@ export function BulkUpload({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [mode, setMode] = useState<'create' | 'update'>('create');
   const [updateId, setUpdateId] = useState('');
-  const [defaultKind, setDefaultKind] = useState<QuoteItemKind>('display');
 
   // Saved customers held in state so a quick-add shows up immediately.
   const [customers, setCustomers] = useState<CustomerWithContacts[]>(customersProp);
 
-  // Excel worksheets: every sheet's rows are parsed up front and kept in a ref;
-  // picking a sheet re-runs the parse and swaps the Excel-sourced lines.
+  // Excel worksheets: every sheet's rows are parsed up front and kept in a ref.
+  // Pricing Details and (optionally) Line Items each pick their own sheet.
   const sheetsRef = useRef<Record<string, unknown[][]>>({});
   const [sheetNames, setSheetNames] = useState<string[]>([]);
-  const [selectedSheet, setSelectedSheet] = useState('');
+  const [pricingSheet, setPricingSheet] = useState('');
+  const [lineSheet, setLineSheet] = useState('');
+  // Where customer-facing line items come from. PDFs fill them directly; with
+  // no PDF the user can point Line Items at an Excel worksheet instead.
+  const [lineSource, setLineSource] = useState<'pdf' | 'excel'>('pdf');
 
   // Add-customer modal.
   const [addOpen, setAddOpen] = useState(false);
@@ -307,25 +310,66 @@ export function BulkUpload({
       sheetsRef.current = map;
       setSheetNames(wb.SheetNames);
       const first = wb.SheetNames[0] ?? '';
-      setSelectedSheet(first);
-      if (first) applySheet(first);
+      // Excel always feeds Pricing Details; default to the first sheet.
+      setPricingSheet(first);
+      if (first) applyPricingSheet(first);
+      // If Line Items are already set to come from Excel, refresh them too.
+      if (lineSource === 'excel' && lineSheet) applyLineSheet(lineSheet);
     } finally {
       setBusy(null);
     }
   }
 
-  /** Parse one worksheet into line items, replacing any prior Excel rows. */
-  function applySheet(name: string) {
+  /** Parse one worksheet into internal pricing rows, replacing prior Excel
+   *  pricing rows (kept distinct from Excel line-item rows by kind). */
+  function applyPricingSheet(name: string) {
     const aoa = sheetsRef.current[name];
     if (!aoa) return;
-    const { lines: parsedLines, header: parsedHeader } = parseSheet(aoa, defaultKind);
-    setLines((prev) => [...prev.filter((l) => l.source !== 'excel'), ...parsedLines]);
+    const { lines: parsedLines, header: parsedHeader } = parseSheet(aoa, 'pricing');
+    const pricing = parsedLines.map((l) => ({ ...l, kind: 'pricing' as QuoteItemKind }));
+    setLines((prev) => [
+      ...prev.filter((l) => !(l.source === 'excel' && l.kind === 'pricing')),
+      ...pricing,
+    ]);
     setHeader((h) => fillEmpty(h, parsedHeader));
   }
 
-  function onSelectSheet(name: string) {
-    setSelectedSheet(name);
-    applySheet(name);
+  /** Parse one worksheet into customer-facing line items, replacing prior Excel
+   *  line rows (kind !== 'pricing'); Excel pricing rows are left in place. */
+  function applyLineSheet(name: string) {
+    const aoa = sheetsRef.current[name];
+    if (!aoa) return;
+    const { lines: parsedLines } = parseSheet(aoa, 'display');
+    const display = parsedLines.map((l) => ({ ...l, kind: 'display' as QuoteItemKind }));
+    setLines((prev) => [
+      ...prev.filter((l) => !(l.source === 'excel' && l.kind !== 'pricing')),
+      ...display,
+    ]);
+  }
+
+  function onSelectPricingSheet(name: string) {
+    setPricingSheet(name);
+    applyPricingSheet(name);
+  }
+
+  function onSelectLineSheet(name: string) {
+    setLineSheet(name);
+    applyLineSheet(name);
+  }
+
+  /** Switch where line items come from. Turning off Excel drops Excel line
+   *  rows; turning it on pulls from the chosen (or first) worksheet. */
+  function onChangeLineSource(next: 'pdf' | 'excel') {
+    setLineSource(next);
+    if (next === 'pdf') {
+      setLines((prev) => prev.filter((l) => !(l.source === 'excel' && l.kind !== 'pricing')));
+      return;
+    }
+    const target = lineSheet || sheetNames[0] || '';
+    if (target) {
+      setLineSheet(target);
+      applyLineSheet(target);
+    }
   }
 
   function fillEmpty(current: DraftHeader, incoming: Partial<DraftHeader>): DraftHeader {
@@ -352,10 +396,10 @@ export function BulkUpload({
 
   /* --------------------------------------------------------------- lines */
 
-  function addLine() {
+  function addLine(kind: QuoteItemKind = 'display') {
     setLines((prev) => [
       ...prev,
-      { kind: defaultKind, description: '', quantity: '', unit: '', unit_price: '', amount: '', cost_type: '', source: 'manual' },
+      { kind, description: '', quantity: '', unit: '', unit_price: '', amount: '', cost_type: '', source: 'manual' },
     ]);
   }
   function updateLine(i: number, patch: Partial<DraftLine>) {
@@ -376,6 +420,12 @@ export function BulkUpload({
   const effectiveBid = hasDisplay ? displayTotal : optionLines.length ? firstOption : manualBid;
   const bidLocked = hasDisplay || optionLines.length > 0;
 
+  // Split the shared list into the two sections, keeping each row's real index
+  // so the edit/remove handlers still target the right entry.
+  const lineItemRows = lines.map((l, i) => ({ l, i })).filter((x) => x.l.kind !== 'pricing');
+  const pricingRows = lines.map((l, i) => ({ l, i })).filter((x) => x.l.kind === 'pricing');
+  const hasExcel = sheetNames.length > 0;
+
   /* --------------------------------------------------------------- save */
 
   function reset() {
@@ -390,7 +440,9 @@ export function BulkUpload({
     setResult(null);
     sheetsRef.current = {};
     setSheetNames([]);
-    setSelectedSheet('');
+    setPricingSheet('');
+    setLineSheet('');
+    setLineSource('pdf');
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -516,9 +568,9 @@ export function BulkUpload({
             Drop the quote PDF and its Excel here, or click to choose
           </p>
           <p className="mt-1 text-xs text-brand-gray">
-            The PDF fills the header, project title, and one line item per price; the Excel
-            fills line items (pick the worksheet below). Every file is attached. PDF ·
-            Excel/CSV · up to 10 MB each.
+            The PDF fills the header, project title, and line items; the Excel fills the
+            internal pricing details (pick the worksheet in that section). Every file is
+            attached. PDF · Excel/CSV · up to 10 MB each.
           </p>
           <input
             ref={fileInputRef}
@@ -554,28 +606,6 @@ export function BulkUpload({
               </li>
             ))}
           </ul>
-        )}
-
-        {/* Worksheet picker — shown when the workbook has more than one sheet. */}
-        {sheetNames.length > 1 && (
-          <div className="mt-4 max-w-md">
-            <label className="label">Excel worksheet</label>
-            <select
-              className="input"
-              value={selectedSheet}
-              onChange={(e) => onSelectSheet(e.target.value)}
-            >
-              {sheetNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-brand-gray">
-              Line items are pulled from this sheet. Switching sheets replaces the imported
-              rows; rows you added by hand stay.
-            </p>
-          </div>
         )}
 
         {pdfNoText && (
@@ -702,45 +732,64 @@ export function BulkUpload({
         )}
       </div>
 
-      {/* Line items */}
+      {/* Line items — customer-facing (PDF by default, or an Excel worksheet) */}
       <div className="card p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <label className="label mb-0">Line items &amp; options</label>
-          <div className="flex items-center gap-2 text-xs text-brand-gray">
-            <span>New Excel rows import as</span>
+          <label className="label mb-0">Line items</label>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-brand-gray">
+            <span>Source</span>
             <select
               className="input !w-auto !py-1"
-              value={defaultKind}
-              onChange={(e) => setDefaultKind(e.target.value as QuoteItemKind)}
+              value={lineSource}
+              onChange={(e) => onChangeLineSource(e.target.value as 'pdf' | 'excel')}
             >
-              <option value="display">Line items (on quote)</option>
-              <option value="alternate">Options (pick one)</option>
-              <option value="pricing">Internal pricing</option>
+              <option value="pdf">PDF</option>
+              <option value="excel">Excel worksheet</option>
             </select>
+            {lineSource === 'excel' && hasExcel && (
+              <select
+                className="input !w-auto !py-1"
+                value={lineSheet}
+                onChange={(e) => onSelectLineSheet(e.target.value)}
+              >
+                <option value="" disabled>
+                  Choose worksheet…
+                </option>
+                {sheetNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
 
-        {lines.length === 0 ? (
+        {lineSource === 'excel' && !hasExcel && (
+          <p className="mb-3 text-xs text-brand-gray">
+            Add an Excel file above, then pick which worksheet the line items come from.
+          </p>
+        )}
+
+        {lineItemRows.length === 0 ? (
           <p className="text-sm text-brand-gray">
-            No line items yet. Add a PDF/Excel file above, or add rows manually.
+            No line items yet. Drop a PDF above, choose an Excel worksheet, or add rows
+            manually.
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-brand-gray">
-                  <th className="pb-2 pr-2">Type</th>
+                  <th className="pb-2 pr-2 w-28">Type</th>
                   <th className="pb-2 pr-2">Description</th>
-                  <th className="pb-2 pr-2 w-20">Qty</th>
-                  <th className="pb-2 pr-2 w-20">Unit</th>
-                  <th className="pb-2 pr-2 w-28">Unit price</th>
                   <th className="pb-2 pr-2 w-28">Amount</th>
                   <th className="pb-2 pr-2 w-28">Line total</th>
                   <th className="pb-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {lines.map((l, i) => (
+                {lineItemRows.map(({ l, i }) => (
                   <tr key={i} className="border-t border-black/5 align-top">
                     <td className="py-1.5 pr-2">
                       <select
@@ -750,23 +799,13 @@ export function BulkUpload({
                       >
                         <option value="display">Line</option>
                         <option value="alternate">Option</option>
-                        <option value="pricing">Pricing</option>
                       </select>
                     </td>
                     <td className="py-1.5 pr-2">
                       <input className="input !py-1" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} />
                     </td>
                     <td className="py-1.5 pr-2">
-                      <input className="input !py-1" inputMode="decimal" value={l.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
-                    </td>
-                    <td className="py-1.5 pr-2">
-                      <input className="input !py-1" value={l.unit} onChange={(e) => updateLine(i, { unit: e.target.value })} />
-                    </td>
-                    <td className="py-1.5 pr-2">
-                      <input className="input !py-1" inputMode="decimal" value={l.unit_price} onChange={(e) => updateLine(i, { unit_price: e.target.value })} />
-                    </td>
-                    <td className="py-1.5 pr-2">
-                      <input className="input !py-1" inputMode="decimal" value={l.amount} onChange={(e) => updateLine(i, { amount: e.target.value })} placeholder="auto" />
+                      <input className="input !py-1" inputMode="decimal" value={l.amount} onChange={(e) => updateLine(i, { amount: e.target.value })} placeholder="0.00" />
                     </td>
                     <td className="py-2.5 pr-2 text-brand-ink">{money(lineTotal(l), { cents: true })}</td>
                     <td className="py-1.5 text-right">
@@ -781,7 +820,7 @@ export function BulkUpload({
           </div>
         )}
 
-        <button onClick={addLine} className="btn-secondary mt-3 !py-1.5 text-xs">
+        <button onClick={() => addLine('display')} className="btn-secondary mt-3 !py-1.5 text-xs">
           + Add line
         </button>
 
@@ -791,6 +830,89 @@ export function BulkUpload({
             alternatives) — shown separately on the quote, never added into the total.
           </p>
         )}
+      </div>
+
+      {/* Pricing details — internal cost worksheet, from the Excel only */}
+      <div className="card p-5">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <label className="label mb-0">Pricing details</label>
+            <p className="mt-0.5 text-xs text-brand-gray">
+              Internal cost worksheet — <span className="font-semibold">not shown on the quote</span>. Pulled from the Excel.
+            </p>
+          </div>
+          {hasExcel && (
+            <div className="flex items-center gap-2 text-xs text-brand-gray">
+              <span>Worksheet</span>
+              <select
+                className="input !w-auto !py-1"
+                value={pricingSheet}
+                onChange={(e) => onSelectPricingSheet(e.target.value)}
+              >
+                {sheetNames.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {pricingRows.length === 0 ? (
+          <p className="text-sm text-brand-gray">
+            No pricing rows yet. Add an Excel file above, or add rows manually.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-brand-gray">
+                  <th className="pb-2 pr-2">Description</th>
+                  <th className="pb-2 pr-2 w-36">Cost type</th>
+                  <th className="pb-2 pr-2 w-16">Qty</th>
+                  <th className="pb-2 pr-2 w-16">Unit</th>
+                  <th className="pb-2 pr-2 w-28">Unit price</th>
+                  <th className="pb-2 pr-2 w-28">Amount</th>
+                  <th className="pb-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pricingRows.map(({ l, i }) => (
+                  <tr key={i} className="border-t border-black/5 align-top">
+                    <td className="py-1.5 pr-2">
+                      <input className="input !py-1" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} />
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <input className="input !py-1" value={l.cost_type} onChange={(e) => updateLine(i, { cost_type: e.target.value })} />
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <input className="input !py-1" inputMode="decimal" value={l.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <input className="input !py-1" value={l.unit} onChange={(e) => updateLine(i, { unit: e.target.value })} />
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <input className="input !py-1" inputMode="decimal" value={l.unit_price} onChange={(e) => updateLine(i, { unit_price: e.target.value })} />
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <input className="input !py-1" inputMode="decimal" value={l.amount} onChange={(e) => updateLine(i, { amount: e.target.value })} placeholder="auto" />
+                    </td>
+                    <td className="py-1.5 text-right">
+                      <button onClick={() => removeLine(i)} className="text-xs font-medium text-red-600 hover:underline">
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <button onClick={() => addLine('pricing')} className="btn-secondary mt-3 !py-1.5 text-xs">
+          + Add pricing row
+        </button>
       </div>
 
       {/* Footer / save */}
