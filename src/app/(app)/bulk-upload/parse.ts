@@ -9,6 +9,7 @@
  */
 
 import type { QuoteItemKind } from '@/lib/types';
+import { bulletsToRichText } from '@/lib/richtext';
 
 /** Where a draft line came from — lets us swap out imported rows without
  *  touching rows the user typed or that came from a different source. */
@@ -231,8 +232,10 @@ export interface ProposalExtract {
   header: Partial<DraftHeader>;
   contact: string;
   address: string;
-  /** Scope-of-Work summary; used as the line/option description and as notes. */
-  scope: string;
+  /** Scope-of-work bullets (glyphs stripped); they become the line description. */
+  scopeBullets: string[];
+  /** "Notes to Client" section, one note per line → the quote's customer notes. */
+  clientNotes: string;
   /** One line per price in the Quote section: 'alternate' when there are
    *  several (full-price options), 'display' when there's just one (base bid). */
   lines: DraftLine[];
@@ -267,7 +270,8 @@ export function extractProposal(lines: string[]): ProposalExtract {
   const header: Partial<DraftHeader> = {};
   let contact = '';
   let address = '';
-  let scope = '';
+  let scopeBullets: string[] = [];
+  let clientNotes = '';
   const draft: DraftLine[] = [];
   const text = lines.join('\n');
 
@@ -293,17 +297,39 @@ export function extractProposal(lines: string[]): ProposalExtract {
     if (block.length > 2) address = block.slice(2).join(', ');
   }
 
-  // Scope of Work → summary (bullets joined), up to the pricing "Quote:" line.
-  const scopeMatch = text.match(
-    /scope of work\s*:?\s*([\s\S]*?)(?=quote\s*:|exclusions|conditions|$)/i
-  );
-  if (scopeMatch) {
-    scope = scopeMatch[1]
+  // Split a section's text into clean bullet strings ("*", "•", "-" glyphs off).
+  const toBullets = (section: string): string[] =>
+    section
       .split(/\n|•|•/)
       .map((s) => s.replace(/^[\s•\-*]+/, '').trim())
-      .filter(Boolean)
-      .join('; ');
+      .filter(Boolean);
+
+  // Scope of Work → bullets, up to the pricing / notes / closing sections.
+  const scopeMatch = text.match(
+    /scope of work\s*:?\s*([\s\S]*?)(?=quote\s*:|notes to client|exclusions|conditions|total\s*:|accepted by|$)/i
+  );
+  if (scopeMatch) scopeBullets = toBullets(scopeMatch[1]);
+
+  // Some proposals skip the "Scope of Work:" label and list the work as
+  // bulleted lines right under the project heading — collect those instead,
+  // stopping before the Notes to Client / totals / signature sections.
+  if (scopeBullets.length === 0) {
+    let stop = lines.findIndex((l) =>
+      /^\s*(notes to client|total\s*:|accepted by|exclusions|conditions)/i.test(l)
+    );
+    if (stop < 0) stop = lines.length;
+    scopeBullets = lines
+      .slice(0, stop)
+      .filter((l) => /^\s*[*•▪‣]\s*\S|^\s*-\s+\S/.test(l))
+      .map((l) => l.replace(/^[\s•▪‣\-*]+/, '').trim())
+      .filter(Boolean);
   }
+
+  // "Notes to Client" → customer notes shown on the quote, one note per line.
+  const notesMatch = text.match(
+    /notes to client\s*:?\s*([\s\S]*?)(?=total\s*:|accepted by|exclusions|conditions|$)/i
+  );
+  if (notesMatch) clientNotes = toBullets(notesMatch[1]).join('\n');
 
   // Prices → line items: every $ amount in the Quote:→Exclusions: span.
   const priceSection = text.match(
@@ -315,7 +341,9 @@ export function extractProposal(lines: string[]): ProposalExtract {
     const n = parseNumber(m[1]);
     if (n != null && n > 0) amounts.push(n);
   }
-  const desc = scope || header.project_name || '';
+  // Scope bullets become a bullet-list description (same HTML the quote
+  // builder's rich-text editor produces), so the quote prints them as bullets.
+  const desc = bulletsToRichText(scopeBullets) || header.project_name || '';
   // One price → a normal base line; multiple → full-price options (alternates)
   // so they aren't summed into the total.
   const kind: QuoteItemKind = amounts.length > 1 ? 'alternate' : 'display';
@@ -333,7 +361,24 @@ export function extractProposal(lines: string[]): ProposalExtract {
   }
   if (amounts.length) header.bid_value = String(amounts[0]);
 
-  return { header, contact, address, scope, lines: draft };
+  // No labelled "Quote:" price section but the scope was found — make one base
+  // line from the document total so the bullets still land on the quote.
+  if (draft.length === 0 && scopeBullets.length > 0) {
+    const total = extractTotal(text);
+    draft.push({
+      kind: 'display',
+      description: desc,
+      quantity: '',
+      unit: '',
+      unit_price: '',
+      amount: total,
+      cost_type: '',
+      source: 'pdf',
+    });
+    if (total) header.bid_value = total;
+  }
+
+  return { header, contact, address, scopeBullets, clientNotes, lines: draft };
 }
 
 /* --------------------------------------------------- Excel rows → items */
