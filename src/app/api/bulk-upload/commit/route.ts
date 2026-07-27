@@ -44,6 +44,9 @@ function coerceItems(items: unknown): LineItemInput[] {
       amount: it.amount == null || it.amount === '' ? null : numOr(it.amount, 0),
       markup_rate: numOr(it.markup_rate, 0),
       cost_type: it.cost_type ? String(it.cost_type).trim() : null,
+      // Imported options are single-line and ungrouped; the quote builder names
+      // and groups them the first time the quote is edited there.
+      option_group: null,
     };
   });
 }

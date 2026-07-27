@@ -36,8 +36,8 @@ export interface Quote {
  * 'pricing' rows are an internal cost worksheet — never shown on the customer
  * PDF. 'display' rows are the customer-facing lines printed on the quote, each
  * with a description and a total price. 'alternate' rows are customer-facing
- * full-price options (name + price) the customer picks between — they are shown
- * on the quote but never summed into the base Total.
+ * lines belonging to a named pricing option (see `option_group`): each option is
+ * totalled on its own and never summed into the base Total.
  */
 export type QuoteItemKind = 'pricing' | 'display' | 'alternate';
 
@@ -64,6 +64,12 @@ export interface QuoteLineItem {
   markup_rate: number;
   /** Cost category for 'pricing' rows (see COST_TYPES); NULL for display rows. */
   cost_type: string | null;
+  /**
+   * Name of the pricing option this line belongs to, for 'alternate' rows; NULL
+   * on base and worksheet rows. An 'alternate' row with a NULL option_group is a
+   * legacy single-line option and stands alone as its own option.
+   */
+  option_group: string | null;
   created_at: string;
 }
 
@@ -81,6 +87,8 @@ export interface LineItemInput {
   markup_rate: number;
   /** Cost category for 'pricing' rows (see COST_TYPES); null for display rows. */
   cost_type: string | null;
+  /** Pricing option this line belongs to ('alternate' rows only); null otherwise. */
+  option_group: string | null;
 }
 
 /** Full payload submitted when creating/updating a quote document. */

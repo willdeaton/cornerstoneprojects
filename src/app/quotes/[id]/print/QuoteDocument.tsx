@@ -1,7 +1,8 @@
 import type { QuoteWithItems, QuoteLineItem } from '@/lib/types';
 import type { CompanyInfo } from '@/lib/company';
 import { money, shortDate } from '@/lib/format';
-import { sanitizeRichText } from '@/lib/richtext';
+import { sanitizeRichText, richTextToPlain } from '@/lib/richtext';
+import { blockTotals, groupQuoteLines, shownAmount } from '@/lib/quote-math';
 
 /**
  * The customer-facing quote document. Pure and dependency-free (no hooks, no
@@ -10,32 +11,47 @@ import { sanitizeRichText } from '@/lib/richtext';
  * `renderToStaticMarkup`.
  */
 
-/** Total price of one line: an explicit amount if set, else quantity × unit price. */
-function lineAmount(li: Pick<QuoteLineItem, 'amount' | 'quantity' | 'unit_price'>): number {
-  if (li.amount != null) return li.amount;
-  return (li.quantity || 0) * (li.unit_price || 0);
+/** One pricing option as printed: its name, its lines, and its own total. */
+interface PrintedOption {
+  name: string;
+  rows: QuoteLineItem[];
+  shownAmounts: number[];
+  total: number;
+  /**
+   * True when the option is one line whose text is already the option name — the
+   * shape every option had before options could hold line items. It prints as a
+   * single name/price row rather than a heading + row + total block.
+   */
+  bare: boolean;
 }
 
 /**
  * Subtotal / total exactly as printed. Markup is per line and folded into each
  * line price (no separate markup row), and each shown amount is rounded to cents
  * so the printed total equals the sum of the printed line prices. There is no
- * tax. A quote with no display line items falls back to its stored bid_value.
+ * tax. A quote with no base line items falls back to its stored bid_value.
+ *
+ * Pricing options are grouped by `option_group` and totalled one at a time —
+ * never summed together, and never added into the base Total.
  */
 export function computeQuoteView(quote: QuoteWithItems) {
-  const roundCents = (n: number) => Math.round(n * 100) / 100;
-  const shown = (li: QuoteLineItem) => roundCents(lineAmount(li) * (1 + (li.markup_rate || 0)));
-  // Base customer-facing lines (legacy rows with no kind count as display);
-  // 'alternate' rows are full-price options shown separately, never summed.
-  const displayItems = quote.line_items.filter(
-    (li) => li.kind !== 'pricing' && li.kind !== 'alternate'
-  );
-  const alternates = quote.line_items.filter((li) => li.kind === 'alternate');
+  const { base: displayItems, groups } = groupQuoteLines(quote.line_items);
   const hasItems = displayItems.length > 0;
-  const shownAmounts = displayItems.map(shown);
-  const altAmounts = alternates.map(shown);
+  const shownAmounts = displayItems.map(shownAmount);
   const total = hasItems ? shownAmounts.reduce((s, a) => s + a, 0) : quote.bid_value;
-  return { displayItems, alternates, hasItems, shownAmounts, altAmounts, total };
+  const optionGroups: PrintedOption[] = groups.map((g) => {
+    const firstText = richTextToPlain(g.rows[0]?.description).trim();
+    // A legacy single-line option carries its name in the line's own text.
+    const name = g.name || firstText;
+    return {
+      name,
+      rows: g.rows,
+      shownAmounts: g.rows.map(shownAmount),
+      total: blockTotals(g.rows).total,
+      bare: g.rows.length === 1 && firstText === name.trim(),
+    };
+  });
+  return { displayItems, optionGroups, hasItems, shownAmounts, total };
 }
 
 export function QuoteDocument({
@@ -45,8 +61,7 @@ export function QuoteDocument({
   quote: QuoteWithItems;
   company: CompanyInfo;
 }) {
-  const { displayItems, alternates, hasItems, shownAmounts, altAmounts, total } =
-    computeQuoteView(quote);
+  const { displayItems, optionGroups, hasItems, shownAmounts, total } = computeQuoteView(quote);
 
   return (
     <div
@@ -114,7 +129,7 @@ export function QuoteDocument({
 
       {/* Line items + Total. Skipped when the quote is options-only (the
           Pricing Options block below carries the prices instead). */}
-      {(hasItems || alternates.length === 0) && (
+      {(hasItems || optionGroups.length === 0) && (
         <>
           <table className="mt-6 w-full text-sm">
             <thead>
@@ -159,28 +174,76 @@ export function QuoteDocument({
         </>
       )}
 
-      {/* Pricing options — full-price alternatives the customer picks between.
-          Never summed into the base Total. */}
-      {alternates.length > 0 && (
+      {/* Pricing options — priced alternatives the customer picks between. Each
+          is totalled on its own and never added into the base Total. */}
+      {optionGroups.length > 0 && (
         <div className="mt-6">
           <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">
-            Pricing Options{alternates.length > 1 ? ' — select one' : ''}
+            Pricing Options{optionGroups.length > 1 ? ' — select one' : ''}
           </p>
-          <table className="w-full text-sm">
-            <tbody>
-              {alternates.map((li, idx) => (
-                <tr key={li.id} className="border-b border-black/5 align-top">
-                  <td
-                    className="rich-text py-2 pr-2 text-brand-ink"
-                    dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
-                  />
-                  <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
-                    {money(altAmounts[idx], { cents: true })}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {/* A one-line option prints as a single name/price row — the same as it
+              always has. An option built from several lines prints as its own
+              block: name, its lines, then that option's total. */}
+          {optionGroups.every((g) => g.bare) ? (
+            <table className="w-full text-sm">
+              <tbody>
+                {optionGroups.map((g) => (
+                  <tr key={g.rows[0].id} className="border-b border-black/5 align-top">
+                    <td
+                      className="rich-text py-2 pr-2 text-brand-ink"
+                      dangerouslySetInnerHTML={{ __html: sanitizeRichText(g.rows[0].description) }}
+                    />
+                    <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                      {money(g.shownAmounts[0], { cents: true })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            optionGroups.map((g) =>
+              g.bare ? (
+                <div
+                  key={g.rows[0].id}
+                  className="mt-2 flex justify-between border-b border-black/5 py-2 text-sm"
+                >
+                  <span className="text-brand-ink">{g.name}</span>
+                  <span className="font-semibold text-brand-ink whitespace-nowrap">
+                    {money(g.shownAmounts[0], { cents: true })}
+                  </span>
+                </div>
+              ) : (
+                <div key={g.rows[0].id} className="mt-4 break-inside-avoid first:mt-2">
+                  <p className="border-b border-black/10 pb-1 text-sm font-semibold text-brand-ink">
+                    {g.name}
+                  </p>
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {g.rows.map((li, idx) => (
+                        <tr key={li.id} className="border-b border-black/5 align-top">
+                          <td
+                            className="rich-text py-2 pr-2 text-brand-ink"
+                            dangerouslySetInnerHTML={{ __html: sanitizeRichText(li.description) }}
+                          />
+                          <td className="py-2 pl-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                            {money(g.shownAmounts[idx], { cents: true })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="mt-2 flex justify-end">
+                    <div className="flex w-64 justify-between border-t border-brand-green pt-1.5 text-sm">
+                      <span className="font-semibold text-brand-ink">{g.name} Total</span>
+                      <span className="font-bold text-brand-ink">
+                        {money(g.total, { cents: true })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            )
+          )}
         </div>
       )}
 

@@ -78,11 +78,15 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
       q.line_items.map((li) => ({
         'Quote Number': q.quote_number ?? String(q.id),
         Kind: li.kind,
+        // Which pricing option the line belongs to, blank for base lines.
+        Option: li.option_group ?? '',
         Description: richTextToPlain(li.description),
         Qty: li.quantity,
         Unit: li.unit ?? '',
         'Unit Price': li.unit_price,
         Amount: li.amount ?? '',
+        'Markup %': (li.markup_rate || 0) * 100,
+        'Cost Type': li.cost_type ?? '',
       }))
     )
   );

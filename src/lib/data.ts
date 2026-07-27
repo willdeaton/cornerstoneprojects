@@ -6,7 +6,6 @@ import type {
   QuoteLineItem,
   QuoteWithItems,
   QuoteDocInput,
-  QuoteItemKind,
   LineItemInput,
   Project,
   Note,
@@ -29,6 +28,11 @@ import type {
   BackupTimeEntry,
 } from './backup-types';
 import { hoursBetween } from './format';
+import type { MathLine } from './quote-math';
+import { blockTotals, groupQuoteLines } from './quote-math';
+
+// Re-exported so server callers keep a single import site for the quote math.
+export { lineAmount, groupQuoteLines } from './quote-math';
 
 /* -------------------------------------------------------------- Query helpers */
 
@@ -138,67 +142,35 @@ export async function convertQuoteToProject(id: number): Promise<number | null> 
 
 /* ------------------------------------------------- Quote documents (line items) */
 
-/** Total price of one line: an explicit amount if set, else quantity × unit price. */
-export function lineAmount(it: {
-  amount?: number | null;
-  quantity?: number;
-  unit_price?: number;
-}): number {
-  if (it.amount != null) return it.amount;
-  return (it.quantity || 0) * (it.unit_price || 0);
-}
-
 /**
- * Subtotal / markup / total for a quote. Only 'display' line items — the
- * customer-facing lines — count toward the total; 'pricing' rows are an
- * internal worksheet and are ignored. Items with no kind are treated as
- * display for backward compatibility with quotes created before the split.
+ * Subtotal / markup / total for a quote's BASE lines — the customer-facing lines
+ * that aren't part of a pricing option. 'pricing' rows are an internal worksheet
+ * and 'alternate' rows belong to an option (each option is totalled on its own),
+ * so neither counts here. Items with no kind are treated as base lines for
+ * backward compatibility with quotes created before the kinds split.
  *
  * Markup is per line: each line's amount is grown by its own markup_rate, then
  * rounded to cents so the stored total matches the sum of the printed line
  * prices on the customer PDF. There is no tax.
  */
 export function quoteTotals(
-  items: {
-    kind?: QuoteItemKind;
-    amount?: number | null;
-    quantity?: number;
-    unit_price?: number;
-    markup_rate?: number;
-  }[]
+  items: MathLine[]
 ): { subtotal: number; markup: number; total: number } {
-  const roundCents = (n: number) => Math.round(n * 100) / 100;
-  const display = items.filter((it) => (it.kind ?? 'display') === 'display');
-  const subtotal = display.reduce((s, it) => s + lineAmount(it), 0);
-  const total = display.reduce(
-    (s, it) => s + roundCents(lineAmount(it) * (1 + (it.markup_rate || 0))),
-    0
-  );
-  return { subtotal, markup: total - subtotal, total };
+  return blockTotals(groupQuoteLines(items).base);
 }
 
 /**
  * The single headline number stored on the quote (`bid_value`) and used across
- * the pipeline/dashboard. Normally the display-line total; but a quote made of
- * only 'alternate' options (full-price alternatives the customer picks between)
- * has no display lines, so we fall back to the first option's price so the quote
- * still shows a value instead of $0.
+ * the pipeline/dashboard. Normally the base-line total; but a quote made only of
+ * pricing options has no base lines, so we fall back to the highest option total
+ * so the quote still shows a value instead of $0. Options with no price are
+ * skipped, and a quote whose options are all blank returns 0.
  */
-export function headlineBid(
-  items: {
-    kind?: QuoteItemKind;
-    amount?: number | null;
-    quantity?: number;
-    unit_price?: number;
-    markup_rate?: number;
-  }[]
-): number {
-  const { total } = quoteTotals(items);
-  const hasDisplay = items.some((it) => (it.kind ?? 'display') === 'display');
-  if (hasDisplay) return total;
-  const roundCents = (n: number) => Math.round(n * 100) / 100;
-  const firstAlt = items.find((it) => it.kind === 'alternate');
-  return firstAlt ? roundCents(lineAmount(firstAlt) * (1 + (firstAlt.markup_rate || 0))) : 0;
+export function headlineBid(items: MathLine[]): number {
+  const { base, groups } = groupQuoteLines(items);
+  if (base.length > 0) return blockTotals(base).total;
+  const totals = groups.map((g) => blockTotals(g.rows).total).filter((t) => t > 0);
+  return totals.length ? Math.max(...totals) : 0;
 }
 
 export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | undefined> {
@@ -214,21 +186,27 @@ export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | un
 async function replaceItems(client: PoolClient, quoteId: number, items: LineItemInput[]) {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    if (!it.description?.trim()) continue;
+    const kind =
+      it.kind === 'pricing' ? 'pricing' : it.kind === 'alternate' ? 'alternate' : 'display';
+    // Blank rows are unfinished input and get dropped — except a priced option
+    // line, which is kept so a real price is never lost to a missing label.
+    if (!it.description?.trim() && !(kind === 'alternate' && it.amount != null)) continue;
     await client.query(
-      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount, markup_rate, cost_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `INSERT INTO quote_line_items (quote_id, position, kind, description, quantity, unit, unit_price, amount, markup_rate, cost_type, option_group)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         quoteId,
         i,
-        it.kind === 'pricing' ? 'pricing' : it.kind === 'alternate' ? 'alternate' : 'display',
-        it.description.trim(),
+        kind,
+        it.description?.trim() ?? '',
         it.quantity || 0,
         it.unit?.trim() || null,
         it.unit_price || 0,
         it.amount == null ? null : it.amount,
         it.markup_rate || 0,
         it.cost_type?.trim() || null,
+        // Only option lines carry a group name, whatever the caller sent.
+        kind === 'alternate' ? it.option_group?.trim() || null : null,
       ]
     );
   }
