@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { money } from '@/lib/format';
-import { sanitizeRichText, isRichTextEmpty } from '@/lib/richtext';
+import { sanitizeRichText, isRichTextEmpty, richTextToPlain } from '@/lib/richtext';
+import { blockTotals } from '@/lib/quote-math';
 import { Modal } from '@/components/Modal';
 import { Combobox } from '@/components/Combobox';
 import { RichTextEditor } from '@/components/RichTextEditor';
@@ -12,6 +13,7 @@ import { CategorySelect } from '@/components/CategorySelect';
 import type {
   LineItemInput,
   QuoteDocInput,
+  QuoteLineItem,
   QuoteWithItems,
   QuoteFile,
   CustomerWithContacts,
@@ -41,13 +43,13 @@ interface DisplayRow {
   amount: string;
   /** Per-line markup as a whole-number percent string (e.g. "15"). */
   markup: string;
-}
-
-/** A full-price option the customer picks between (kind 'alternate'). Shown on
- *  the PDF in its own "Pricing Options" block, never summed into the Total. */
-interface OptionRow {
-  description: string;
-  amount: string;
+  /**
+   * The pricing option this line belongs to, or `null` for a base line that is
+   * always included. Options are priced on their own and never summed into the
+   * base Total, so an empty-string name is still a real option — only `null`
+   * means "base line".
+   */
+  option: string | null;
 }
 
 /** A worksheet row not yet in the price book, offered for saving on save. */
@@ -85,11 +87,204 @@ function addDays(iso: string, days: number): string {
 function blankPricingRow(): PricingRow {
   return { description: '', cost_type: '', quantity: '1', unit: 'ea', unit_price: '' };
 }
-function blankDisplayRow(): DisplayRow {
-  return { description: '', amount: '', markup: DEFAULT_MARKUP };
+function blankDisplayRow(option: string | null = null): DisplayRow {
+  return { description: '', amount: '', markup: DEFAULT_MARKUP, option };
 }
-function blankOptionRow(): OptionRow {
-  return { description: '', amount: '' };
+
+/** Subtotal / markup / total for one block of lines, using the shared quote math. */
+function rowTotals(rows: DisplayRow[]) {
+  return blockTotals(rows.map((r) => ({ amount: num(r.amount), markup_rate: num(r.markup) / 100 })));
+}
+
+/** The option names in a row list, in first-appearance order. */
+function optionKeysOf(rows: DisplayRow[]): string[] {
+  const keys: string[] = [];
+  for (const r of rows) {
+    if (r.option !== null && !keys.includes(r.option)) keys.push(r.option);
+  }
+  return keys;
+}
+
+/** First unused "Option A", "Option B", … for a newly added option. */
+function nextOptionName(taken: string[]): string {
+  for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    const name = `Option ${letter}`;
+    if (!taken.includes(name)) return name;
+  }
+  return `Option ${taken.length + 1}`;
+}
+
+/**
+ * Hydrate the customer-facing rows of a stored quote. Base lines come first,
+ * then the option lines grouped by their stored `option_group`.
+ *
+ * A legacy option row — an 'alternate' saved before options had line items —
+ * has no `option_group`, so it becomes its own one-line option named after its
+ * own text. Names are kept unique, because two identically worded legacy options
+ * merged into one group would add their prices together.
+ */
+function initialDisplayRows(quote?: QuoteWithItems): DisplayRow[] {
+  const items = quote?.line_items ?? [];
+  // Rows without an explicit kind predate the split and were customer-facing.
+  const stored = items.filter((li) => li.kind !== 'pricing' && li.kind !== 'alternate');
+  const alternates = items.filter((li) => li.kind === 'alternate');
+
+  const toRow = (li: QuoteLineItem, option: string | null): DisplayRow => ({
+    // Normalize to editor HTML so legacy plain-text (with newlines) and any
+    // stored formatting both load into the rich-text editor cleanly.
+    description: sanitizeRichText(li.description),
+    // Fall back to quantity × unit price for pre-split quotes with no amount.
+    amount: String(li.amount ?? li.quantity * li.unit_price),
+    markup: String(+((li.markup_rate ?? 0) * 100).toFixed(4)),
+    option,
+  });
+
+  const base = stored.length ? stored.map((li) => toRow(li, null)) : [blankDisplayRow()];
+
+  const named = new Set(
+    alternates.map((li) => li.option_group?.trim()).filter((n): n is string => !!n)
+  );
+  const usedLegacy = new Set<string>();
+  const options = alternates.map((li, i) => {
+    const group = li.option_group?.trim();
+    if (group) return toRow(li, group);
+    const label = richTextToPlain(li.description).trim() || `Option ${i + 1}`;
+    let name = label;
+    for (let n = 2; named.has(name) || usedLegacy.has(name); n++) name = `${label} (${n})`;
+    usedLegacy.add(name);
+    return toRow(li, name);
+  });
+
+  return [...base, ...options];
+}
+
+/** A row plus its index in the flat `displayRows` array, which handlers act on. */
+interface RowEntry {
+  row: DisplayRow;
+  index: number;
+}
+
+/**
+ * The editable table of customer-facing lines — used both for the base lines and
+ * for each pricing option's lines, so the two can never drift apart. Moves and
+ * removes are scoped to the block: `entries` is already filtered to it.
+ */
+function LineItemTable({
+  entries,
+  canRemove,
+  onChange,
+  onMove,
+  onRemove,
+}: {
+  entries: RowEntry[];
+  canRemove: boolean;
+  onChange: (index: number, patch: Partial<DisplayRow>) => void;
+  onMove: (index: number, dir: -1 | 1) => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] text-sm">
+        <thead>
+          <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
+            <th className="px-2 py-2 font-semibold">Description</th>
+            <th className="px-2 py-2 text-right font-semibold w-32">Price</th>
+            <th className="px-2 py-2 text-right font-semibold w-24">Markup %</th>
+            <th className="px-2 py-2 text-right font-semibold w-32">Line Total</th>
+            <th className="px-2 py-2 w-24" />
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(({ row, index }, pos) => (
+            // Keyed by the row's index in the flat array, not its position in
+            // this block, so the rich-text editors never swap contents.
+            <tr key={index} className="border-b border-black/5 last:border-0 align-top">
+              <td className="px-2 py-2">
+                <RichTextEditor
+                  value={row.description}
+                  onChange={(html) => onChange(index, { description: html })}
+                  placeholder="Furnish and install new carpet tile throughout corridor …"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <input
+                  className="input text-right"
+                  inputMode="decimal"
+                  value={row.amount}
+                  onChange={(e) => onChange(index, { amount: e.target.value })}
+                  placeholder="0.00"
+                />
+              </td>
+              <td className="px-2 py-2">
+                <input
+                  className="input text-right"
+                  inputMode="decimal"
+                  value={row.markup}
+                  onChange={(e) => onChange(index, { markup: e.target.value })}
+                  placeholder="0"
+                />
+              </td>
+              <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
+                {money(num(row.amount) * (1 + num(row.markup) / 100), { cents: true })}
+              </td>
+              <td className="px-2 py-2">
+                <div className="flex items-center justify-end gap-1 text-brand-gray">
+                  <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => onMove(index, -1)} disabled={pos === 0}>↑</button>
+                  <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => onMove(index, 1)} disabled={pos === entries.length - 1}>↓</button>
+                  <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => onRemove(index)} disabled={!canRemove}>✕</button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Subtotal / markup / total for one block. Markup is computed per block so a
+ * base block with no markup doesn't show a $0.00 markup row just because a
+ * pricing option elsewhere on the quote has one.
+ */
+function TotalsPanel({
+  rows,
+  label,
+  explain = false,
+}: {
+  rows: DisplayRow[];
+  label: string;
+  /** Show the "markup is folded into each line price" note (base block only). */
+  explain?: boolean;
+}) {
+  const totals = rowTotals(rows);
+  const anyMarkup = rows.some((r) => num(r.markup) > 0);
+  return (
+    <div className="mt-4 flex justify-end">
+      <div className="w-full max-w-xs space-y-2 text-sm">
+        <div className="flex justify-between">
+          <span className="text-brand-gray">Subtotal</span>
+          <span className="font-semibold text-brand-ink">{money(totals.subtotal, { cents: true })}</span>
+        </div>
+        {anyMarkup && (
+          <div className="flex justify-between">
+            <span className="text-brand-gray">Markup</span>
+            <span className="font-semibold text-brand-ink">{money(totals.markup, { cents: true })}</span>
+          </div>
+        )}
+        <div className="flex justify-between border-t border-black/10 pt-2 text-base">
+          <span className="font-semibold text-brand-ink">{label}</span>
+          <span className="font-bold text-brand-ink">{money(totals.total, { cents: true })}</span>
+        </div>
+        {anyMarkup && explain && (
+          <p className="pt-1 text-xs text-brand-gray">
+            Markup is folded into each line price on the customer PDF — it raises the total but
+            isn&apos;t shown as its own line.
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function QuoteBuilder({
@@ -118,13 +313,13 @@ export function QuoteBuilder({
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Collapsible cards — everything starts open; collapsing only hides the
-  // inputs on screen, it never changes what gets saved.
-  const [pricingOpen, setPricingOpen] = useState(true);
+  // Collapsible cards. Line Items — the heart of the quote — starts open; the
+  // supporting cards start collapsed so the form opens on the work that matters.
+  // Collapsing only hides the inputs on screen, it never changes what gets saved.
+  const [pricingOpen, setPricingOpen] = useState(false);
   const [lineItemsOpen, setLineItemsOpen] = useState(true);
-  const [optionsOpen, setOptionsOpen] = useState(true);
-  const [termsOpen, setTermsOpen] = useState(true);
-  const [internalOpen, setInternalOpen] = useState(true);
+  const [termsOpen, setTermsOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
 
   // Price book, unit list, and category list are held in state so quick-adds
   // (a new price-book entry, unit, or category) show up immediately without a
@@ -422,13 +617,8 @@ export function QuoteBuilder({
     await doSave(mode);
   }
 
-  // Existing quotes store both kinds in one list; split them for editing. Rows
-  // without an explicit kind predate the split and were customer-facing.
+  // Existing quotes store every kind in one list; split them for editing.
   const existingPricing = (quote?.line_items ?? []).filter((li) => li.kind === 'pricing');
-  const existingAlternate = (quote?.line_items ?? []).filter((li) => li.kind === 'alternate');
-  const existingDisplay = (quote?.line_items ?? []).filter(
-    (li) => li.kind !== 'pricing' && li.kind !== 'alternate'
-  );
 
   const [pricingRows, setPricingRows] = useState<PricingRow[]>(
     existingPricing.length
@@ -441,25 +631,11 @@ export function QuoteBuilder({
         }))
       : [blankPricingRow()]
   );
-  const [displayRows, setDisplayRows] = useState<DisplayRow[]>(
-    existingDisplay.length
-      ? existingDisplay.map((li) => ({
-          // Normalize to editor HTML so legacy plain-text (with newlines) and
-          // any stored formatting both load into the rich-text editor cleanly.
-          description: sanitizeRichText(li.description),
-          // Fall back to quantity × unit price for pre-split quotes with no amount.
-          amount: String(li.amount ?? li.quantity * li.unit_price),
-          markup: String(+((li.markup_rate ?? 0) * 100).toFixed(4)),
-        }))
-      : [blankDisplayRow()]
-  );
-
-  const [optionRows, setOptionRows] = useState<OptionRow[]>(
-    existingAlternate.map((li) => ({
-      description: li.description,
-      amount: String(li.amount ?? li.quantity * li.unit_price),
-    }))
-  );
+  // Base lines and pricing-option lines live in ONE array: a row's `option`
+  // decides which block it renders in. There is deliberately no separate list of
+  // option names — deriving them from the rows keeps the two from drifting and
+  // means the saved row order is exactly the order on screen.
+  const [displayRows, setDisplayRows] = useState<DisplayRow[]>(() => initialDisplayRows(quote));
 
   const set = (k: keyof typeof header) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setHeader((h) => ({ ...h, [k]: e.target.value }));
@@ -468,8 +644,8 @@ export function QuoteBuilder({
   // baseline starts at the initial load and is reset to the current view after
   // each successful in-place save.
   const snapshot = useMemo(
-    () => JSON.stringify({ header, pricingRows, displayRows, optionRows }),
-    [header, pricingRows, displayRows, optionRows]
+    () => JSON.stringify({ header, pricingRows, displayRows }),
+    [header, pricingRows, displayRows]
   );
   const [savedSnapshot, setSavedSnapshot] = useState(snapshot);
   const dirty = snapshot !== savedSnapshot;
@@ -479,23 +655,36 @@ export function QuoteBuilder({
     [pricingRows]
   );
 
-  const totals = useMemo(() => {
-    const roundCents = (n: number) => Math.round(n * 100) / 100;
-    // Markup is per line and folded into each line price on the PDF, so it never
-    // shows as its own line to the customer even though it raises the total.
-    // Each line is rounded to cents so this total matches the printed one.
-    const subtotal = displayRows.reduce((s, r) => s + num(r.amount), 0);
-    const total = displayRows.reduce(
-      (s, r) => s + roundCents(num(r.amount) * (1 + num(r.markup) / 100)),
-      0
-    );
-    return { subtotal, markup: total - subtotal, total };
-  }, [displayRows]);
+  /* ---- customer-facing blocks: the base lines, then one per pricing option ---- */
 
-  const anyMarkup = useMemo(
-    () => displayRows.some((r) => num(r.markup) > 0),
+  // Every row paired with its index in `displayRows`, since that's what the row
+  // handlers act on.
+  const entries = useMemo<RowEntry[]>(
+    () => displayRows.map((row, index) => ({ row, index })),
     [displayRows]
   );
+  const baseEntries = useMemo(() => entries.filter((e) => e.row.option === null), [entries]);
+  const optionKeys = useMemo(() => optionKeysOf(displayRows), [displayRows]);
+  const optionBlocks = useMemo(
+    () =>
+      optionKeys.map((key) => ({
+        key,
+        entries: entries.filter((e) => e.row.option === key),
+      })),
+    [optionKeys, entries]
+  );
+
+  // Markup is per line and folded into each line price on the PDF, so it never
+  // shows as its own line to the customer even though it raises the total. Each
+  // line is rounded to cents so these totals match the printed ones. Pricing
+  // options are totalled one at a time and never added into the base total.
+  const baseTotals = useMemo(() => rowTotals(baseEntries.map((e) => e.row)), [baseEntries]);
+  // An options-only quote prints no base table and no base Total, so don't show
+  // a $0.00 one here either.
+  const hasBaseContent = baseEntries.some(
+    (e) => !isRichTextEmpty(e.row.description) || e.row.amount.trim()
+  );
+  const showBaseTotal = hasBaseContent || optionBlocks.length === 0;
 
   /* ---- pricing rows ---- */
   function updatePricing(i: number, patch: Partial<PricingRow>) {
@@ -513,24 +702,46 @@ export function QuoteBuilder({
       return copy;
     });
   }
-  /** Copy the internal pricing subtotal into a new customer line. */
+  /** Copy the internal pricing subtotal into a new base customer line. */
   function pricingToLine() {
-    setDisplayRows((rs) => [
-      ...rs.filter((r) => r.description.trim() || r.amount.trim()),
-      { description: header.project_name || 'Project total', amount: pricingSubtotal.toFixed(2), markup: DEFAULT_MARKUP },
-    ]);
+    const line: DisplayRow = {
+      description: header.project_name || 'Project total',
+      amount: pricingSubtotal.toFixed(2),
+      markup: DEFAULT_MARKUP,
+      option: null,
+    };
+    setDisplayRows((rs) => {
+      // Clear away untouched BASE rows only — an option's rows are never disturbed.
+      const kept = rs.filter(
+        (r) => r.option !== null || !isRichTextEmpty(r.description) || r.amount.trim()
+      );
+      // Insert after the last base row so it lands in the base block, not inside
+      // whichever option happens to be last.
+      const at = kept.reduce((idx, r, i) => (r.option === null ? i + 1 : idx), 0);
+      return [...kept.slice(0, at), line, ...kept.slice(at)];
+    });
   }
 
-  /* ---- display rows ---- */
+  /* ---- display rows (base lines and option lines alike) ---- */
   function updateDisplay(i: number, patch: Partial<DisplayRow>) {
     setDisplayRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
-  const addDisplay = () => setDisplayRows((rs) => [...rs, blankDisplayRow()]);
+  const addDisplay = (option: string | null = null) =>
+    setDisplayRows((rs) => [...rs, blankDisplayRow(option)]);
+  /** Remove a row. The base block always keeps at least one row; options don't. */
   const removeDisplay = (i: number) =>
-    setDisplayRows((rs) => (rs.length === 1 ? rs : rs.filter((_, idx) => idx !== i)));
+    setDisplayRows((rs) => {
+      const isBase = rs[i]?.option === null;
+      if (isBase && rs.filter((r) => r.option === null).length === 1) return rs;
+      return rs.filter((_, idx) => idx !== i);
+    });
+  /** Swap a row with its neighbour *inside the same block*, skipping other blocks. */
   function moveDisplay(i: number, dir: -1 | 1) {
     setDisplayRows((rs) => {
-      const j = i + dir;
+      const block = rs[i]?.option;
+      if (block === undefined) return rs;
+      let j = i + dir;
+      while (j >= 0 && j < rs.length && rs[j].option !== block) j += dir;
       if (j < 0 || j >= rs.length) return rs;
       const copy = [...rs];
       [copy[i], copy[j]] = [copy[j], copy[i]];
@@ -538,19 +749,32 @@ export function QuoteBuilder({
     });
   }
 
-  /* ---- option (alternate) rows ---- */
-  function updateOption(i: number, patch: Partial<OptionRow>) {
-    setOptionRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
-  }
-  const addOption = () => setOptionRows((rs) => [...rs, blankOptionRow()]);
-  const removeOption = (i: number) => setOptionRows((rs) => rs.filter((_, idx) => idx !== i));
-  function moveOption(i: number, dir: -1 | 1) {
-    setOptionRows((rs) => {
+  /* ---- pricing options: named groups of the rows above ---- */
+
+  /** Start a new option, seeded with one blank line so it has something to show. */
+  const addOptionGroup = () =>
+    setDisplayRows((rs) => [...rs, blankDisplayRow(nextOptionName(optionKeysOf(rs)))]);
+
+  /** Rename an option by retagging its rows. Renaming onto an existing name merges them. */
+  const renameOptionGroup = (key: string, name: string) =>
+    setDisplayRows((rs) => rs.map((r) => (r.option === key ? { ...r, option: name } : r)));
+
+  const removeOptionGroup = (key: string) =>
+    setDisplayRows((rs) => rs.filter((r) => r.option !== key));
+
+  /** Move a whole option before/after its neighbour, regrouping rows as it goes. */
+  function moveOptionGroup(key: string, dir: -1 | 1) {
+    setDisplayRows((rs) => {
+      const keys = optionKeysOf(rs);
+      const i = keys.indexOf(key);
       const j = i + dir;
-      if (j < 0 || j >= rs.length) return rs;
-      const copy = [...rs];
-      [copy[i], copy[j]] = [copy[j], copy[i]];
-      return copy;
+      if (i < 0 || j < 0 || j >= keys.length) return rs;
+      const order = [...keys];
+      [order[i], order[j]] = [order[j], order[i]];
+      return [
+        ...rs.filter((r) => r.option === null),
+        ...order.flatMap((k) => rs.filter((r) => r.option === k)),
+      ];
     });
   }
 
@@ -606,9 +830,12 @@ export function QuoteBuilder({
           amount: null,
           markup_rate: 0,
           cost_type: r.cost_type || null,
+          option_group: null,
         })),
+      // Base lines first, then each option's lines in the order shown on screen:
+      // row order is stored as `position`, and that's the only record of it.
       ...displayRows
-        .filter((r) => !isRichTextEmpty(r.description))
+        .filter((r) => r.option === null && !isRichTextEmpty(r.description))
         .map<LineItemInput>((r) => ({
           kind: 'display',
           description: r.description,
@@ -618,19 +845,25 @@ export function QuoteBuilder({
           amount: num(r.amount),
           markup_rate: num(r.markup) / 100,
           cost_type: null,
+          option_group: null,
         })),
-      ...optionRows
-        .filter((r) => r.description.trim() || r.amount.trim())
-        .map<LineItemInput>((r) => ({
-          kind: 'alternate',
-          description: r.description.trim(),
-          quantity: 1,
-          unit: null,
-          unit_price: 0,
-          amount: num(r.amount),
-          markup_rate: 0,
-          cost_type: null,
-        })),
+      ...optionKeys.flatMap<LineItemInput>((key) => {
+        // An option whose name was cleared still needs one to group by.
+        const name = key.trim() || nextOptionName(optionKeys.filter((k) => k.trim()));
+        return displayRows
+          .filter((r) => r.option === key && (!isRichTextEmpty(r.description) || r.amount.trim()))
+          .map<LineItemInput>((r) => ({
+            kind: 'alternate',
+            description: r.description,
+            quantity: 1,
+            unit: null,
+            unit_price: 0,
+            amount: num(r.amount),
+            markup_rate: num(r.markup) / 100,
+            cost_type: null,
+            option_group: name,
+          }));
+      }),
     ];
     const payload: QuoteDocInput = {
       quote_number: header.quote_number || null,
@@ -821,7 +1054,8 @@ export function QuoteBuilder({
         </div>
       </div>
 
-      {/* Customer-facing line items — shown on the PDF */}
+      {/* Customer-facing line items — shown on the PDF. Pricing options live
+          here too: each is a named group of these same lines. */}
       <div className="card p-5">
         <button
           type="button"
@@ -834,179 +1068,109 @@ export function QuoteBuilder({
         </button>
         {lineItemsOpen ? (
           <>
-        <p className="mb-4 mt-1 text-xs text-brand-gray">
-          What the customer sees on the quote — a description, price, and markup per line. Markup is
-          folded into the line price on the PDF; the customer only sees the marked-up total.
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
-                <th className="px-2 py-2 font-semibold">Description</th>
-                <th className="px-2 py-2 text-right font-semibold w-32">Price</th>
-                <th className="px-2 py-2 text-right font-semibold w-24">Markup %</th>
-                <th className="px-2 py-2 text-right font-semibold w-32">Line Total</th>
-                <th className="px-2 py-2 w-24" />
-              </tr>
-            </thead>
-            <tbody>
-              {displayRows.map((r, i) => (
-                <tr key={i} className="border-b border-black/5 last:border-0 align-top">
-                  <td className="px-2 py-2">
-                    <RichTextEditor
-                      value={r.description}
-                      onChange={(html) => updateDisplay(i, { description: html })}
-                      placeholder="Furnish and install new carpet tile throughout corridor …"
-                    />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input
-                      className="input text-right"
-                      inputMode="decimal"
-                      value={r.amount}
-                      onChange={(e) => updateDisplay(i, { amount: e.target.value })}
-                      placeholder="0.00"
-                    />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input
-                      className="input text-right"
-                      inputMode="decimal"
-                      value={r.markup}
-                      onChange={(e) => updateDisplay(i, { markup: e.target.value })}
-                      placeholder="0"
-                    />
-                  </td>
-                  <td className="px-2 py-2 text-right font-semibold text-brand-ink whitespace-nowrap">
-                    {money(num(r.amount) * (1 + num(r.markup) / 100), { cents: true })}
-                  </td>
-                  <td className="px-2 py-2">
-                    <div className="flex items-center justify-end gap-1 text-brand-gray">
-                      <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveDisplay(i, -1)} disabled={i === 0}>↑</button>
-                      <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveDisplay(i, 1)} disabled={i === displayRows.length - 1}>↓</button>
-                      <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-30" onClick={() => removeDisplay(i)} disabled={displayRows.length === 1}>✕</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <button
-          type="button"
-          className="mt-2 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
-          onClick={addDisplay}
-        >
-          + Add Line
-        </button>
-
-        {/* Totals */}
-        <div className="mt-4 flex justify-end">
-          <div className="w-full max-w-xs space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-brand-gray">Subtotal</span>
-              <span className="font-semibold text-brand-ink">{money(totals.subtotal, { cents: true })}</span>
-            </div>
-            {anyMarkup && (
-              <div className="flex justify-between">
-                <span className="text-brand-gray">Markup</span>
-                <span className="font-semibold text-brand-ink">{money(totals.markup, { cents: true })}</span>
-              </div>
-            )}
-            <div className="flex justify-between border-t border-black/10 pt-2 text-base">
-              <span className="font-semibold text-brand-ink">Total</span>
-              <span className="font-bold text-brand-ink">{money(totals.total, { cents: true })}</span>
-            </div>
-            {anyMarkup && (
-              <p className="pt-1 text-xs text-brand-gray">
-                Markup is folded into each line price on the customer PDF — it raises the total but
-                isn&apos;t shown as its own line.
-              </p>
-            )}
-          </div>
-        </div>
-          </>
-        ) : (
-          <p className="mt-1 text-xs text-brand-gray">
-            Collapsed · Total{' '}
-            <span className="font-semibold text-brand-ink">{money(totals.total, { cents: true })}</span>
-          </p>
-        )}
-      </div>
-
-      {/* Pricing options — full-price alternatives the customer picks between */}
-      <div className="card p-5">
-        <button
-          type="button"
-          className="flex items-center gap-2 text-left"
-          onClick={() => setOptionsOpen((o) => !o)}
-          aria-expanded={optionsOpen}
-        >
-          <span className="text-brand-gray transition-transform">{optionsOpen ? '▾' : '▸'}</span>
-          <h2 className="brand-heading text-sm text-brand-ink">Pricing Options</h2>
-        </button>
-        {optionsOpen ? (
-          <>
             <p className="mb-4 mt-1 text-xs text-brand-gray">
-              Optional. Full-price alternatives the customer picks between (e.g. “2025 Pricing”,
-              “2026 Pricing”). Each shows as its own price on the quote and is{' '}
-              <span className="font-semibold">never added into the Total above</span>.
+              What the customer sees on the quote — a description, price, and markup per line. Markup
+              is folded into the line price on the PDF; the customer only sees the marked-up total.
             </p>
-            {optionRows.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-sm">
-                  <thead>
-                    <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
-                      <th className="px-2 py-2 font-semibold">Option name / description</th>
-                      <th className="px-2 py-2 text-right font-semibold w-40">Price</th>
-                      <th className="px-2 py-2 w-24" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {optionRows.map((r, i) => (
-                      <tr key={i} className="border-b border-black/5 last:border-0 align-top">
-                        <td className="px-2 py-2">
-                          <input
-                            className="input"
-                            value={r.description}
-                            onChange={(e) => updateOption(i, { description: e.target.value })}
-                            placeholder="2026 Pricing (projected material increase)"
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            className="input text-right"
-                            inputMode="decimal"
-                            value={r.amount}
-                            onChange={(e) => updateOption(i, { amount: e.target.value })}
-                            placeholder="0.00"
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <div className="flex items-center justify-end gap-1 text-brand-gray">
-                            <button type="button" aria-label="Move up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveOption(i, -1)} disabled={i === 0}>↑</button>
-                            <button type="button" aria-label="Move down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveOption(i, 1)} disabled={i === optionRows.length - 1}>↓</button>
-                            <button type="button" aria-label="Remove" className="rounded p-1 text-red-600 hover:bg-red-50" onClick={() => removeOption(i)}>✕</button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+
+            <LineItemTable
+              entries={baseEntries}
+              canRemove={baseEntries.length > 1}
+              onChange={updateDisplay}
+              onMove={moveDisplay}
+              onRemove={removeDisplay}
+            />
+
             <button
               type="button"
               className="mt-2 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
-              onClick={addOption}
+              onClick={() => addDisplay(null)}
             >
-              + Add Option
+              + Add Line
             </button>
+
+            {showBaseTotal && (
+              <TotalsPanel rows={baseEntries.map((e) => e.row)} label="Total" explain />
+            )}
+
+            {/* Pricing options — each one priced on its own, never added together */}
+            {optionBlocks.map((block, bi) => (
+              // Keyed by position, not by name, so renaming doesn't remount the
+              // name input mid-keystroke.
+              <div key={bi} className="mt-6 rounded-xl border border-black/10 bg-black/[0.02] p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
+                    Option
+                  </span>
+                  <input
+                    className="input flex-1 min-w-[12rem] font-semibold"
+                    value={block.key}
+                    onChange={(e) => renameOptionGroup(block.key, e.target.value)}
+                    placeholder="2026 Pricing (projected material increase)"
+                    aria-label="Option name"
+                  />
+                  <div className="flex items-center gap-1 text-brand-gray">
+                    <button type="button" aria-label="Move option up" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveOptionGroup(block.key, -1)} disabled={bi === 0}>↑</button>
+                    <button type="button" aria-label="Move option down" className="rounded p-1 hover:bg-black/5 disabled:opacity-30" onClick={() => moveOptionGroup(block.key, 1)} disabled={bi === optionBlocks.length - 1}>↓</button>
+                    <button type="button" aria-label="Remove option" className="rounded p-1 text-red-600 hover:bg-red-50" onClick={() => removeOptionGroup(block.key)}>✕</button>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <LineItemTable
+                    entries={block.entries}
+                    canRemove
+                    onChange={updateDisplay}
+                    onMove={moveDisplay}
+                    onRemove={removeDisplay}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
+                  onClick={() => addDisplay(block.key)}
+                >
+                  + Add Line to this option
+                </button>
+
+                <TotalsPanel
+                  rows={block.entries.map((e) => e.row)}
+                  label={`${block.key.trim() || 'Option'} Total`}
+                />
+              </div>
+            ))}
+
+            <button
+              type="button"
+              className="mt-4 w-full rounded-lg border border-dashed border-black/15 py-2 text-sm font-medium text-brand-gray hover:border-brand-green hover:text-brand-green"
+              onClick={addOptionGroup}
+            >
+              + Add Pricing Option
+            </button>
+            <p className="mt-2 text-xs text-brand-gray">
+              A pricing option is an alternative the customer picks between (e.g. “2025 Pricing”,
+              “2026 Pricing”). Each option is priced from its own lines and is{' '}
+              <span className="font-semibold">
+                never added into the Total above or into another option
+              </span>
+              .
+            </p>
           </>
         ) : (
           <p className="mt-1 text-xs text-brand-gray">
-            Collapsed · {optionRows.length} option{optionRows.length === 1 ? '' : 's'}
+            Collapsed
+            {showBaseTotal && (
+              <>
+                {' · '}Total{' '}
+                <span className="font-semibold text-brand-ink">
+                  {money(baseTotals.total, { cents: true })}
+                </span>
+              </>
+            )}
+            {optionBlocks.length > 0 && (
+              <> · {optionBlocks.length} pricing option{optionBlocks.length === 1 ? '' : 's'}</>
+            )}
           </p>
         )}
       </div>
@@ -1164,7 +1328,14 @@ export function QuoteBuilder({
             </div>
           </div>
         ) : (
-          <p className="mt-1 text-xs text-brand-gray">Collapsed</p>
+          // Say what's in there — new quotes arrive with the company default
+          // terms pre-filled, and collapsing shouldn't hide that from the sender.
+          <p className="mt-1 text-xs text-brand-gray">
+            Collapsed ·{' '}
+            {[header.terms.trim() && 'terms set', header.notes.trim() && 'notes set']
+              .filter(Boolean)
+              .join(' · ') || 'no terms or notes'}
+          </p>
         )}
       </div>
 
@@ -1362,8 +1533,10 @@ export function QuoteBuilder({
         )}
         {quote ? (
           <>
+            {/* The quote already exists, so leaving is always a Close — never a
+                Cancel. Unsaved edits are still caught by handleClose. */}
             <button type="button" className="btn-secondary" onClick={handleClose} disabled={saving}>
-              {hasSavedInPlace ? 'Close' : 'Cancel'}
+              Close
             </button>
             <button type="button" className="btn-secondary" onClick={() => save('stay')} disabled={saving || !dirty}>
               {saving ? 'Saving…' : 'Save'}

@@ -110,17 +110,34 @@ function sanitizeDoc(input: QuoteDocInput): QuoteDocInput {
     prepared_by: clean(input.prepared_by),
     internal_notes: clean(input.internal_notes),
     items: (input.items ?? [])
-      .filter((it) => (it.description ?? '').trim() !== '')
-      .map((it) => ({
-        kind: it.kind === 'pricing' ? ('pricing' as const) : ('display' as const),
-        description: it.description.trim(),
-        quantity: Number.isFinite(it.quantity) ? it.quantity : 0,
-        unit: clean(it.unit),
-        unit_price: Number.isFinite(it.unit_price) ? it.unit_price : 0,
-        amount: it.amount != null && Number.isFinite(it.amount) ? it.amount : null,
-        markup_rate: Number.isFinite(it.markup_rate) ? Math.max(0, it.markup_rate) : 0,
-        cost_type: clean(it.cost_type),
-      })),
+      // Blank rows are dropped — except a priced option line, which is still
+      // worth keeping even if its description was left empty.
+      .filter(
+        (it) =>
+          (it.description ?? '').trim() !== '' ||
+          (it.kind === 'alternate' && it.amount != null && Number.isFinite(it.amount))
+      )
+      .map((it) => {
+        const kind =
+          it.kind === 'pricing'
+            ? ('pricing' as const)
+            : it.kind === 'alternate'
+              ? ('alternate' as const)
+              : ('display' as const);
+        return {
+          kind,
+          description: (it.description ?? '').trim(),
+          quantity: Number.isFinite(it.quantity) ? it.quantity : 0,
+          unit: clean(it.unit),
+          unit_price: Number.isFinite(it.unit_price) ? it.unit_price : 0,
+          amount: it.amount != null && Number.isFinite(it.amount) ? it.amount : null,
+          markup_rate: Number.isFinite(it.markup_rate) ? Math.max(0, it.markup_rate) : 0,
+          cost_type: clean(it.cost_type),
+          // A group name only means something on an option line; `clean` maps ''
+          // to null so a blank name can't become a distinct grouping key.
+          option_group: kind === 'alternate' ? clean(it.option_group) : null,
+        };
+      }),
   };
 }
 

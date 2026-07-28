@@ -455,10 +455,11 @@ export function BulkUpload({
   const displayTotal = displayLines.reduce((s, l) => s + lineTotal(l), 0);
   const hasDisplay = displayLines.length > 0;
   const manualBid = parseNumber(header.bid_value) ?? 0;
-  const firstOption = optionLines.length ? lineTotal(optionLines[0]) : 0;
+  // Matches headlineBid() in data.ts, so the preview shows what gets saved.
+  const highestOption = optionLines.length ? Math.max(...optionLines.map(lineTotal)) : 0;
   // Options are alternatives, never summed. Bid = base line total, else the
-  // first option's price, else the manual bid value.
-  const effectiveBid = hasDisplay ? displayTotal : optionLines.length ? firstOption : manualBid;
+  // highest option's price, else the manual bid value.
+  const effectiveBid = hasDisplay ? displayTotal : optionLines.length ? highestOption : manualBid;
   const bidLocked = hasDisplay || optionLines.length > 0;
 
   // Split the shared list into the two sections, keeping each row's real index
@@ -536,6 +537,9 @@ export function BulkUpload({
           amount: parseNumber(l.amount),
           markup_rate: 0,
           cost_type: l.cost_type.trim() || null,
+          // Imported options are single-line and ungrouped; they get named and
+          // grouped the first time the quote is edited in the quote builder.
+          option_group: null,
         })),
     };
 
@@ -754,7 +758,7 @@ export function BulkUpload({
               {hasDisplay
                 ? `Calculated from line items: ${money(displayTotal)}`
                 : optionLines.length
-                  ? `From the first option: ${money(firstOption)}`
+                  ? `From the highest option: ${money(highestOption)}`
                   : 'Used when there are no line items or options.'}
             </p>
           </div>

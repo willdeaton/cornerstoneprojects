@@ -228,6 +228,13 @@ async function migrate(pool: Pool) {
     -- Material, Equipment Rentals, Travel, Project Management). NULL for
     -- display rows and older worksheet rows created before the field existed.
     ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS cost_type TEXT;
+    -- Name of the pricing option a customer-facing line belongs to. Option lines
+    -- are 'alternate' rows grouped by this name: each option is totalled on its
+    -- own and never summed into the base Total. For rows written from here on the
+    -- invariant is kind='alternate' <=> option_group IS NOT NULL; an 'alternate'
+    -- row with a NULL option_group is a legacy single-line option (imported
+    -- before options had line items) and stands alone as its own option.
+    ALTER TABLE quote_line_items ADD COLUMN IF NOT EXISTS option_group TEXT;
 
     CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
     CREATE INDEX IF NOT EXISTS idx_quote_items_quote ON quote_line_items(quote_id);
