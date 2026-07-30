@@ -187,6 +187,24 @@ export interface Project {
   updated_at: string;
 }
 
+/**
+ * One invoice raised against a project. `billed` means it has gone out to the
+ * customer; `paid` means the money has come in. They're tracked separately —
+ * an invoice can be billed and unpaid, and marking it paid implies it was
+ * billed, so the UI keeps both flags in step.
+ */
+export interface ProjectInvoice {
+  id: number;
+  project_id: number;
+  invoice_number: string | null;
+  amount: number;
+  billed: boolean;
+  paid: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectFile {
   id: number;
   project_id: number;

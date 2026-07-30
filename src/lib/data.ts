@@ -11,6 +11,7 @@ import type {
   Note,
   TimeEntry,
   ProjectFile,
+  ProjectInvoice,
   QuoteFile,
   QuoteStatus,
   ProjectStatus,
@@ -417,6 +418,62 @@ export async function updateProject(
 
 export async function deleteProject(id: number): Promise<void> {
   await q('DELETE FROM projects WHERE id = $1', [id]);
+}
+
+/* ----------------------------------------------------- Project invoices */
+
+export async function listProjectInvoices(projectId: number): Promise<ProjectInvoice[]> {
+  return q<ProjectInvoice>(
+    'SELECT * FROM project_invoices WHERE project_id = $1 ORDER BY position, id',
+    [projectId]
+  );
+}
+
+/** Append an invoice to a project, ordered after the existing ones. */
+export async function addProjectInvoice(inv: {
+  project_id: number;
+  invoice_number?: string | null;
+  amount?: number;
+  billed?: boolean;
+  paid?: boolean;
+}): Promise<number> {
+  const row = await one<{ id: number }>(
+    `INSERT INTO project_invoices (project_id, invoice_number, amount, billed, paid, position)
+     VALUES ($1,$2,$3,$4,$5,
+       (SELECT COALESCE(MAX(position), 0) + 1 FROM project_invoices WHERE project_id = $1))
+     RETURNING id`,
+    [
+      inv.project_id,
+      inv.invoice_number ?? null,
+      inv.amount ?? 0,
+      inv.billed ?? false,
+      inv.paid ?? false,
+    ]
+  );
+  return row!.id;
+}
+
+export async function updateProjectInvoice(
+  id: number,
+  fields: Partial<Pick<ProjectInvoice, 'invoice_number' | 'amount' | 'billed' | 'paid'>>
+): Promise<void> {
+  const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (entries.length === 0) return;
+  const set = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
+  const values = entries.map(([, v]) => v);
+  await q(
+    `UPDATE project_invoices SET ${set}, updated_at = now() WHERE id = $${entries.length + 1}`,
+    [...values, id]
+  );
+}
+
+/** Keep an invoice's place in the project's list (1-based). */
+export async function setProjectInvoicePosition(id: number, position: number): Promise<void> {
+  await q('UPDATE project_invoices SET position = $1 WHERE id = $2', [position, id]);
+}
+
+export async function deleteProjectInvoice(id: number): Promise<void> {
+  await q('DELETE FROM project_invoices WHERE id = $1', [id]);
 }
 
 /* -------------------------------------------------------- Project files */
@@ -1127,6 +1184,13 @@ export async function getBackupData(from: string, to: string): Promise<BackupDat
     [from, to]
   );
   const projectIds = projects.map((p) => p.id);
+  const invoices = projectIds.length
+    ? await q<ProjectInvoice>(
+        `SELECT * FROM project_invoices WHERE project_id = ANY($1::int[])
+          ORDER BY project_id, position, id`,
+        [projectIds]
+      )
+    : [];
   const notes = projectIds.length
     ? await q<Note>(
         `SELECT * FROM notes WHERE project_id = ANY($1::int[]) ORDER BY project_id, created_at`,
@@ -1197,6 +1261,7 @@ export async function getBackupData(from: string, to: string): Promise<BackupDat
   return {
     quotes: quotesWithItems,
     projects,
+    invoices,
     notes,
     projectFiles,
     timeEntries,

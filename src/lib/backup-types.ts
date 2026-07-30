@@ -7,6 +7,7 @@ import type {
   Quote,
   QuoteLineItem,
   Project,
+  ProjectInvoice,
   Note,
   Customer,
   CustomerContact,
@@ -51,6 +52,7 @@ export interface BackupProjectFile {
 export interface BackupData {
   quotes: BackupQuote[];
   projects: Project[];
+  invoices: ProjectInvoice[];
   notes: Note[];
   projectFiles: BackupProjectFile[];
   timeEntries: BackupTimeEntry[];

@@ -25,6 +25,12 @@ export interface FileUploadState {
 
 const MAX_BYTES = 10_000_000; // 10 MB
 
+/**
+ * Upload one or more files to a project. The picker and the drop zone both
+ * allow multiple files, so every `file` entry on the form is stored. Oversized
+ * files are skipped rather than failing the whole batch, and are named back to
+ * the user so it's clear what didn't make it.
+ */
 export async function uploadProjectFileAction(
   _prev: FileUploadState,
   formData: FormData
@@ -33,30 +39,44 @@ export async function uploadProjectFileAction(
   const projectId = Number(formData.get('project_id'));
   if (!projectId) return { error: 'Missing project.' };
 
-  const file = formData.get('file');
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: 'Choose a file to upload.' };
-  }
-  if (file.size > MAX_BYTES) {
-    return { error: 'File must be under 10 MB.' };
-  }
+  const files = formData.getAll('file').filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { error: 'Choose a file to upload.' };
 
-  const buf = Buffer.from(await file.arrayBuffer());
-  const mime = file.type || 'application/octet-stream';
-  const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+  const uploaded: string[] = [];
+  const tooBig: string[] = [];
 
-  await addProjectFile({
-    project_id: projectId,
-    filename: file.name || 'upload',
-    mime,
-    size: file.size,
-    data: dataUrl,
-    uploaded_by: user.id,
-    uploader_name: user.name,
-  });
+  for (const file of files) {
+    if (file.size > MAX_BYTES) {
+      tooBig.push(file.name || 'upload');
+      continue;
+    }
+
+    const buf = Buffer.from(await file.arrayBuffer());
+    const mime = file.type || 'application/octet-stream';
+    const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+
+    await addProjectFile({
+      project_id: projectId,
+      filename: file.name || 'upload',
+      mime,
+      size: file.size,
+      data: dataUrl,
+      uploaded_by: user.id,
+      uploader_name: user.name,
+    });
+    uploaded.push(file.name || 'upload');
+  }
 
   revalidatePath(`/projects/${projectId}`);
-  return { success: `Uploaded ${file.name}.` };
+
+  if (uploaded.length === 0) {
+    return { error: `Each file must be under 10 MB — skipped ${tooBig.join(', ')}.` };
+  }
+  const success =
+    uploaded.length === 1 ? `Uploaded ${uploaded[0]}.` : `Uploaded ${uploaded.length} files.`;
+  return tooBig.length
+    ? { success, error: `Skipped (over 10 MB): ${tooBig.join(', ')}.` }
+    : { success };
 }
 
 export async function deleteProjectFileAction(fileId: number, projectId: number) {

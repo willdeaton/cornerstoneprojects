@@ -7,6 +7,7 @@ import {
   listProjectTime,
   projectHours,
   listProjectFiles,
+  listProjectInvoices,
 } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
 import { ProjectStatusBadge } from '@/components/ui';
@@ -30,6 +31,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const timeEntries = await listProjectTime(id);
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
+  const invoices = await listProjectInvoices(id);
 
   return (
     <div>
@@ -94,7 +96,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             />
           </div>
 
-          <InvoiceSection project={project} />
+          <InvoiceSection project={project} invoices={invoices} />
 
           <NotesSection projectId={project.id} notes={notes} currentUserId={user.id} />
         </div>
