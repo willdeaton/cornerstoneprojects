@@ -98,20 +98,10 @@ export function AppShell({
     })),
   };
 
-  // Temporary admin-only bulk importer for the initial data load. Remove this
-  // entry (and the DownloadIcon below) when the tool is deleted.
-  const bulkUploadEntry: LinkEntry = {
-    kind: 'link',
-    href: '/bulk-upload',
-    label: 'Bulk Upload',
-    icon: UploadIcon,
-  };
-
   const nav: NavEntry[] = [
     ...BASE_NAV,
     timeEntry,
     ...(canManageUsers ? [settingsEntry] : []),
-    ...(user.role === 'admin' ? [bulkUploadEntry] : []),
   ];
 
   const NavLinks = ({ rail = false, mobile = false }: { rail?: boolean; mobile?: boolean }) => (
@@ -609,15 +599,6 @@ function ClockIcon() {
   return (
     <svg {...base()}>
       <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-// Temporary — paired with the Bulk Upload nav entry; remove with the tool.
-function UploadIcon() {
-  return (
-    <svg {...base()}>
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <path d="M17 8l-5-5-5 5M12 3v12" />
     </svg>
   );
 }
