@@ -356,6 +356,47 @@ Your City, ST 00000',
   `);
 
   /* ==================================================================
+   * Invoicing.
+   *
+   * A project is billed with one or more invoices, each with its own amount
+   * and two independent flags: whether it has been sent to the customer
+   * (billed) and whether the money has landed (paid). This replaces the old
+   * free-text projects.invoice_numbers field, which is kept (unused by the UI)
+   * so the one-time backfill below stays re-runnable and nothing is lost.
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_invoices (
+      id             SERIAL PRIMARY KEY,
+      project_id     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      invoice_number TEXT,
+      amount         DOUBLE PRECISION NOT NULL DEFAULT 0,
+      billed         BOOLEAN NOT NULL DEFAULT FALSE,
+      paid           BOOLEAN NOT NULL DEFAULT FALSE,
+      position       INTEGER NOT NULL DEFAULT 0,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_invoices_project ON project_invoices(project_id);
+  `);
+
+  // One-time backfill: split the legacy comma-separated invoice_numbers into
+  // one row per invoice (amount unknown, so 0). The settings marker makes this
+  // run exactly once, so invoices edited afterwards are never re-created.
+  await pool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM settings WHERE key = 'invoices_backfilled_v1') THEN
+        INSERT INTO project_invoices (project_id, invoice_number, position)
+        SELECT p.id, btrim(t.part), t.ord
+          FROM projects p
+          CROSS JOIN LATERAL unnest(string_to_array(p.invoice_numbers, ',')) WITH ORDINALITY AS t(part, ord)
+         WHERE p.invoice_numbers IS NOT NULL AND btrim(t.part) <> '';
+        INSERT INTO settings (key, value) VALUES ('invoices_backfilled_v1', '1')
+        ON CONFLICT (key) DO NOTHING;
+      END IF;
+    END $$;
+  `);
+
+  /* ==================================================================
    * Self-service password reset.
    *
    * A user who forgets their password requests a reset from the login

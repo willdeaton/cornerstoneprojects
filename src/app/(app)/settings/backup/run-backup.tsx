@@ -105,12 +105,24 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
       'Start Date': p.start_date ?? '',
       'End Date': p.end_date ?? '',
       'Due Date': p.due_date ?? '',
-      'Invoice Numbers': p.invoice_numbers ?? '',
       Created: p.created_at,
     }))
   );
 
   const projectName = new Map(data.projects.map((p) => [p.id, p.name]));
+
+  addSheet(
+    'Invoices',
+    data.invoices.map((inv) => ({
+      Project: projectName.get(inv.project_id) ?? `#${inv.project_id}`,
+      'Invoice #': inv.invoice_number ?? '',
+      Amount: inv.amount,
+      Billed: inv.billed ? 'Yes' : 'No',
+      Paid: inv.paid ? 'Yes' : 'No',
+      Created: inv.created_at,
+    }))
+  );
+
   addSheet(
     'Project Notes',
     data.notes.map((n) => ({
