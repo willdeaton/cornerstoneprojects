@@ -44,6 +44,15 @@ export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
               </select>
             </div>
           </div>
+          <div>
+            <label className="label">Hourly rate ($/hr)</label>
+            <input
+              name="hourly_rate"
+              className="input"
+              inputMode="decimal"
+              placeholder="e.g. 22.50 (optional)"
+            />
+          </div>
           <p className="text-xs text-brand-gray">
             Workers can clock in/out and add notes. Managers &amp; admins can also manage users.
           </p>

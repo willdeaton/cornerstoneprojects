@@ -3,7 +3,7 @@
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AdminWeek } from '@/lib/data';
-import { shortDate, dateTime, duration } from '@/lib/format';
+import { shortDate, dateTime, duration, money } from '@/lib/format';
 import { setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
 import {
   TimeEntryModal,
@@ -147,6 +147,7 @@ export function TimesheetReview({
                 <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
                   <th className="px-5 py-2.5 font-semibold">Employee</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Net Hours</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Check Amount</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Shifts</th>
                   <th className="px-3 py-2.5 font-semibold">Status</th>
                   <th className="px-5 py-2.5 text-right font-semibold">Paid</th>
@@ -181,6 +182,13 @@ export function TimesheetReview({
                         <td className="px-3 py-3 text-right font-semibold text-brand-ink">
                           {u.total_hours.toFixed(1)}h
                         </td>
+                        <td className="px-3 py-3 text-right font-semibold text-brand-ink">
+                          {u.hourly_rate != null ? (
+                            money(u.total_hours * u.hourly_rate, { cents: true })
+                          ) : (
+                            <span className="font-normal text-brand-gray">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-3 text-right text-brand-gray">{u.closed_count}</td>
                         <td className="px-3 py-3">
                           {u.closed_count === 0 ? (
@@ -209,7 +217,7 @@ export function TimesheetReview({
 
                       {isOpen && (
                         <tr className="border-b border-black/5 bg-black/[0.015]">
-                          <td colSpan={5} className="px-5 py-3">
+                          <td colSpan={6} className="px-5 py-3">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr className="text-left uppercase tracking-wide text-brand-gray">
