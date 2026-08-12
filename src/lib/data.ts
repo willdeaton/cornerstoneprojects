@@ -713,6 +713,7 @@ export interface AdminTimeEntry {
   clock_out: string | null;
   note: string | null;
   paid: boolean;
+  check_number: string | null;
   break_minutes: number;
   net_hours: number;
 }
@@ -728,6 +729,10 @@ export interface AdminWeekUser {
   unpaid_hours: number;
   closed_count: number;
   all_paid: boolean;
+  /** Check number(s) recorded when the week was marked paid: the distinct
+   *  non-null values across the week's paid entries, comma-joined when a
+   *  week was paid across multiple checks. */
+  check_number: string | null;
 }
 
 export interface AdminWeek {
@@ -755,12 +760,13 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     clock_out: string | null;
     note: string | null;
     paid: boolean;
+    check_number: string | null;
     week_start: string;
     break_seconds: number;
   }>(
     `SELECT t.id, t.user_id, u.name AS user_name, u.hourly_rate,
             t.project_id, p.name AS project_name, p.customer,
-            t.clock_in, t.clock_out, t.note, t.paid,
+            t.clock_in, t.clock_out, t.note, t.paid, t.check_number,
             to_char(date_trunc('week', t.clock_in), 'YYYY-MM-DD') AS week_start,
             COALESCE((
               SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
@@ -792,6 +798,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
       clock_out: r.clock_out,
       note: r.note,
       paid: r.paid,
+      check_number: r.check_number,
       break_minutes: breakMinutes,
       net_hours: netHours,
     };
@@ -813,6 +820,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
         unpaid_hours: 0,
         closed_count: 0,
         all_paid: true,
+        check_number: null,
       };
       byUser.set(r.user_id, u);
     }
@@ -832,6 +840,14 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
     .map(([week_start, byUser]) => {
       const users = [...byUser.values()].sort((a, b) => a.user_name.localeCompare(b.user_name));
+      for (const u of users) {
+        const checks = [
+          ...new Set(
+            u.entries.filter((e) => e.paid && e.check_number).map((e) => e.check_number as string)
+          ),
+        ];
+        u.check_number = checks.length > 0 ? checks.join(', ') : null;
+      }
       const total_hours = users.reduce((s, u) => s + u.total_hours, 0);
       const unpaid_hours = users.reduce((s, u) => s + u.unpaid_hours, 0);
       return {
@@ -846,34 +862,41 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
   return weeks_out;
 }
 
-/** Mark a single time entry paid/unpaid. */
+/** Mark a single time entry paid/unpaid. Unmarking clears the check number. */
 export async function setEntryPaid(entryId: number, paid: boolean, adminId: number): Promise<void> {
   await q(
     `UPDATE time_entries
      SET paid = $1,
          paid_at = CASE WHEN $1 THEN now() ELSE NULL END,
-         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END
+         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END,
+         check_number = CASE WHEN $1 THEN check_number ELSE NULL END
      WHERE id = $3`,
     [paid, adminId, entryId]
   );
 }
 
-/** Mark every closed entry for a user in a given ISO week paid/unpaid. */
+/** Mark every closed entry for a user in a given ISO week paid/unpaid,
+ *  recording the payroll check number when marking paid (cleared when
+ *  unmarking). When marking paid without a check number, any check number
+ *  already recorded on an entry is preserved rather than erased. */
 export async function setWeekPaid(
   userId: number,
   weekStart: string,
   paid: boolean,
-  adminId: number
+  adminId: number,
+  checkNumber?: string | null
 ): Promise<void> {
+  const check = paid ? (checkNumber?.trim() || null) : null;
   await q(
     `UPDATE time_entries
      SET paid = $1,
          paid_at = CASE WHEN $1 THEN now() ELSE NULL END,
-         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END
+         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END,
+         check_number = CASE WHEN $1 THEN COALESCE($5, check_number) ELSE NULL END
      WHERE user_id = $3
        AND clock_out IS NOT NULL
        AND date_trunc('week', clock_in) = date_trunc('week', $4::date)`,
-    [paid, adminId, userId, weekStart]
+    [paid, adminId, userId, weekStart, check]
   );
 }
 
