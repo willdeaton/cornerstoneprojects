@@ -38,6 +38,7 @@ export default async function TimesheetsPage() {
         weeks={weeks}
         projects={projects.map((p) => ({ id: p.id, name: p.name, customer: p.customer }))}
         users={users.map((u) => ({ id: u.id, name: u.name }))}
+        isAdmin={me.role === 'admin'}
       />
     </div>
   );

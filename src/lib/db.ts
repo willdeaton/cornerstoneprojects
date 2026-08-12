@@ -362,6 +362,14 @@ Your City, ST 00000',
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    -- Payroll check number recorded when an admin marks a week paid.
+    ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS check_number TEXT;
+  `);
+
+  // Per-user hourly pay rate for the weekly check calculation on Timesheets.
+  // NULL = no rate set. Visible/editable only by admins and managers.
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS hourly_rate DOUBLE PRECISION;
   `);
 
   /* ==================================================================

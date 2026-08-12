@@ -34,6 +34,7 @@ export default async function TimePage() {
               active
                 ? {
                     id: active.id,
+                    projectId: active.project_id,
                     projectName: active.project_name,
                     customer: active.customer,
                     clockIn: active.clock_in,
