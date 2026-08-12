@@ -8,7 +8,10 @@ import {
   projectHours,
   listProjectFiles,
   listProjectInvoices,
+  listActiveWorkers,
 } from '@/lib/data';
+import { listScheduleTasks, listSubcontractors, listHolidays } from '@/lib/schedule-data';
+import { computeSchedule, projectedEnd } from '@/lib/schedule-math';
 import { money, shortDate } from '@/lib/format';
 import { ProjectStatusBadge } from '@/components/ui';
 import { StatusProgress } from './StatusProgress';
@@ -17,6 +20,7 @@ import { ProjectTime } from './ProjectTime';
 import { ProjectHeaderActions } from './ProjectHeaderActions';
 import { ProjectFiles } from './ProjectFiles';
 import { InvoiceSection } from './InvoiceSection';
+import { ScheduleSection } from './ScheduleSection';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +36,18 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
   const invoices = await listProjectInvoices(id);
+  const [scheduleTasks, holidays, workers, subs] = await Promise.all([
+    listScheduleTasks({ projectId: id }),
+    listHolidays(),
+    listActiveWorkers(),
+    listSubcontractors({ activeOnly: true }),
+  ]);
+  const holidayDays = holidays.map((h) => h.day);
+  // Projected finish = the latest end across the scheduled phases, chains resolved.
+  const projectedFinish = projectedEnd(
+    scheduleTasks.map((t) => t.id),
+    computeSchedule(scheduleTasks, { holidays: new Set(holidayDays) }).windows
+  );
 
   return (
     <div>
@@ -76,11 +92,16 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
       </div>
 
       {/* Summary strip */}
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-6">
         <Stat label="Contract Value" value={money(project.value)} />
         <Stat label="Hours Logged" value={`${hours.toFixed(1)}h`} />
         <Stat label="Start" value={shortDate(project.start_date)} />
         <Stat label="End" value={shortDate(project.end_date)} />
+        <Stat
+          label="Projected Finish"
+          value={shortDate(projectedFinish)}
+          alert={!!(projectedFinish && project.due_date && projectedFinish > project.due_date)}
+        />
         <Stat label="Due" value={shortDate(project.due_date)} />
       </div>
 
@@ -95,6 +116,19 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
               progress={project.progress}
             />
           </div>
+
+          <ScheduleSection
+            project={{
+              id: project.id,
+              name: project.name,
+              customer: project.customer,
+              due_date: project.due_date,
+            }}
+            tasks={scheduleTasks}
+            workers={workers.map((w) => ({ id: w.id, name: w.name, role: w.role }))}
+            subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
+            holidays={holidayDays}
+          />
 
           <InvoiceSection project={project} invoices={invoices} />
 
@@ -111,11 +145,13 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
   return (
     <div className="card p-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">{label}</p>
-      <p className="mt-1 text-lg font-bold text-brand-ink">{value}</p>
+      <p className={`mt-1 text-lg font-bold ${alert ? 'text-amber-700' : 'text-brand-ink'}`}>
+        {value}
+      </p>
     </div>
   );
 }

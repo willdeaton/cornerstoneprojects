@@ -30,6 +30,7 @@ const BASE_NAV: LinkEntry[] = [
   { kind: 'link', href: '/dashboard', label: 'Dashboard', icon: DashIcon },
   { kind: 'link', href: '/quotes', label: 'Quotes', icon: QuoteIcon },
   { kind: 'link', href: '/projects', label: 'Projects', icon: ProjectIcon },
+  { kind: 'link', href: '/schedule', label: 'Schedule', icon: CalendarIcon },
 ];
 
 export function AppShell({
@@ -592,6 +593,14 @@ function ProjectIcon() {
   return (
     <svg {...base()}>
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  );
+}
+function CalendarIcon() {
+  return (
+    <svg {...base()}>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M8 3v4M16 3v4M3 11h18" />
     </svg>
   );
 }

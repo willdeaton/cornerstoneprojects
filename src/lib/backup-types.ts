@@ -12,6 +12,8 @@ import type {
   Customer,
   CustomerContact,
   PricingItem,
+  Subcontractor,
+  TaskStatus,
 } from './types';
 // Type-only import — erased at compile time, so the `server-only` guard in
 // company.ts never reaches the client bundle.
@@ -47,6 +49,26 @@ export interface BackupProjectFile {
   created_at: string;
 }
 
+/**
+ * One scheduled phase, flattened with its dates already resolved from the
+ * dependency chain — the export carries the real dates, not the raw earliest
+ * start, so a spreadsheet reader sees what the timeline showed.
+ */
+export interface BackupSchedulePhase {
+  project_id: number;
+  project_name: string;
+  phase: string;
+  start_date: string;
+  end_date: string;
+  working_days: number;
+  status: TaskStatus;
+  /** Name of the phase this one follows, blank when it stands alone. */
+  follows: string;
+  /** Assigned employees and subs, comma-separated. */
+  crew: string;
+  notes: string | null;
+}
+
 /** Everything gathered for a date-range backup, before the client turns it
  *  into a workbook + PDFs + zip. */
 export interface BackupData {
@@ -58,6 +80,8 @@ export interface BackupData {
   timeEntries: BackupTimeEntry[];
   customers: BackupCustomer[];
   pricing: PricingItem[];
+  subcontractors: Subcontractor[];
+  schedule: BackupSchedulePhase[];
 }
 
 /** The full API response: the gathered data plus context the client needs. */

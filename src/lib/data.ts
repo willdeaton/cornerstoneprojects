@@ -21,14 +21,18 @@ import type {
   PricingItem,
   Unit,
   Category,
+  Subcontractor,
+  TaskStatus,
 } from './types';
 import type {
   BackupData,
   BackupQuote,
   BackupProjectFile,
   BackupTimeEntry,
+  BackupSchedulePhase,
 } from './backup-types';
 import { hoursBetween } from './format';
+import { computeSchedule, workingDaySpan } from './schedule-math';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
 
@@ -37,13 +41,17 @@ export { lineAmount, groupQuoteLines } from './quote-math';
 
 /* -------------------------------------------------------------- Query helpers */
 
-async function q<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+// Exported so sibling data modules (./schedule-data) share one set of helpers.
+export async function q<T = Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+): Promise<T[]> {
   const db = await getDb();
   const res = await db.query(text, params);
   return res.rows as T[];
 }
 
-async function one<T = Record<string, unknown>>(
+export async function one<T = Record<string, unknown>>(
   text: string,
   params: unknown[] = []
 ): Promise<T | undefined> {
@@ -1253,9 +1261,11 @@ export async function getBackupData(from: string, to: string): Promise<BackupDat
       : 0,
   }));
 
-  const [customers, pricing] = await Promise.all([
+  const [customers, pricing, subcontractors, schedule] = await Promise.all([
     listCustomersWithContacts(),
     listPricingItems(),
+    q<Subcontractor>('SELECT * FROM subcontractors ORDER BY name'),
+    backupSchedule(projectIds),
   ]);
 
   return {
@@ -1267,7 +1277,72 @@ export async function getBackupData(from: string, to: string): Promise<BackupDat
     timeEntries,
     customers,
     pricing,
+    subcontractors,
+    schedule,
   };
+}
+
+/**
+ * Scheduled phases for the exported projects, with their real dates resolved.
+ * The dependency solver runs per project so a chain resolves against its own
+ * job, and the crew is flattened to one column for the spreadsheet.
+ */
+async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase[]> {
+  if (projectIds.length === 0) return [];
+
+  const rows = await q<{
+    id: number;
+    project_id: number;
+    project_name: string;
+    name: string;
+    start_date: string;
+    duration_days: number;
+    depends_on_id: number | null;
+    lag_days: number;
+    status: TaskStatus;
+    notes: string | null;
+    position: number;
+    crew: string | null;
+  }>(
+    `SELECT t.id, t.project_id, p.name AS project_name, t.name,
+            t.start_date, t.duration_days, t.depends_on_id, t.lag_days,
+            t.status, t.notes, t.position,
+            (SELECT string_agg(COALESCE(u.name, s.name), ', ' ORDER BY COALESCE(u.name, s.name))
+               FROM schedule_assignments sa
+               LEFT JOIN users u          ON u.id = sa.user_id
+               LEFT JOIN subcontractors s ON s.id = sa.subcontractor_id
+              WHERE sa.task_id = t.id) AS crew
+       FROM schedule_tasks t
+       JOIN projects p ON p.id = t.project_id
+      WHERE t.project_id = ANY($1::int[])
+      ORDER BY p.name, t.position, t.id`,
+    [projectIds]
+  );
+  if (rows.length === 0) return [];
+
+  const holidays = await q<{ day: string }>('SELECT day FROM schedule_holidays');
+  const calendar = { holidays: new Set(holidays.map((h) => h.day)) };
+  const { windows } = computeSchedule(rows, calendar);
+  const nameById = new Map(rows.map((r) => [r.id, r.name]));
+
+  const out: BackupSchedulePhase[] = [];
+  for (const r of rows) {
+    const dates = windows.get(r.id);
+    if (!dates) continue;
+    out.push({
+      project_id: r.project_id,
+      project_name: r.project_name,
+      phase: r.name,
+      start_date: dates.start,
+      end_date: dates.end,
+      working_days: workingDaySpan(dates.start, dates.end, calendar),
+      status: r.status,
+      follows: (r.depends_on_id != null ? nameById.get(r.depends_on_id) : '') ?? '',
+      crew: r.crew ?? '',
+      notes: r.notes,
+    });
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ Users */

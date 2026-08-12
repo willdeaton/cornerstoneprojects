@@ -512,4 +512,76 @@ Your City, ST 00000',
       WHERE category IS NOT NULL AND btrim(category) <> ''
      ON CONFLICT (lower(name)) DO NOTHING`
   );
+
+  /* ==================================================================
+   * Job scheduling.
+   *
+   * A job is planned as an ordered set of phases (schedule_tasks). Each
+   * phase carries an EARLIEST start plus a duration in working days, and
+   * may follow another phase (depends_on_id + lag_days). Real start/end
+   * dates are never stored — they're derived from the dependency chain by
+   * src/lib/schedule-math.ts, so pushing one phase out automatically
+   * shifts everything downstream and nothing can go stale.
+   *
+   * People and subs are attached to a phase via schedule_assignments;
+   * schedule_holidays removes days from the working-day math.
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subcontractors (
+      id           SERIAL PRIMARY KEY,
+      name         TEXT NOT NULL,
+      trade        TEXT,
+      contact_name TEXT,
+      phone        TEXT,
+      email        TEXT,
+      notes        TEXT,
+      active       BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    -- One record per sub name (case-insensitive) so the picker stays clean.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subs_name ON subcontractors(lower(name));
+
+    CREATE TABLE IF NOT EXISTS schedule_tasks (
+      id            SERIAL PRIMARY KEY,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      -- Earliest start. With no predecessor this IS the start; with one, the
+      -- computed start is max(this, predecessor end + lag + 1 working day).
+      start_date    DATE NOT NULL,
+      duration_days INTEGER NOT NULL DEFAULT 1 CHECK (duration_days >= 1),
+      depends_on_id INTEGER REFERENCES schedule_tasks(id) ON DELETE SET NULL,
+      lag_days      INTEGER NOT NULL DEFAULT 0,
+      status        TEXT NOT NULL DEFAULT 'not_started'
+                    CHECK (status IN ('not_started','in_progress','complete')),
+      notes         TEXT,
+      position      INTEGER NOT NULL DEFAULT 0,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sched_tasks_project ON schedule_tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_sched_tasks_depends ON schedule_tasks(depends_on_id);
+
+    -- Who works a phase: exactly one of user_id / subcontractor_id. An assignee
+    -- is on the phase for its whole window — to put someone on part of it,
+    -- schedule that part as its own phase.
+    CREATE TABLE IF NOT EXISTS schedule_assignments (
+      id               SERIAL PRIMARY KEY,
+      task_id          INTEGER NOT NULL REFERENCES schedule_tasks(id) ON DELETE CASCADE,
+      user_id          INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      subcontractor_id INTEGER REFERENCES subcontractors(id) ON DELETE CASCADE,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((user_id IS NULL) <> (subcontractor_id IS NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sched_assign_task ON schedule_assignments(task_id);
+    CREATE INDEX IF NOT EXISTS idx_sched_assign_user ON schedule_assignments(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sched_assign_sub  ON schedule_assignments(subcontractor_id);
+
+    -- Non-working days excluded from duration math (holidays, shutdowns).
+    CREATE TABLE IF NOT EXISTS schedule_holidays (
+      day        DATE PRIMARY KEY,
+      label      TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
