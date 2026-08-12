@@ -29,6 +29,7 @@ import type {
   BackupTimeEntry,
 } from './backup-types';
 import { hoursBetween } from './format';
+import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
 
@@ -585,15 +586,102 @@ export async function clockIn(
   return { ok: true };
 }
 
+/** Lock and return the user's open entry inside a transaction, so clock-out
+ *  and job-switch can't race each other from two devices. Returns undefined
+ *  when the user isn't clocked in. */
+async function lockActiveEntry(
+  client: PoolClient,
+  userId: number
+): Promise<{ id: number; project_id: number | null } | undefined> {
+  const { rows } = await client.query(
+    `SELECT id, project_id FROM time_entries
+     WHERE user_id = $1 AND clock_out IS NULL
+     ORDER BY clock_in DESC LIMIT 1
+     FOR UPDATE`,
+    [userId]
+  );
+  return rows[0] as { id: number; project_id: number | null } | undefined;
+}
+
 export async function clockOut(userId: number, note?: string): Promise<{ ok: boolean; error?: string }> {
-  const entry = await activeEntry(userId);
-  if (!entry) return { ok: false, error: 'You are not clocked in.' };
-  // Close any lunch break still running so the shift total stays accurate.
-  await q('UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL', [
-    entry.id,
-  ]);
-  await q('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [note ?? null, entry.id]);
-  return { ok: true };
+  // A shift synopsis is mandatory on the final clock-out: at least 5
+  // non-whitespace characters so "ok" or a stray space can't slip through.
+  if (!isValidSynopsis(note)) {
+    return { ok: false, error: SYNOPSIS_ERROR };
+  }
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const entry = await lockActiveEntry(client, userId);
+    if (!entry) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'You are not clocked in.' };
+    }
+    // Close any lunch break still running so the shift total stays accurate.
+    await client.query(
+      'UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL',
+      [entry.id]
+    );
+    await client.query('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [
+      note!.trim(),
+      entry.id,
+    ]);
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('clockOut failed', err);
+    return { ok: false, error: 'Could not clock out. Please try again.' };
+  } finally {
+    client.release();
+  }
+}
+
+/** Switch jobs mid-shift: atomically close the active entry (ending any
+ *  running break) and open a new entry on the target job, so the worker's
+ *  clock keeps running with no gap. The segment note is optional — the
+ *  mandatory-synopsis rule only applies to the final clock-out. */
+export async function switchJob(
+  userId: number,
+  projectId: number | null,
+  note?: string
+): Promise<{ ok: boolean; error?: string }> {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const entry = await lockActiveEntry(client, userId);
+    if (!entry) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'You are not clocked in.' };
+    }
+    if ((entry.project_id ?? null) === (projectId ?? null)) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'You are already clocked in on that job.' };
+    }
+    // Close any running lunch break at the switch, mirroring clockOut.
+    await client.query(
+      'UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL',
+      [entry.id]
+    );
+    await client.query('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [
+      note?.trim() || null,
+      entry.id,
+    ]);
+    await client.query(
+      'INSERT INTO time_entries (project_id, user_id, clock_in) VALUES ($1, $2, now())',
+      [projectId, userId]
+    );
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('switchJob failed', err);
+    return { ok: false, error: 'Could not switch jobs. Please refresh and try again.' };
+  } finally {
+    client.release();
+  }
 }
 
 /** Start a lunch break on the user's active shift. */
@@ -713,6 +801,7 @@ export interface AdminTimeEntry {
   clock_out: string | null;
   note: string | null;
   paid: boolean;
+  check_number: string | null;
   break_minutes: number;
   net_hours: number;
 }
@@ -720,6 +809,8 @@ export interface AdminTimeEntry {
 export interface AdminWeekUser {
   user_id: number;
   user_name: string;
+  /** Hourly pay rate (manager/admin-only page). NULL = no rate set. */
+  hourly_rate: number | null;
   entries: AdminTimeEntry[];
   total_hours: number;
   paid_hours: number;
@@ -729,6 +820,10 @@ export interface AdminWeekUser {
   /** Weekly approval (manager sign-off), when one exists for this user-week. */
   approved_at: string | null;
   approved_by_name: string | null;
+  /** Check number(s) recorded when the week was marked paid: the distinct
+   *  non-null values across the week's paid entries, comma-joined when a
+   *  week was paid across multiple checks. */
+  check_number: string | null;
 }
 
 export interface AdminWeek {
@@ -748,6 +843,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     id: number;
     user_id: number;
     user_name: string;
+    hourly_rate: number | null;
     project_id: number | null;
     project_name: string | null;
     customer: string | null;
@@ -755,12 +851,13 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     clock_out: string | null;
     note: string | null;
     paid: boolean;
+    check_number: string | null;
     week_start: string;
     break_seconds: number;
   }>(
-    `SELECT t.id, t.user_id, u.name AS user_name,
+    `SELECT t.id, t.user_id, u.name AS user_name, u.hourly_rate,
             t.project_id, p.name AS project_name, p.customer,
-            t.clock_in, t.clock_out, t.note, t.paid,
+            t.clock_in, t.clock_out, t.note, t.paid, t.check_number,
             to_char(date_trunc('week', t.clock_in), 'YYYY-MM-DD') AS week_start,
             COALESCE((
               SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
@@ -810,6 +907,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
       clock_out: r.clock_out,
       note: r.note,
       paid: r.paid,
+      check_number: r.check_number,
       break_minutes: breakMinutes,
       net_hours: netHours,
     };
@@ -825,6 +923,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
       u = {
         user_id: r.user_id,
         user_name: r.user_name,
+        hourly_rate: r.hourly_rate,
         entries: [],
         total_hours: 0,
         paid_hours: 0,
@@ -833,6 +932,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
         all_paid: true,
         approved_at: approval?.approved_at ?? null,
         approved_by_name: approval?.approved_by_name ?? null,
+        check_number: null,
       };
       byUser.set(r.user_id, u);
     }
@@ -852,6 +952,14 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
     .map(([week_start, byUser]) => {
       const users = [...byUser.values()].sort((a, b) => a.user_name.localeCompare(b.user_name));
+      for (const u of users) {
+        const checks = [
+          ...new Set(
+            u.entries.filter((e) => e.paid && e.check_number).map((e) => e.check_number as string)
+          ),
+        ];
+        u.check_number = checks.length > 0 ? checks.join(', ') : null;
+      }
       const total_hours = users.reduce((s, u) => s + u.total_hours, 0);
       const unpaid_hours = users.reduce((s, u) => s + u.unpaid_hours, 0);
       return {
@@ -866,34 +974,41 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
   return weeks_out;
 }
 
-/** Mark a single time entry paid/unpaid. */
+/** Mark a single time entry paid/unpaid. Unmarking clears the check number. */
 export async function setEntryPaid(entryId: number, paid: boolean, adminId: number): Promise<void> {
   await q(
     `UPDATE time_entries
      SET paid = $1,
          paid_at = CASE WHEN $1 THEN now() ELSE NULL END,
-         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END
+         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END,
+         check_number = CASE WHEN $1 THEN check_number ELSE NULL END
      WHERE id = $3`,
     [paid, adminId, entryId]
   );
 }
 
-/** Mark every closed entry for a user in a given ISO week paid/unpaid. */
+/** Mark every closed entry for a user in a given ISO week paid/unpaid,
+ *  recording the payroll check number when marking paid (cleared when
+ *  unmarking). When marking paid without a check number, any check number
+ *  already recorded on an entry is preserved rather than erased. */
 export async function setWeekPaid(
   userId: number,
   weekStart: string,
   paid: boolean,
-  adminId: number
+  adminId: number,
+  checkNumber?: string | null
 ): Promise<void> {
+  const check = paid ? (checkNumber?.trim() || null) : null;
   await q(
     `UPDATE time_entries
      SET paid = $1,
          paid_at = CASE WHEN $1 THEN now() ELSE NULL END,
-         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END
+         paid_by = CASE WHEN $1 THEN $2::int ELSE NULL END,
+         check_number = CASE WHEN $1 THEN COALESCE($5, check_number) ELSE NULL END
      WHERE user_id = $3
        AND clock_out IS NOT NULL
        AND date_trunc('week', clock_in) = date_trunc('week', $4::date)`,
-    [paid, adminId, userId, weekStart]
+    [paid, adminId, userId, weekStart, check]
   );
 }
 
@@ -1459,7 +1574,7 @@ export interface UserRow {
   id: number;
   name: string;
   email: string;
-  role: 'admin' | 'manager' | 'worker';
+  role: 'admin' | 'manager' | 'worker' | 'employee';
   active: number;
   created_at: string;
   // Optional email-resolution chain (personal_email -> work_email -> email).
@@ -1468,6 +1583,8 @@ export interface UserRow {
   // Per-user email subscription flags (one boolean column per email type).
   receives_new_project_emails: boolean;
   receives_completion_emails: boolean;
+  // Hourly pay rate (manager/admin-only surfaces). NULL = no rate set.
+  hourly_rate: number | null;
 }
 
 /** Column names ↔ payload keys for the per-user subscription flags. */
@@ -1477,10 +1594,13 @@ export const USER_EMAIL_FLAGS = [
 ] as const;
 export type UserEmailFlag = (typeof USER_EMAIL_FLAGS)[number];
 
+// NOTE: includes hourly_rate, so this select must only feed manager/admin-facing
+// surfaces (the Settings -> Users listing). Never expose it to worker roles.
 const USER_SELECT =
   `id, name, email, role, active, created_at,
    personal_email, work_email,
-   receives_new_project_emails, receives_completion_emails`;
+   receives_new_project_emails, receives_completion_emails,
+   hourly_rate`;
 
 export async function listUsers(): Promise<UserRow[]> {
   return q<UserRow>(`SELECT ${USER_SELECT} FROM users ORDER BY active DESC, name`);
@@ -1508,13 +1628,14 @@ export async function createUserRow(u: {
   name: string;
   email: string;
   password_hash: string;
-  role: 'admin' | 'manager' | 'worker';
+  role: 'admin' | 'manager' | 'worker' | 'employee';
+  hourly_rate?: number | null;
 } & UserEmailFields): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO users
        (name, email, password_hash, role, personal_email, work_email,
-        receives_new_project_emails, receives_completion_emails)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        receives_new_project_emails, receives_completion_emails, hourly_rate)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [
       u.name,
       u.email.trim().toLowerCase(),
@@ -1524,9 +1645,15 @@ export async function createUserRow(u: {
       u.work_email?.trim() || null,
       u.receives_new_project_emails ?? false,
       u.receives_completion_emails ?? false,
+      u.hourly_rate ?? null,
     ]
   );
   return row!.id;
+}
+
+/** Set (or clear, with null) a user's hourly pay rate. */
+export async function setUserRate(userId: number, rate: number | null): Promise<void> {
+  await q('UPDATE users SET hourly_rate = $1 WHERE id = $2', [rate, userId]);
 }
 
 /**
@@ -1552,7 +1679,10 @@ export async function updateUserEmailFields(id: number, fields: Required<UserEma
   );
 }
 
-export async function setUserRole(id: number, role: 'admin' | 'manager' | 'worker'): Promise<void> {
+export async function setUserRole(
+  id: number,
+  role: 'admin' | 'manager' | 'worker' | 'employee'
+): Promise<void> {
   await q('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
 }
 

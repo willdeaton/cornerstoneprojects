@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import {
   getProject,
@@ -21,12 +21,15 @@ import { InvoiceSection } from './InvoiceSection';
 export const dynamic = 'force-dynamic';
 
 export default async function ProjectDetail({ params }: { params: Promise<{ id: string }> }) {
+  const user = await getCurrentUser();
+  if (!user) redirect('/login');
+  if (user.role === 'employee') redirect('/time');
+
   const { id: idStr } = await params;
   const id = Number(idStr);
   const project = await getProject(id);
   if (!project) notFound();
 
-  const user = (await getCurrentUser())!;
   const notes = await listNotes(id);
   const timeEntries = await listProjectTime(id);
   const hours = await projectHours(id);

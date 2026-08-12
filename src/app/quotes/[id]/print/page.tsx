@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 export default async function QuotePrintPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
+  if (user.role === 'employee') redirect('/time');
 
   const { id } = await params;
   const numId = Number(id);

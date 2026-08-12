@@ -13,13 +13,14 @@ import {
   setUserRole,
   setUserActive,
   setUserPassword,
+  setUserRate,
   deleteUser,
   countAdmins,
   getUserRole,
   USER_EMAIL_FLAGS,
 } from '@/lib/data';
 
-const ROLES: Role[] = ['admin', 'manager', 'worker'];
+const ROLES: Role[] = ['admin', 'manager', 'worker', 'employee'];
 
 /** Pull the per-user email fields + subscription flags out of a form payload.
  *  Checkbox names map 1:1 to the DB boolean column names. */
@@ -32,6 +33,18 @@ function readEmailFields(formData: FormData) {
     work_email: String(formData.get('work_email') ?? '').trim() || null,
     ...flags,
   };
+}
+
+/** Parse an hourly-rate input: empty = null (no rate), otherwise a
+ *  non-negative dollar amount ("$" and "," are tolerated and stripped). */
+function parseRate(raw: string): { ok: true; rate: number | null } | { ok: false; error: string } {
+  const s = raw.trim();
+  if (!s) return { ok: true, rate: null };
+  const n = Number(s.replace(/[$,]/g, ''));
+  if (!Number.isFinite(n) || n < 0) {
+    return { ok: false, error: 'Hourly rate must be a non-negative number.' };
+  }
+  return { ok: true, rate: n };
 }
 
 async function requireManager() {
@@ -63,12 +76,16 @@ export async function createUserAction(
   if (!ROLES.includes(role)) return { error: 'Invalid role.' };
   if (await emailExists(email)) return { error: 'A user with that email already exists.' };
 
+  const parsed = parseRate(String(formData.get('hourly_rate') ?? ''));
+  if (!parsed.ok) return { error: parsed.error };
+
   const emailFields = readEmailFields(formData);
   await createUserRow({
     name,
     email,
     password_hash: hashPassword(password),
     role,
+    hourly_rate: parsed.rate,
     ...emailFields,
   });
 
@@ -130,6 +147,16 @@ export async function deleteUserAction(id: number): Promise<{ ok: boolean; error
   }
   await deleteUser(id);
   revalidatePath('/settings/users');
+  return { ok: true };
+}
+
+export async function setUserRateAction(id: number, rateInput: string) {
+  await requireManager();
+  const parsed = parseRate(rateInput);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  await setUserRate(id, parsed.rate);
+  revalidatePath('/settings/users');
+  revalidatePath('/timesheets');
   return { ok: true };
 }
 

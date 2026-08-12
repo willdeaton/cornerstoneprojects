@@ -7,6 +7,10 @@ export const runtime = 'nodejs';
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  // Employees are time-clock-only — no access to quote files.
+  if (user.role === 'employee') {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const { id } = await params;
   const file = await getQuoteFile(Number(id));

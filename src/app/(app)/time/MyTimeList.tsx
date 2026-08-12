@@ -64,6 +64,7 @@ export function MyTimeList({
                   <td className="py-2.5">
                     <p className="font-medium text-brand-ink">{e.project_name ?? 'General (no job)'}</p>
                     {e.customer && <p className="text-xs text-brand-gray">{e.customer}</p>}
+                    {e.note && <p className="mt-0.5 text-xs italic text-brand-gray">&ldquo;{e.note}&rdquo;</p>}
                   </td>
                   <td className="py-2.5 text-brand-gray">{dateTime(e.clock_in)}</td>
                   <td className="py-2.5 text-brand-gray">

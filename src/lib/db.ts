@@ -70,7 +70,7 @@ async function migrate(pool: Pool) {
       name          TEXT NOT NULL,
       email         TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
-      role          TEXT NOT NULL DEFAULT 'worker' CHECK (role IN ('admin','manager','worker')),
+      role          TEXT NOT NULL DEFAULT 'worker' CHECK (role IN ('admin','manager','worker','employee')),
       active        INTEGER NOT NULL DEFAULT 1,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -345,6 +345,15 @@ Your City, ST 00000',
   `);
 
   // ---- Incremental migrations (safe to run repeatedly) ------------------
+  // New 'employee' role (time-clock-only access). The CHECK constraint above
+  // lives inside CREATE TABLE IF NOT EXISTS, so existing databases never pick
+  // up the new value — rebuild the constraint idempotently instead.
+  await pool.query(`
+    ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+    ALTER TABLE users ADD CONSTRAINT users_role_check
+      CHECK (role IN ('admin','manager','worker','employee'));
+  `);
+
   // Workers can now clock in without picking a specific job, and admins can
   // mark each shift as paid, so time_entries needs a nullable project and a
   // few payroll columns.
@@ -353,6 +362,14 @@ Your City, ST 00000',
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    -- Payroll check number recorded when an admin marks a week paid.
+    ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS check_number TEXT;
+  `);
+
+  // Per-user hourly pay rate for the weekly check calculation on Timesheets.
+  // NULL = no rate set. Visible/editable only by admins and managers.
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS hourly_rate DOUBLE PRECISION;
   `);
 
   /* ==================================================================
