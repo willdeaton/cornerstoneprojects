@@ -3,9 +3,11 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
+import { isValidSynopsis, SYNOPSIS_ERROR } from '@/lib/synopsis';
 import {
   clockIn,
   clockOut,
+  switchJob,
   startBreak,
   endBreak,
   setEntryPaid,
@@ -43,9 +45,26 @@ export async function clockInAction(projectId: number | null) {
 
 export async function clockOutAction(note?: string) {
   const user = await requireUser();
+  // A shift synopsis is required to clock out (also enforced in clockOut).
+  if (!isValidSynopsis(note)) {
+    return { ok: false, error: SYNOPSIS_ERROR };
+  }
   const res = await clockOut(user.id, note);
   revalidatePath('/time');
   revalidatePath('/projects');
+  revalidatePath('/', 'layout');
+  return res;
+}
+
+/** Switch jobs mid-shift: closes the current segment (with an optional note)
+ *  and opens a new open entry on the target job, all in one transaction so
+ *  the clock keeps running. */
+export async function switchJobAction(projectId: number | null, note?: string) {
+  const user = await requireUser();
+  const res = await switchJob(user.id, projectId, note);
+  revalidatePath('/time');
+  revalidatePath('/projects');
+  if (projectId) revalidatePath(`/projects/${projectId}`);
   revalidatePath('/', 'layout');
   return res;
 }
