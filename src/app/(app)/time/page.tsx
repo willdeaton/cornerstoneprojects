@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listProjects, listUserTime, activeEntry, listActiveClockIns, weekNetHours } from '@/lib/data';
 import { PageHeader } from '@/components/ui';
@@ -9,12 +10,15 @@ import { TimeTabs } from '../TimeTabs';
 export const dynamic = 'force-dynamic';
 
 export default async function TimePage() {
-  const user = (await getCurrentUser())!;
+  const user = await getCurrentUser();
+  if (!user) redirect('/login');
   const canManage = user.role === 'admin' || user.role === 'manager';
+  // Employees only see their own time — never who else is on the clock.
+  const isEmployee = user.role === 'employee';
   const active = await activeEntry(user.id);
   const projects = (await listProjects()).filter((p) => p.status !== 'completed');
   const myEntries = await listUserTime(user.id, 25);
-  const crew = await listActiveClockIns();
+  const crew = isEmployee ? [] : await listActiveClockIns();
   const weekHours = await weekNetHours(user.id);
 
   return (
@@ -22,8 +26,8 @@ export default async function TimePage() {
       <PageHeader title="Time Clock" subtitle="Clock in and out to track your time" />
       <TimeTabs canManage={canManage} />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className={`grid grid-cols-1 gap-6 ${isEmployee ? '' : 'lg:grid-cols-3'}`}>
+        <div className={isEmployee ? '' : 'lg:col-span-2'}>
           <TimeClock
             userName={user.name}
             active={
@@ -59,7 +63,8 @@ export default async function TimePage() {
           />
         </div>
 
-        {/* Crew on the clock */}
+        {/* Crew on the clock (hidden from employees — they only see their own time) */}
+        {!isEmployee && (
         <div>
           <div className="card p-5">
             <h2 className="brand-heading mb-4 text-sm text-brand-gray">On the Clock Now</h2>
@@ -95,6 +100,7 @@ export default async function TimePage() {
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

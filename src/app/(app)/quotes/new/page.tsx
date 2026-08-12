@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 export default async function NewQuotePage() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
+  if (user.role === 'employee') redirect('/time');
 
   const [customers, pricingItems, units, categories, company] = await Promise.all([
     listCustomersWithContacts(),

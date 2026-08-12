@@ -21,7 +21,8 @@ export async function loginAction(_prev: LoginState, formData: FormData): Promis
     return { error: 'Incorrect email or password.' };
   }
   await createSession(user.id);
-  redirect('/dashboard');
+  // Employees only have the time clock, so land them there directly.
+  redirect(user.role === 'employee' ? '/time' : '/dashboard');
 }
 
 export async function logoutAction(): Promise<void> {

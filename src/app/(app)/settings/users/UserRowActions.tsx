@@ -37,7 +37,9 @@ export function UserRowActions({
   const [pending, start] = useTransition();
   const router = useRouter();
 
-  const roles: Role[] = canGrantAdmin ? ['worker', 'manager', 'admin'] : ['worker', 'manager'];
+  const roles: Role[] = canGrantAdmin
+    ? ['employee', 'worker', 'manager', 'admin']
+    : ['employee', 'worker', 'manager'];
 
   function run(fn: () => Promise<unknown>) {
     start(async () => {
