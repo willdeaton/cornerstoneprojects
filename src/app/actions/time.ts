@@ -22,9 +22,9 @@ async function requireUser() {
   return user;
 }
 
-async function requireManager() {
+async function requireAdmin() {
   const user = await requireUser();
-  if (user.role !== 'admin' && user.role !== 'manager') {
+  if (user.role !== 'admin') {
     return null;
   }
   return user;
@@ -66,18 +66,29 @@ export async function endBreakAction() {
   return res;
 }
 
-export async function setEntryPaidAction(entryId: number, paid: boolean) {
-  const user = await requireManager();
+/** Only admins may mark shifts paid. */
+export async function setEntryPaidAction(
+  entryId: number,
+  paid: boolean
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Not authorized.' };
   await setEntryPaid(entryId, paid, user.id);
   revalidatePath('/timesheets');
   return { ok: true };
 }
 
-export async function setWeekPaidAction(userId: number, weekStart: string, paid: boolean) {
-  const user = await requireManager();
+/** Only admins may mark a week paid; an optional check number is recorded on
+ *  the week's entries when marking paid. */
+export async function setWeekPaidAction(
+  userId: number,
+  weekStart: string,
+  paid: boolean,
+  checkNumber?: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Not authorized.' };
-  await setWeekPaid(userId, weekStart, paid, user.id);
+  await setWeekPaid(userId, weekStart, paid, user.id, checkNumber);
   revalidatePath('/timesheets');
   return { ok: true };
 }
