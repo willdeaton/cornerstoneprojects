@@ -29,6 +29,7 @@ import type {
   BackupTimeEntry,
 } from './backup-types';
 import { hoursBetween } from './format';
+import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
 
@@ -585,15 +586,102 @@ export async function clockIn(
   return { ok: true };
 }
 
+/** Lock and return the user's open entry inside a transaction, so clock-out
+ *  and job-switch can't race each other from two devices. Returns undefined
+ *  when the user isn't clocked in. */
+async function lockActiveEntry(
+  client: PoolClient,
+  userId: number
+): Promise<{ id: number; project_id: number | null } | undefined> {
+  const { rows } = await client.query(
+    `SELECT id, project_id FROM time_entries
+     WHERE user_id = $1 AND clock_out IS NULL
+     ORDER BY clock_in DESC LIMIT 1
+     FOR UPDATE`,
+    [userId]
+  );
+  return rows[0] as { id: number; project_id: number | null } | undefined;
+}
+
 export async function clockOut(userId: number, note?: string): Promise<{ ok: boolean; error?: string }> {
-  const entry = await activeEntry(userId);
-  if (!entry) return { ok: false, error: 'You are not clocked in.' };
-  // Close any lunch break still running so the shift total stays accurate.
-  await q('UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL', [
-    entry.id,
-  ]);
-  await q('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [note ?? null, entry.id]);
-  return { ok: true };
+  // A shift synopsis is mandatory on the final clock-out: at least 5
+  // non-whitespace characters so "ok" or a stray space can't slip through.
+  if (!isValidSynopsis(note)) {
+    return { ok: false, error: SYNOPSIS_ERROR };
+  }
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const entry = await lockActiveEntry(client, userId);
+    if (!entry) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'You are not clocked in.' };
+    }
+    // Close any lunch break still running so the shift total stays accurate.
+    await client.query(
+      'UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL',
+      [entry.id]
+    );
+    await client.query('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [
+      note!.trim(),
+      entry.id,
+    ]);
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('clockOut failed', err);
+    return { ok: false, error: 'Could not clock out. Please try again.' };
+  } finally {
+    client.release();
+  }
+}
+
+/** Switch jobs mid-shift: atomically close the active entry (ending any
+ *  running break) and open a new entry on the target job, so the worker's
+ *  clock keeps running with no gap. The segment note is optional — the
+ *  mandatory-synopsis rule only applies to the final clock-out. */
+export async function switchJob(
+  userId: number,
+  projectId: number | null,
+  note?: string
+): Promise<{ ok: boolean; error?: string }> {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const entry = await lockActiveEntry(client, userId);
+    if (!entry) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'You are not clocked in.' };
+    }
+    if ((entry.project_id ?? null) === (projectId ?? null)) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'You are already clocked in on that job.' };
+    }
+    // Close any running lunch break at the switch, mirroring clockOut.
+    await client.query(
+      'UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL',
+      [entry.id]
+    );
+    await client.query('UPDATE time_entries SET clock_out = now(), note = $1 WHERE id = $2', [
+      note?.trim() || null,
+      entry.id,
+    ]);
+    await client.query(
+      'INSERT INTO time_entries (project_id, user_id, clock_in) VALUES ($1, $2, now())',
+      [projectId, userId]
+    );
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('switchJob failed', err);
+    return { ok: false, error: 'Could not switch jobs. Please refresh and try again.' };
+  } finally {
+    client.release();
+  }
 }
 
 /** Start a lunch break on the user's active shift. */
