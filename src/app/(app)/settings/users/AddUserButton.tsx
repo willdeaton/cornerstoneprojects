@@ -44,6 +44,7 @@ export function AddUserButton({
             <div>
               <label className="label">Role</label>
               <select name="role" className="input" defaultValue="worker">
+                <option value="employee">Employee</option>
                 <option value="worker">Worker</option>
                 <option value="manager">Manager</option>
                 {canGrantAdmin && <option value="admin">Admin</option>}
@@ -76,7 +77,8 @@ export function AddUserButton({
             </div>
           </div>
           <p className="text-xs text-brand-gray">
-            Workers can clock in/out and add notes. Managers &amp; admins can also manage users.
+            Employees can only use the time clock and see their own time. Workers can also view
+            projects and add notes. Managers &amp; admins can manage users.
           </p>
           <div className="border-t border-black/5 pt-4">
             <SubscriptionFields />

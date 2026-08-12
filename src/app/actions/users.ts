@@ -23,7 +23,7 @@ import {
   USER_EMAIL_FLAGS,
 } from '@/lib/data';
 
-const ROLES: Role[] = ['admin', 'manager', 'worker'];
+const ROLES: Role[] = ['admin', 'manager', 'worker', 'employee'];
 
 /** Pull the per-user email fields + subscription flags out of a form payload.
  *  Checkbox names map 1:1 to the DB boolean column names. */

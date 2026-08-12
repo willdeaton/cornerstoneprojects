@@ -21,6 +21,8 @@ import { sendJobCompletedEmail } from '@/lib/email/send';
 async function requireUser() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
+  // Employees are time-clock-only — they may never touch projects.
+  if (user.role === 'employee') throw new Error('Not authorized.');
   return user;
 }
 

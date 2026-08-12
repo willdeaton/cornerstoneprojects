@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth';
 import { listProjects, projectHours } from '@/lib/data';
 import type { ProjectStatus } from '@/lib/types';
 import { money, shortDate, duration } from '@/lib/format';
@@ -20,6 +22,10 @@ export default async function ProjectsPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
+  const me = await getCurrentUser();
+  if (!me) redirect('/login');
+  if (me.role === 'employee') redirect('/time');
+
   const { status } = await searchParams;
   const filter = status ?? 'active';
   let projects = await listProjects(

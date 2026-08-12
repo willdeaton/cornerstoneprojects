@@ -23,6 +23,7 @@ export default async function EditQuotePage({
 }) {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
+  if (user.role === 'employee') redirect('/time');
 
   const { id } = await params;
   const { saved } = await searchParams;

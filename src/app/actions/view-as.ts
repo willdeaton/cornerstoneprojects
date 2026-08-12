@@ -17,7 +17,7 @@ export async function setViewAsAction(role: Role) {
   if (!user || user.realRole !== 'admin') redirect('/dashboard');
 
   const jar = await cookies();
-  if (role === 'manager' || role === 'worker') {
+  if (role === 'manager' || role === 'worker' || role === 'employee') {
     jar.set(VIEW_AS_COOKIE, role, {
       httpOnly: true,
       sameSite: 'lax',
@@ -29,7 +29,8 @@ export async function setViewAsAction(role: Role) {
     jar.delete(VIEW_AS_COOKIE);
   }
 
-  // Land on the dashboard, which every role can reach, so switching never
-  // strands the admin on a page their previewed role is redirected away from.
+  // Land on the dashboard so switching never strands the admin on a page their
+  // previewed role is redirected away from. (An 'employee' preview is bounced
+  // on to /time by the dashboard's own role guard.)
   redirect('/dashboard');
 }

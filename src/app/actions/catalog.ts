@@ -39,6 +39,8 @@ async function requireManager() {
 async function requireUser() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
+  // Employees are time-clock-only — they may never touch the catalogs.
+  if (user.role === 'employee') throw new Error('Not authorized.');
   return user;
 }
 

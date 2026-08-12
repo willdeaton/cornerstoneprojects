@@ -8,7 +8,7 @@ import { logoutAction } from '@/app/actions/auth';
 import { setViewAsAction } from '@/app/actions/view-as';
 import { SETTINGS_GROUPS, TIME_GROUP, itemActive, groupActive } from './nav-config';
 
-type Role = 'admin' | 'manager' | 'worker';
+import type { Role } from '@/lib/auth';
 
 interface NavUser {
   name: string;
@@ -98,11 +98,12 @@ export function AppShell({
     })),
   };
 
-  const nav: NavEntry[] = [
-    ...BASE_NAV,
-    timeEntry,
-    ...(canManageUsers ? [settingsEntry] : []),
-  ];
+  // Employees only ever get the time clock — no dashboard, quotes, projects,
+  // timesheets or settings.
+  const nav: NavEntry[] =
+    user.role === 'employee'
+      ? [{ kind: 'link', href: '/time', label: 'Time Clock', icon: ClockIcon }]
+      : [...BASE_NAV, timeEntry, ...(canManageUsers ? [settingsEntry] : [])];
 
   const NavLinks = ({ rail = false, mobile = false }: { rail?: boolean; mobile?: boolean }) => (
     <nav className="flex flex-col gap-1">
@@ -472,6 +473,7 @@ const VIEW_AS_ROLES: { value: Role; label: string }[] = [
   { value: 'admin', label: 'Admin' },
   { value: 'manager', label: 'Manager' },
   { value: 'worker', label: 'Worker' },
+  { value: 'employee', label: 'Employee' },
 ];
 
 /**
@@ -485,7 +487,7 @@ function ViewAsSwitcher({ active }: { active: Role }) {
       <p className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-white/40">
         <EyeIcon /> View as
       </p>
-      <div className="grid grid-cols-3 gap-1">
+      <div className="grid grid-cols-2 gap-1">
         {VIEW_AS_ROLES.map((r) => {
           const on = r.value === active;
           return (
