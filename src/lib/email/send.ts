@@ -14,7 +14,11 @@ import {
   buildJobCompletedEmail,
   buildPasswordResetEmail,
   buildWelcomeEmail,
+  renderWeeklyApprovalEmail,
 } from './templates';
+import { listManagersWithReports, managerWeekSummary } from '../data';
+import { issueApprovalToken } from '../time-approval-tokens';
+import { appOrigin } from '../app-origin';
 
 /*
  * Every send path follows the same shape (section 5 of the design):
@@ -152,6 +156,107 @@ async function sendProjectEvent(
   } catch (err) {
     // Best-effort: never let an email failure bubble into the business action.
     console.error(`[email] ${label} failed:`, err);
+    return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message };
+  }
+}
+
+/* ----------------------------------------- Scheduled: weekly time approval */
+
+/** "Feb 9 – Feb 15, 2026" for a Monday-start week. */
+function approvalWeekLabel(weekStart: string): string {
+  const start = new Date(weekStart + 'T00:00:00');
+  const end = new Date(start.getTime() + 6 * 864e5);
+  const fmt = (d: Date, year: boolean) =>
+    d.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      ...(year ? { year: 'numeric' } : {}),
+    });
+  return `${fmt(start, false)} – ${fmt(end, true)}`;
+}
+
+/**
+ * The app's public origin, safe to call outside a request (the scheduler has
+ * no request headers to fall back on — configure APP_URL for correct links).
+ */
+async function originForLinks(): Promise<string> {
+  try {
+    // appOrigin() prefers APP_URL / NEXT_PUBLIC_APP_URL and only falls back to
+    // request headers, which the scheduler doesn't have — hence the catch.
+    return await appOrigin();
+  } catch {
+    return 'http://localhost:3000';
+  }
+}
+
+/**
+ * SCHEDULED (Monday morning), best-effort. For every active manager with
+ * active direct reports: build the prior week's summary, mint an approval
+ * token, and email the day-by-day breakdown with an approve link. One email
+ * per manager; a failure for one manager never aborts the rest. Never throws.
+ *
+ * Returns 'skipped' (not 'error') when email simply isn't configured, so the
+ * scheduler stays quiet on installs without SendGrid.
+ */
+export async function sendWeeklyApprovalEmails(weekStart: string): Promise<SendResult> {
+  try {
+    const loaded = await loadConfigOrReason();
+    if (!loaded.ok) {
+      console.warn(`[email] weekly-approval not sent: ${loaded.reason}`);
+      return { status: 'skipped', count: 0, attempted: 0, reason: loaded.reason };
+    }
+
+    const managers = await listManagersWithReports();
+    if (managers.length === 0) {
+      return {
+        status: 'skipped',
+        count: 0,
+        attempted: 0,
+        reason: 'No managers with direct reports.',
+      };
+    }
+
+    const origin = await originForLinks();
+    const weekLabel = approvalWeekLabel(weekStart);
+
+    let sent = 0;
+    let attempted = 0;    for (const m of managers) {
+      try {
+        const toEmail = m.personal_email || m.work_email || m.email;
+        if (!toEmail) {
+          console.warn(`[email] weekly-approval: no address for manager ${m.name} (skipped).`);
+          continue;
+        }
+        attempted++;
+        const summary = await managerWeekSummary(m.id, weekStart);
+        const token = await issueApprovalToken(m.id, summary.week_start);
+        const approveUrl = `${origin}/approve-time?token=${token}`;
+        const { subject, html } = renderWeeklyApprovalEmail(
+          m.name,
+          weekLabel,
+          summary.reports,
+          approveUrl
+        );
+        await sendEmail(loaded.cfg, toEmail, subject, html);
+        sent++;
+      } catch (err) {
+        console.error(`[email] weekly-approval to ${m.name} failed:`, err);
+      }
+    }
+    // Every single send failing is an error, not a success with count 0 — the
+    // caller (and the scheduler's run-lock) must be able to tell them apart.
+    if (attempted > 0 && sent === 0) {
+      return {
+        status: 'error',
+        count: 0,
+        attempted,
+        reason: 'Every approval email failed to send; see server logs.',
+      };
+    }
+    return { status: 'sent', count: sent, attempted };
+  } catch (err) {
+    // Best-effort: the scheduler must never crash over an email problem.
+    console.error('[email] weekly-approval failed:', err);
     return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message };
   }
 }

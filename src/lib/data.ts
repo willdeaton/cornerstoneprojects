@@ -817,6 +817,9 @@ export interface AdminWeekUser {
   unpaid_hours: number;
   closed_count: number;
   all_paid: boolean;
+  /** Weekly approval (manager sign-off), when one exists for this user-week. */
+  approved_at: string | null;
+  approved_by_name: string | null;
   /** Check number(s) recorded when the week was marked paid: the distinct
    *  non-null values across the week's paid entries, comma-joined when a
    *  week was paid across multiple checks. */
@@ -868,6 +871,24 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     [weeks]
   );
 
+  // Weekly approvals in the same window, keyed by "week:user" for the merge.
+  const approvalRows = await q<{
+    week_start: string;
+    user_id: number;
+    approved_at: string;
+    approved_by_name: string | null;
+  }>(
+    `SELECT to_char(a.week_start, 'YYYY-MM-DD') AS week_start, a.user_id, a.approved_at,
+            ap.name AS approved_by_name
+     FROM time_week_approvals a
+     LEFT JOIN users ap ON ap.id = a.approved_by
+     WHERE a.week_start >= date_trunc('week', CURRENT_DATE) - (($1::int - 1) * INTERVAL '1 week')`,
+    [weeks]
+  );
+  const approvals = new Map(
+    approvalRows.map((a) => [`${a.week_start}:${a.user_id}`, a] as const)
+  );
+
   const weekMap = new Map<string, Map<number, AdminWeekUser>>();
 
   for (const r of rows) {
@@ -898,6 +919,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     }
     let u = byUser.get(r.user_id);
     if (!u) {
+      const approval = approvals.get(`${r.week_start}:${r.user_id}`);
       u = {
         user_id: r.user_id,
         user_name: r.user_name,
@@ -908,6 +930,8 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
         unpaid_hours: 0,
         closed_count: 0,
         all_paid: true,
+        approved_at: approval?.approved_at ?? null,
+        approved_by_name: approval?.approved_by_name ?? null,
         check_number: null,
       };
       byUser.set(r.user_id, u);
@@ -985,6 +1009,165 @@ export async function setWeekPaid(
        AND clock_out IS NOT NULL
        AND date_trunc('week', clock_in) = date_trunc('week', $4::date)`,
     [paid, adminId, userId, weekStart, check]
+  );
+}
+
+/* --------------------------------------- Time clock: weekly approval */
+
+/**
+ * Record a manager's sign-off on one employee's week. Idempotent: the first
+ * approval wins, so re-approving (e.g. clicking the email link twice) never
+ * overwrites who approved or when.
+ */
+export async function approveWeek(
+  userId: number,
+  weekStart: string,
+  approvedBy: number,
+  via: 'app' | 'email'
+): Promise<void> {
+  await q(
+    `INSERT INTO time_week_approvals (user_id, week_start, approved_by, via)
+     VALUES ($1, date_trunc('week', $2::date)::date, $3, $4)
+     ON CONFLICT (user_id, week_start) DO NOTHING`,
+    [userId, weekStart, approvedBy, via]
+  );
+}
+
+export interface ReportWeekSummary {
+  user_id: number;
+  user_name: string;
+  /** Net hours per day, Monday..Sunday of the week (7 entries). */
+  days: { date: string; hours: number }[];
+  total_hours: number;
+  /** Shift notes left during the week, in clock-in order. */
+  notes: string[];
+  approved: boolean;
+  approved_at: string | null;
+  approved_by_name: string | null;
+}
+
+export interface ManagerWeekSummary {
+  manager_id: number;
+  manager_name: string;
+  week_start: string;
+  reports: ReportWeekSummary[];
+}
+
+/**
+ * One manager's approval view of a Monday-start week: every ACTIVE direct
+ * report with their per-day net hours (breaks deducted; closed shifts only),
+ * weekly total, shift notes, and whether the week is already approved.
+ * Reports with no time still appear (all-zero days) so nothing is missed.
+ *
+ * Days and weeks are bucketed with date_trunc/to_char in the DATABASE's
+ * timezone — the same basis as adminTimeByWeek and setWeekPaid — so the
+ * emailed week and the in-app timesheet week always agree. (PAYROLL_TZ only
+ * decides WHEN the Monday email fires, not how hours are bucketed.)
+ */
+export async function managerWeekSummary(
+  managerId: number,
+  weekStart: string
+): Promise<ManagerWeekSummary> {
+  const manager = await one<{ id: number; name: string }>(
+    'SELECT id, name FROM users WHERE id = $1',
+    [managerId]
+  );
+
+  // Normalize whatever date was passed to that week's Monday.
+  const weekRow = await one<{ week_start: string }>(
+    `SELECT to_char(date_trunc('week', $1::date), 'YYYY-MM-DD') AS week_start`,
+    [weekStart]
+  );
+  const monday = weekRow!.week_start;
+
+  const reports = await q<{ id: number; name: string }>(
+    'SELECT id, name FROM users WHERE manager_id = $1 AND active = 1 ORDER BY name',
+    [managerId]
+  );
+
+  const days: string[] = (
+    await q<{ d: string }>(
+      `SELECT to_char(gs, 'YYYY-MM-DD') AS d
+       FROM generate_series($1::date, $1::date + 6, INTERVAL '1 day') gs`,
+      [monday]
+    )
+  ).map((r) => r.d);
+
+  const reportIds = reports.map((r) => r.id);
+
+  const entryRows = reportIds.length
+    ? await q<{ user_id: number; day: string; note: string | null; net_hours: number }>(
+        `SELECT t.user_id, to_char(t.clock_in, 'YYYY-MM-DD') AS day, t.note,
+                (GREATEST(0,
+                  EXTRACT(EPOCH FROM (t.clock_out - t.clock_in))
+                  - COALESCE((
+                      SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out) - b.break_start)))
+                      FROM time_breaks b WHERE b.time_entry_id = t.id
+                    ), 0)
+                ) / 3600.0)::float8 AS net_hours
+         FROM time_entries t
+         WHERE t.user_id = ANY($1::int[])
+           AND t.clock_out IS NOT NULL
+           AND date_trunc('week', t.clock_in) = date_trunc('week', $2::date)
+         ORDER BY t.clock_in`,
+        [reportIds, monday]
+      )
+    : [];
+
+  const approvalRows = reportIds.length
+    ? await q<{ user_id: number; approved_at: string; approved_by_name: string | null }>(
+        `SELECT a.user_id, a.approved_at, ap.name AS approved_by_name
+         FROM time_week_approvals a
+         LEFT JOIN users ap ON ap.id = a.approved_by
+         WHERE a.week_start = $1::date AND a.user_id = ANY($2::int[])`,
+        [monday, reportIds]
+      )
+    : [];
+  const approvalByUser = new Map(approvalRows.map((a) => [a.user_id, a] as const));
+
+  const summaries: ReportWeekSummary[] = reports.map((r) => {
+    const mine = entryRows.filter((e) => e.user_id === r.id);
+    const perDay = days.map((date) => ({
+      date,
+      hours: mine.filter((e) => e.day === date).reduce((s, e) => s + e.net_hours, 0),
+    }));
+    const approval = approvalByUser.get(r.id);
+    return {
+      user_id: r.id,
+      user_name: r.name,
+      days: perDay,
+      total_hours: perDay.reduce((s, d) => s + d.hours, 0),
+      notes: mine.map((e) => e.note?.trim() ?? '').filter((n) => n !== ''),
+      approved: !!approval,
+      approved_at: approval?.approved_at ?? null,
+      approved_by_name: approval?.approved_by_name ?? null,
+    };
+  });
+
+  return {
+    manager_id: managerId,
+    manager_name: manager?.name ?? '',
+    week_start: monday,
+    reports: summaries,
+  };
+}
+
+export interface ManagerWithReports {
+  id: number;
+  name: string;
+  personal_email: string | null;
+  work_email: string | null;
+  email: string;
+}
+
+/** Active users who have at least one active direct report. */
+export async function listManagersWithReports(): Promise<ManagerWithReports[]> {
+  return q<ManagerWithReports>(
+    `SELECT DISTINCT m.id, m.name, m.personal_email, m.work_email, m.email
+     FROM users m
+     JOIN users r ON r.manager_id = m.id AND r.active = 1
+     WHERE m.active = 1
+     ORDER BY m.name`
   );
 }
 

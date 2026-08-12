@@ -12,6 +12,7 @@ import {
   endBreak,
   setEntryPaid,
   setWeekPaid,
+  approveWeek,
   getTimeEntry,
   addManualTimeEntry,
   updateTimeEntry,
@@ -27,6 +28,16 @@ async function requireUser() {
 async function requireAdmin() {
   const user = await requireUser();
   if (user.role !== 'admin') {
+    return null;
+  }
+  return user;
+}
+
+/** Approving a week is a manager responsibility, so it stays open to managers
+ *  as well as admins — unlike paid-marking, which is admin-only. */
+async function requireManager() {
+  const user = await requireUser();
+  if (user.role !== 'admin' && user.role !== 'manager') {
     return null;
   }
   return user;
@@ -108,6 +119,16 @@ export async function setWeekPaidAction(
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Not authorized.' };
   await setWeekPaid(userId, weekStart, paid, user.id, checkNumber);
+  revalidatePath('/timesheets');
+  return { ok: true };
+}
+
+/** Sign off one employee's week from inside the app. Approval is independent
+ *  of paid-marking — it never blocks or requires it. */
+export async function approveWeekAction(userId: number, weekStart: string) {
+  const user = await requireManager();
+  if (!user) return { ok: false, error: 'Not authorized.' };
+  await approveWeek(userId, weekStart, user.id, 'app');
   revalidatePath('/timesheets');
   return { ok: true };
 }

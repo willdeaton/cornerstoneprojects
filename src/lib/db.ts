@@ -442,6 +442,36 @@ Your City, ST 00000',
   `);
 
   /* ==================================================================
+   * Weekly time approval.
+   *
+   * Every employee reports to a manager (users.manager_id). Each Monday the
+   * manager gets an email summarizing every direct report's prior week and a
+   * tokenized link to approve those hours without logging in. Approvals are
+   * one row per (employee, Monday-start week); the raw token only ever lives
+   * in the emailed link — the table stores its SHA-256 hash, like the
+   * password-reset flow. Tokens are MULTI-USE until expiry so a manager can
+   * approve reports one at a time from the same email.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    CREATE TABLE IF NOT EXISTS time_week_approvals (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      week_start DATE NOT NULL,
+      approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      via TEXT NOT NULL DEFAULT 'app' CHECK (via IN ('app','email')),
+      PRIMARY KEY (user_id, week_start)
+    );
+    CREATE TABLE IF NOT EXISTS time_approval_tokens (
+      token_hash TEXT PRIMARY KEY,
+      manager_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      week_start DATE NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  /* ==================================================================
    * Saved catalogs, editable under Settings:
    *   - customers            : reusable customer records (address, contact
    *                            details) that feed the New Quote customer picker.
