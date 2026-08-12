@@ -720,6 +720,8 @@ export interface AdminTimeEntry {
 export interface AdminWeekUser {
   user_id: number;
   user_name: string;
+  /** Hourly pay rate (manager/admin-only page). NULL = no rate set. */
+  hourly_rate: number | null;
   entries: AdminTimeEntry[];
   total_hours: number;
   paid_hours: number;
@@ -745,6 +747,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     id: number;
     user_id: number;
     user_name: string;
+    hourly_rate: number | null;
     project_id: number | null;
     project_name: string | null;
     customer: string | null;
@@ -755,7 +758,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     week_start: string;
     break_seconds: number;
   }>(
-    `SELECT t.id, t.user_id, u.name AS user_name,
+    `SELECT t.id, t.user_id, u.name AS user_name, u.hourly_rate,
             t.project_id, p.name AS project_name, p.customer,
             t.clock_in, t.clock_out, t.note, t.paid,
             to_char(date_trunc('week', t.clock_in), 'YYYY-MM-DD') AS week_start,
@@ -803,6 +806,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
       u = {
         user_id: r.user_id,
         user_name: r.user_name,
+        hourly_rate: r.hourly_rate,
         entries: [],
         total_hours: 0,
         paid_hours: 0,
@@ -1285,6 +1289,8 @@ export interface UserRow {
   // Per-user email subscription flags (one boolean column per email type).
   receives_new_project_emails: boolean;
   receives_completion_emails: boolean;
+  // Hourly pay rate (manager/admin-only surfaces). NULL = no rate set.
+  hourly_rate: number | null;
 }
 
 /** Column names ↔ payload keys for the per-user subscription flags. */
@@ -1294,10 +1300,13 @@ export const USER_EMAIL_FLAGS = [
 ] as const;
 export type UserEmailFlag = (typeof USER_EMAIL_FLAGS)[number];
 
+// NOTE: includes hourly_rate, so this select must only feed manager/admin-facing
+// surfaces (the Settings -> Users listing). Never expose it to worker roles.
 const USER_SELECT =
   `id, name, email, role, active, created_at,
    personal_email, work_email,
-   receives_new_project_emails, receives_completion_emails`;
+   receives_new_project_emails, receives_completion_emails,
+   hourly_rate`;
 
 export async function listUsers(): Promise<UserRow[]> {
   return q<UserRow>(`SELECT ${USER_SELECT} FROM users ORDER BY active DESC, name`);
@@ -1326,12 +1335,13 @@ export async function createUserRow(u: {
   email: string;
   password_hash: string;
   role: 'admin' | 'manager' | 'worker';
+  hourly_rate?: number | null;
 } & UserEmailFields): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO users
        (name, email, password_hash, role, personal_email, work_email,
-        receives_new_project_emails, receives_completion_emails)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        receives_new_project_emails, receives_completion_emails, hourly_rate)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
     [
       u.name,
       u.email.trim().toLowerCase(),
@@ -1341,9 +1351,15 @@ export async function createUserRow(u: {
       u.work_email?.trim() || null,
       u.receives_new_project_emails ?? false,
       u.receives_completion_emails ?? false,
+      u.hourly_rate ?? null,
     ]
   );
   return row!.id;
+}
+
+/** Set (or clear, with null) a user's hourly pay rate. */
+export async function setUserRate(userId: number, rate: number | null): Promise<void> {
+  await q('UPDATE users SET hourly_rate = $1 WHERE id = $2', [rate, userId]);
 }
 
 /**
