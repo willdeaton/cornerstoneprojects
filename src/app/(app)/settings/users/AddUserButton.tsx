@@ -50,19 +50,30 @@ export function AddUserButton({
               </select>
             </div>
           </div>
-          <div>
-            <label className="label">Manager</label>
-            <select name="manager_id" className="input" defaultValue="">
-              <option value="">— No manager —</option>
-              {managers.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-brand-gray">
-              Who this user reports to. Used for weekly time approvals.
-            </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Manager</label>
+              <select name="manager_id" className="input" defaultValue="">
+                <option value="">— No manager —</option>
+                {managers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-brand-gray">
+                Who this user reports to. Used for weekly time approvals.
+              </p>
+            </div>
+            <div>
+              <label className="label">Hourly rate ($/hr)</label>
+              <input
+                name="hourly_rate"
+                className="input"
+                inputMode="decimal"
+                placeholder="e.g. 22.50 (optional)"
+              />
+            </div>
           </div>
           <p className="text-xs text-brand-gray">
             Workers can clock in/out and add notes. Managers &amp; admins can also manage users.

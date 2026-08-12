@@ -13,6 +13,7 @@ import {
   setUserRole,
   setUserActive,
   setUserPassword,
+  setUserRate,
   deleteUser,
   countAdmins,
   getUserRole,
@@ -35,6 +36,18 @@ function readEmailFields(formData: FormData) {
     work_email: String(formData.get('work_email') ?? '').trim() || null,
     ...flags,
   };
+}
+
+/** Parse an hourly-rate input: empty = null (no rate), otherwise a
+ *  non-negative dollar amount ("$" and "," are tolerated and stripped). */
+function parseRate(raw: string): { ok: true; rate: number | null } | { ok: false; error: string } {
+  const s = raw.trim();
+  if (!s) return { ok: true, rate: null };
+  const n = Number(s.replace(/[$,]/g, ''));
+  if (!Number.isFinite(n) || n < 0) {
+    return { ok: false, error: 'Hourly rate must be a non-negative number.' };
+  }
+  return { ok: true, rate: n };
 }
 
 async function requireManager() {
@@ -99,6 +112,9 @@ export async function createUserAction(
     if (err) return { error: err };
   }
 
+  const parsed = parseRate(String(formData.get('hourly_rate') ?? ''));
+  if (!parsed.ok) return { error: parsed.error };
+
   const emailFields = readEmailFields(formData);
   await createUserRow({
     name,
@@ -106,6 +122,7 @@ export async function createUserAction(
     password_hash: hashPassword(password),
     role,
     manager_id: managerId,
+    hourly_rate: parsed.rate,
     ...emailFields,
   });
 
@@ -184,6 +201,16 @@ export async function setUserManagerAction(
   }
   await setUserManager(userId, managerId);
   revalidatePath('/settings/users');
+  return { ok: true };
+}
+
+export async function setUserRateAction(id: number, rateInput: string) {
+  await requireManager();
+  const parsed = parseRate(rateInput);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  await setUserRate(id, parsed.rate);
+  revalidatePath('/settings/users');
+  revalidatePath('/timesheets');
   return { ok: true };
 }
 

@@ -10,6 +10,7 @@ import {
   changeRoleAction,
   toggleActiveAction,
   resetPasswordAction,
+  setUserRateAction,
   updateUserSubscriptionsAction,
   deleteUserAction,
   setUserManagerAction,
@@ -28,12 +29,15 @@ export function UserRowActions({
   managers: { id: number; name: string }[];
 }) {
   const [pwOpen, setPwOpen] = useState(false);
+  const [rateOpen, setRateOpen] = useState(false);
   const [subsOpen, setSubsOpen] = useState(false);
   const [delOpen, setDelOpen] = useState(false);
   const [mgrOpen, setMgrOpen] = useState(false);
   const [pw, setPw] = useState('');
   const [mgrId, setMgrId] = useState(user.manager_id != null ? String(user.manager_id) : '');
+  const [rate, setRate] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [rateMsg, setRateMsg] = useState<string | null>(null);
   const [delMsg, setDelMsg] = useState<string | null>(null);
   const [mgrMsg, setMgrMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -70,6 +74,19 @@ export function UserRowActions({
       } else {
         setMgrOpen(false);
         setMgrMsg(null);
+        router.refresh();
+      }
+    });
+  }
+
+  function submitRate() {
+    start(async () => {
+      const res = await setUserRateAction(user.id, rate);
+      if (res && !res.ok) {
+        setRateMsg(res.error ?? 'Could not update hourly rate.');
+      } else {
+        setRateOpen(false);
+        setRateMsg(null);
         router.refresh();
       }
     });
@@ -130,6 +147,17 @@ export function UserRowActions({
               }}
             >
               Reset password
+            </button>
+            <button
+              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              onClick={() => {
+                close();
+                setRate(user.hourly_rate != null ? String(user.hourly_rate) : '');
+                setRateMsg(null);
+                setRateOpen(true);
+              }}
+            >
+              Set hourly rate
             </button>
             <button
               className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
@@ -237,6 +265,35 @@ export function UserRowActions({
             </button>
             <button className="btn-primary" onClick={submitPw} disabled={pending || pw.length < 6}>
               {pending ? 'Saving…' : 'Set Password'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={rateOpen} onClose={() => setRateOpen(false)} title={`Hourly rate — ${user.name}`}>
+        <div className="space-y-4">
+          <div>
+            <label className="label">Hourly rate ($/hr)</label>
+            <input
+              className="input"
+              inputMode="decimal"
+              value={rate}
+              onChange={(e) => setRate(e.target.value)}
+              placeholder="e.g. 22.50"
+              autoFocus
+            />
+          </div>
+          <p className="text-xs text-brand-gray">
+            Used to calculate the weekly check amount on Timesheets (net hours × rate). Leave blank
+            to clear the rate.
+          </p>
+          {rateMsg && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{rateMsg}</p>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" onClick={() => setRateOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn-primary" onClick={submitRate} disabled={pending}>
+              {pending ? 'Saving…' : 'Save Rate'}
             </button>
           </div>
         </div>

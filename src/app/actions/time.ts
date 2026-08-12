@@ -3,9 +3,11 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
+import { isValidSynopsis, SYNOPSIS_ERROR } from '@/lib/synopsis';
 import {
   clockIn,
   clockOut,
+  switchJob,
   startBreak,
   endBreak,
   setEntryPaid,
@@ -22,9 +24,9 @@ async function requireUser() {
   return user;
 }
 
-async function requireManager() {
+async function requireAdmin() {
   const user = await requireUser();
-  if (user.role !== 'admin' && user.role !== 'manager') {
+  if (user.role !== 'admin') {
     return null;
   }
   return user;
@@ -43,9 +45,26 @@ export async function clockInAction(projectId: number | null) {
 
 export async function clockOutAction(note?: string) {
   const user = await requireUser();
+  // A shift synopsis is required to clock out (also enforced in clockOut).
+  if (!isValidSynopsis(note)) {
+    return { ok: false, error: SYNOPSIS_ERROR };
+  }
   const res = await clockOut(user.id, note);
   revalidatePath('/time');
   revalidatePath('/projects');
+  revalidatePath('/', 'layout');
+  return res;
+}
+
+/** Switch jobs mid-shift: closes the current segment (with an optional note)
+ *  and opens a new open entry on the target job, all in one transaction so
+ *  the clock keeps running. */
+export async function switchJobAction(projectId: number | null, note?: string) {
+  const user = await requireUser();
+  const res = await switchJob(user.id, projectId, note);
+  revalidatePath('/time');
+  revalidatePath('/projects');
+  if (projectId) revalidatePath(`/projects/${projectId}`);
   revalidatePath('/', 'layout');
   return res;
 }
@@ -66,18 +85,29 @@ export async function endBreakAction() {
   return res;
 }
 
-export async function setEntryPaidAction(entryId: number, paid: boolean) {
-  const user = await requireManager();
+/** Only admins may mark shifts paid. */
+export async function setEntryPaidAction(
+  entryId: number,
+  paid: boolean
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Not authorized.' };
   await setEntryPaid(entryId, paid, user.id);
   revalidatePath('/timesheets');
   return { ok: true };
 }
 
-export async function setWeekPaidAction(userId: number, weekStart: string, paid: boolean) {
-  const user = await requireManager();
+/** Only admins may mark a week paid; an optional check number is recorded on
+ *  the week's entries when marking paid. */
+export async function setWeekPaidAction(
+  userId: number,
+  weekStart: string,
+  paid: boolean,
+  checkNumber?: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Not authorized.' };
-  await setWeekPaid(userId, weekStart, paid, user.id);
+  await setWeekPaid(userId, weekStart, paid, user.id, checkNumber);
   revalidatePath('/timesheets');
   return { ok: true };
 }

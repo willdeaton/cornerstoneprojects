@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listUsers } from '@/lib/data';
-import { shortDate } from '@/lib/format';
+import { shortDate, money } from '@/lib/format';
 import { AddUserButton } from './AddUserButton';
 import { UserRowActions } from './UserRowActions';
 
@@ -44,6 +44,7 @@ export default async function UsersPage() {
                 <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Role</th>
                 <th className="px-4 py-3 font-semibold">Manager</th>
+                <th className="px-4 py-3 font-semibold">Rate</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Added</th>
                 <th className="px-4 py-3" />
@@ -61,6 +62,9 @@ export default async function UsersPage() {
                     <span className={`badge capitalize ${ROLE_BADGE[u.role]}`}>{u.role}</span>
                   </td>
                   <td className="px-4 py-3 text-brand-gray">{u.manager_name ?? '—'}</td>
+                  <td className="px-4 py-3 text-brand-gray">
+                    {u.hourly_rate != null ? `${money(u.hourly_rate, { cents: true })}/hr` : '—'}
+                  </td>
                   <td className="px-4 py-3">
                     {u.active ? (
                       <span className="text-brand-green-dark">Active</span>
