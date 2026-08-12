@@ -6,7 +6,13 @@ import { Modal } from '@/components/Modal';
 import { createUserAction, type UserFormState } from '@/app/actions/users';
 import { SubscriptionFields } from './SubscriptionFields';
 
-export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
+export function AddUserButton({
+  canGrantAdmin,
+  managers,
+}: {
+  canGrantAdmin: boolean;
+  managers: { id: number; name: string }[];
+}) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState<UserFormState, FormData>(createUserAction, {});
   const router = useRouter();
@@ -43,6 +49,20 @@ export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
                 {canGrantAdmin && <option value="admin">Admin</option>}
               </select>
             </div>
+          </div>
+          <div>
+            <label className="label">Manager</label>
+            <select name="manager_id" className="input" defaultValue="">
+              <option value="">— No manager —</option>
+              {managers.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-brand-gray">
+              Who this user reports to. Used for weekly time approvals.
+            </p>
           </div>
           <p className="text-xs text-brand-gray">
             Workers can clock in/out and add notes. Managers &amp; admins can also manage users.

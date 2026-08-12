@@ -20,6 +20,11 @@ export default async function UsersPage() {
 
   const users = await listUsers();
 
+  // Manager candidates: active users with a role that can supervise others.
+  const managerOptions = users
+    .filter((u) => u.active && (u.role === 'admin' || u.role === 'manager'))
+    .map((u) => ({ id: u.id, name: u.name }));
+
   return (
     <div>
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -27,17 +32,18 @@ export default async function UsersPage() {
           <h2 className="brand-heading text-sm text-brand-gray">Users</h2>
           <p className="text-sm text-brand-gray">Manage who can access the tracker and clock in.</p>
         </div>
-        <AddUserButton canGrantAdmin={me.role === 'admin'} />
+        <AddUserButton canGrantAdmin={me.role === 'admin'} managers={managerOptions} />
       </div>
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
                 <th className="px-4 py-3 font-semibold">Name</th>
                 <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Role</th>
+                <th className="px-4 py-3 font-semibold">Manager</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold">Added</th>
                 <th className="px-4 py-3" />
@@ -54,6 +60,7 @@ export default async function UsersPage() {
                   <td className="px-4 py-3">
                     <span className={`badge capitalize ${ROLE_BADGE[u.role]}`}>{u.role}</span>
                   </td>
+                  <td className="px-4 py-3 text-brand-gray">{u.manager_name ?? '—'}</td>
                   <td className="px-4 py-3">
                     {u.active ? (
                       <span className="text-brand-green-dark">Active</span>
@@ -67,6 +74,7 @@ export default async function UsersPage() {
                       user={u}
                       isSelf={u.id === me.id}
                       canGrantAdmin={me.role === 'admin'}
+                      managers={managerOptions}
                     />
                   </td>
                 </tr>

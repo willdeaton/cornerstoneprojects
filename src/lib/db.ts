@@ -355,6 +355,14 @@ Your City, ST 00000',
     ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS paid_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
   `);
 
+  // Reporting hierarchy: each user can be assigned a manager (another user),
+  // used to route weekly time-approval work up the chain. NULL = reports to
+  // no one. ON DELETE SET NULL so removing a manager orphans (rather than
+  // blocks or cascades) their reports.
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+  `);
+
   /* ==================================================================
    * Invoicing.
    *

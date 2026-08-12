@@ -16,6 +16,9 @@ import {
   deleteUser,
   countAdmins,
   getUserRole,
+  setUserManager,
+  getUserManagerInfo,
+  managerChainContains,
   USER_EMAIL_FLAGS,
 } from '@/lib/data';
 
@@ -48,6 +51,30 @@ export interface UserFormState {
   success?: string;
 }
 
+/**
+ * Check a proposed manager assignment. Returns an error message, or null when
+ * the assignment is valid. `userId` is null when the report doesn't exist yet
+ * (user creation), so self-assignment/cycles are impossible.
+ */
+async function validateManager(userId: number | null, managerId: number): Promise<string | null> {
+  if (userId !== null && managerId === userId) {
+    return 'A user cannot be their own manager.';
+  }
+  const manager = await getUserManagerInfo(managerId);
+  if (!manager) return 'Selected manager does not exist.';
+  if (!manager.active) return 'Selected manager is not an active user.';
+  if (manager.role !== 'admin' && manager.role !== 'manager') {
+    return 'Selected manager must have the admin or manager role.';
+  }
+
+  // Walk up the chain from the proposed manager; if the user being assigned
+  // already appears above them, the assignment would create a reporting cycle.
+  if (userId !== null && (await managerChainContains(managerId, userId))) {
+    return 'That assignment would create a reporting cycle (the selected manager already reports up to this user).';
+  }
+  return null;
+}
+
 export async function createUserAction(
   _prev: UserFormState,
   formData: FormData
@@ -63,12 +90,22 @@ export async function createUserAction(
   if (!ROLES.includes(role)) return { error: 'Invalid role.' };
   if (await emailExists(email)) return { error: 'A user with that email already exists.' };
 
+  const managerRaw = String(formData.get('manager_id') ?? '').trim();
+  let managerId: number | null = null;
+  if (managerRaw) {
+    managerId = Number(managerRaw);
+    if (!Number.isInteger(managerId)) return { error: 'Invalid manager.' };
+    const err = await validateManager(null, managerId);
+    if (err) return { error: err };
+  }
+
   const emailFields = readEmailFields(formData);
   await createUserRow({
     name,
     email,
     password_hash: hashPassword(password),
     role,
+    manager_id: managerId,
     ...emailFields,
   });
 
@@ -129,6 +166,23 @@ export async function deleteUserAction(id: number): Promise<{ ok: boolean; error
     return { ok: false, error: 'Cannot delete the last admin.' };
   }
   await deleteUser(id);
+  revalidatePath('/settings/users');
+  return { ok: true };
+}
+
+export async function setUserManagerAction(
+  userId: number,
+  managerId: number | null
+): Promise<{ ok: boolean; error?: string }> {
+  await requireManager();
+  if (!Number.isInteger(userId)) return { ok: false, error: 'Missing user id.' };
+  if (!(await getUserManagerInfo(userId))) return { ok: false, error: 'User not found.' };
+  if (managerId !== null) {
+    if (!Number.isInteger(managerId)) return { ok: false, error: 'Invalid manager.' };
+    const err = await validateManager(userId, managerId);
+    if (err) return { ok: false, error: err };
+  }
+  await setUserManager(userId, managerId);
   revalidatePath('/settings/users');
   return { ok: true };
 }
