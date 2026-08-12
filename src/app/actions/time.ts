@@ -10,6 +10,7 @@ import {
   endBreak,
   setEntryPaid,
   setWeekPaid,
+  approveWeek,
   getTimeEntry,
   addManualTimeEntry,
   updateTimeEntry,
@@ -78,6 +79,16 @@ export async function setWeekPaidAction(userId: number, weekStart: string, paid:
   const user = await requireManager();
   if (!user) return { ok: false, error: 'Not authorized.' };
   await setWeekPaid(userId, weekStart, paid, user.id);
+  revalidatePath('/timesheets');
+  return { ok: true };
+}
+
+/** Sign off one employee's week from inside the app. Approval is independent
+ *  of paid-marking — it never blocks or requires it. */
+export async function approveWeekAction(userId: number, weekStart: string) {
+  const user = await requireManager();
+  if (!user) return { ok: false, error: 'Not authorized.' };
+  await approveWeek(userId, weekStart, user.id, 'app');
   revalidatePath('/timesheets');
   return { ok: true };
 }

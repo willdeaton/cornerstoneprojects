@@ -4,7 +4,7 @@ import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AdminWeek } from '@/lib/data';
 import { shortDate, dateTime, duration } from '@/lib/format';
-import { setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
+import { approveWeekAction, setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
 import {
   TimeEntryModal,
   type ProjectOption,
@@ -60,6 +60,13 @@ export function TimesheetReview({
   function markEntry(entryId: number, paid: boolean) {
     start(async () => {
       await setEntryPaidAction(entryId, paid);
+      router.refresh();
+    });
+  }
+
+  function approve(userId: number, weekStart: string) {
+    start(async () => {
+      await approveWeekAction(userId, weekStart);
       router.refresh();
     });
   }
@@ -142,13 +149,14 @@ export function TimesheetReview({
 
           {/* Per-employee rows */}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
                   <th className="px-5 py-2.5 font-semibold">Employee</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Net Hours</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Shifts</th>
                   <th className="px-3 py-2.5 font-semibold">Status</th>
+                  <th className="px-3 py-2.5 font-semibold">Approval</th>
                   <th className="px-5 py-2.5 text-right font-semibold">Paid</th>
                 </tr>
               </thead>
@@ -193,6 +201,23 @@ export function TimesheetReview({
                             </span>
                           )}
                         </td>
+                        <td className="px-3 py-3">
+                          {u.approved_at ? (
+                            <span className="badge bg-brand-green/20 text-brand-green-dark">
+                              Approved
+                              {u.approved_by_name ? ` by ${u.approved_by_name}` : ''}{' '}
+                              {shortDate(u.approved_at)}
+                            </span>
+                          ) : (
+                            <button
+                              className="rounded-lg border border-brand-green/50 bg-brand-green/10 px-2.5 py-1 text-xs font-semibold text-brand-green-dark transition hover:bg-brand-green/20 disabled:opacity-50"
+                              disabled={pending}
+                              onClick={() => approve(u.user_id, week.week_start)}
+                            >
+                              Approve
+                            </button>
+                          )}
+                        </td>
                         <td className="px-5 py-3 text-right">
                           <label className="inline-flex cursor-pointer items-center gap-2">
                             <input
@@ -209,7 +234,7 @@ export function TimesheetReview({
 
                       {isOpen && (
                         <tr className="border-b border-black/5 bg-black/[0.015]">
-                          <td colSpan={5} className="px-5 py-3">
+                          <td colSpan={6} className="px-5 py-3">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr className="text-left uppercase tracking-wide text-brand-gray">
