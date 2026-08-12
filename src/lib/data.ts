@@ -1276,7 +1276,7 @@ export interface UserRow {
   id: number;
   name: string;
   email: string;
-  role: 'admin' | 'manager' | 'worker';
+  role: 'admin' | 'manager' | 'worker' | 'employee';
   active: number;
   created_at: string;
   // Optional email-resolution chain (personal_email -> work_email -> email).
@@ -1325,7 +1325,7 @@ export async function createUserRow(u: {
   name: string;
   email: string;
   password_hash: string;
-  role: 'admin' | 'manager' | 'worker';
+  role: 'admin' | 'manager' | 'worker' | 'employee';
 } & UserEmailFields): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO users
@@ -1369,7 +1369,10 @@ export async function updateUserEmailFields(id: number, fields: Required<UserEma
   );
 }
 
-export async function setUserRole(id: number, role: 'admin' | 'manager' | 'worker'): Promise<void> {
+export async function setUserRole(
+  id: number,
+  role: 'admin' | 'manager' | 'worker' | 'employee'
+): Promise<void> {
   await q('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
 }
 

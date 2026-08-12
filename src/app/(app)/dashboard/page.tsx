@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth';
 import { getDashboard } from '@/lib/data';
 import { money, shortDate } from '@/lib/format';
 import { PageHeader, StatCard } from '@/components/ui';
@@ -7,6 +9,10 @@ import { QuotesByWeek, PipelineByCustomer, SoldByStatus } from './Charts';
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
+  const me = await getCurrentUser();
+  if (!me) redirect('/login');
+  if (me.role === 'employee') redirect('/time');
+
   const d = await getDashboard();
 
   return (
