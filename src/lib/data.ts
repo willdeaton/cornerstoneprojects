@@ -1400,6 +1400,9 @@ export interface UserRow {
   // Per-user email subscription flags (one boolean column per email type).
   receives_new_project_emails: boolean;
   receives_completion_emails: boolean;
+  // Reporting hierarchy: the user's manager (NULL = reports to no one).
+  manager_id: number | null;
+  manager_name: string | null;
   // Hourly pay rate (manager/admin-only surfaces). NULL = no rate set.
   hourly_rate: number | null;
 }
@@ -1414,18 +1417,28 @@ export type UserEmailFlag = (typeof USER_EMAIL_FLAGS)[number];
 // NOTE: includes hourly_rate, so this select must only feed manager/admin-facing
 // surfaces (the Settings -> Users listing). Never expose it to worker roles.
 const USER_SELECT =
-  `id, name, email, role, active, created_at,
-   personal_email, work_email,
-   receives_new_project_emails, receives_completion_emails,
-   hourly_rate`;
+  `u.id, u.name, u.email, u.role, u.active, u.created_at,
+   u.personal_email, u.work_email,
+   u.receives_new_project_emails, u.receives_completion_emails,
+   u.hourly_rate,
+   u.manager_id, m.name AS manager_name`;
 
 export async function listUsers(): Promise<UserRow[]> {
-  return q<UserRow>(`SELECT ${USER_SELECT} FROM users ORDER BY active DESC, name`);
+  return q<UserRow>(
+    `SELECT ${USER_SELECT}
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+      ORDER BY u.active DESC, u.name`
+  );
 }
 
 export async function listActiveWorkers(): Promise<UserRow[]> {
   return q<UserRow>(
-    'SELECT id, name, email, role, active, created_at FROM users WHERE active = 1 ORDER BY name'
+    `SELECT ${USER_SELECT}
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+      WHERE u.active = 1
+      ORDER BY u.name`
   );
 }
 
@@ -1446,13 +1459,14 @@ export async function createUserRow(u: {
   email: string;
   password_hash: string;
   role: 'admin' | 'manager' | 'worker' | 'employee';
+  manager_id?: number | null;
   hourly_rate?: number | null;
 } & UserEmailFields): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO users
        (name, email, password_hash, role, personal_email, work_email,
-        receives_new_project_emails, receives_completion_emails, hourly_rate)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        receives_new_project_emails, receives_completion_emails, manager_id, hourly_rate)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
     [
       u.name,
       u.email.trim().toLowerCase(),
@@ -1462,6 +1476,7 @@ export async function createUserRow(u: {
       u.work_email?.trim() || null,
       u.receives_new_project_emails ?? false,
       u.receives_completion_emails ?? false,
+      u.manager_id ?? null,
       u.hourly_rate ?? null,
     ]
   );
@@ -1536,6 +1551,60 @@ export async function countAdmins(): Promise<number> {
 export async function getUserRole(id: number): Promise<string | undefined> {
   const row = await one<{ role: string }>('SELECT role FROM users WHERE id = $1', [id]);
   return row?.role;
+}
+
+/* ----------------------------------------------------- Manager hierarchy */
+
+/** Assign (or clear, with NULL) the manager a user reports to. */
+export async function setUserManager(userId: number, managerId: number | null): Promise<void> {
+  await q('UPDATE users SET manager_id = $1 WHERE id = $2', [managerId, userId]);
+}
+
+/** Active users who report directly to the given manager. */
+export async function listDirectReports(managerId: number): Promise<UserRow[]> {
+  return q<UserRow>(
+    `SELECT ${USER_SELECT}
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+      WHERE u.manager_id = $1 AND u.active = 1
+      ORDER BY u.name`,
+    [managerId]
+  );
+}
+
+/**
+ * A user's role/active flag + manager pointer, for validating manager
+ * assignments. Undefined when the user doesn't exist.
+ */
+export async function getUserManagerInfo(
+  id: number
+): Promise<{ role: string; active: number; manager_id: number | null } | undefined> {
+  return one<{ role: string; active: number; manager_id: number | null }>(
+    'SELECT role, active, manager_id FROM users WHERE id = $1',
+    [id]
+  );
+}
+
+/**
+ * Walk up the manager chain starting AT startId (inclusive) and report whether
+ * targetId appears in it — i.e. whether making targetId report to startId
+ * would create a reporting cycle. Depth-capped so a pre-existing cycle in the
+ * data can't loop forever.
+ */
+export async function managerChainContains(startId: number, targetId: number): Promise<boolean> {
+  const row = await one(
+    `WITH RECURSIVE chain AS (
+       SELECT id, manager_id, 1 AS depth FROM users WHERE id = $1
+       UNION ALL
+       SELECT u.id, u.manager_id, c.depth + 1
+         FROM users u
+         JOIN chain c ON u.id = c.manager_id
+        WHERE c.depth < 100
+     )
+     SELECT 1 FROM chain WHERE id = $2 LIMIT 1`,
+    [startId, targetId]
+  );
+  return !!row;
 }
 
 /* -------------------------------------------------------------- Customers */
