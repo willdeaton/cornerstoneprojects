@@ -20,7 +20,13 @@ import {
 } from './templates';
 import { listManagersWithReports, managerWeekSummary } from '../data';
 import { listScheduleTasks, listAssigneeContacts, loadWorkCalendar } from '../schedule-data';
-import { assigneeWindows, computeSchedule, rangesOverlap } from '../schedule-math';
+import {
+  assigneeBookings,
+  computeSchedule,
+  isSplitPattern,
+  maskLabel,
+  rangesOverlap,
+} from '../schedule-math';
 import { issueApprovalToken } from '../time-approval-tokens';
 import { appOrigin } from '../app-origin';
 
@@ -169,6 +175,8 @@ async function sendProjectEvent(
 export interface SendScheduleResult extends SendResult {
   /** Assignees with work in the range who couldn't be emailed, and why. */
   skipped: { name: string; reason: string }[];
+  /** Jobs the send covered — the ones worth marking published. */
+  projectIds?: number[];
 }
 
 /** "Mon, Mar 3" — compact enough for a table cell, unambiguous about the day. */
@@ -214,29 +222,34 @@ export async function sendScheduleEmails(
       listAssigneeContacts(),
     ]);
     const { windows } = computeSchedule(tasks, calendar);
-    const booked = assigneeWindows(tasks, windows).filter(
-      (w) => rangesOverlap(w.start, w.end, from, to) && (includeSubs || w.key.startsWith('user:'))
+    // Bookings are the days actually worked, so each line covers one unbroken
+    // stretch: a two-week phase arrives as one line per week rather than one
+    // that reads as if the weekend were a work day, and someone booked Mon/Wed
+    // gets a line per day with their pattern spelled out.
+    const booked = assigneeBookings(tasks, windows, calendar).filter(
+      (w) => rangesOverlap(w.start, w.end, from, to) && (includeSubs || w.kind === 'user')
     );
 
-    // Group each assignee's work, earliest first, and hang on to the job
-    // context the email body needs.
-    const taskById = new Map(tasks.map((t) => [t.id, t]));
+    // Group each assignee's work, earliest first.
     const perAssignee = new Map<string, { name: string; lines: ScheduleLine[] }>();
     for (const w of [...booked].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))) {
-      const task = taskById.get(w.taskId);
       const entry = perAssignee.get(w.key) ?? { name: w.name, lines: [] };
       entry.lines.push({
         dates: scheduleSpan(w.start, w.end),
         project: w.projectName,
-        phase: w.taskName,
-        location: task?.location ?? null,
-        notes: task?.notes ?? null,
+        phase: isSplitPattern(w.workDays)
+          ? `${w.taskName} (your days: ${maskLabel(w.workDays)})`
+          : w.taskName,
+        location: w.location,
+        notes: w.taskNotes,
       });
       perAssignee.set(w.key, entry);
     }
 
+    const projectIds = [...new Set(booked.map((w) => w.projectId))];
+
     if (perAssignee.size === 0) {
-      return { status: 'sent', count: 0, attempted: 0, reason: 'No one is scheduled in that range.', skipped };
+      return { status: 'sent', count: 0, attempted: 0, reason: 'No one is scheduled in that range.', skipped, projectIds };
     }
 
     const byKey = new Map(contacts.map((c) => [c.key, c]));
@@ -262,7 +275,7 @@ export async function sendScheduleEmails(
       }
     }
 
-    return { status: 'sent', count: sent, attempted, skipped };
+    return { status: 'sent', count: sent, attempted, skipped, projectIds };
   } catch (err) {
     console.error('[email] schedule send failed:', err);
     return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message, skipped };

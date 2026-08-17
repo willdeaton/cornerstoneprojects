@@ -2,12 +2,16 @@ import 'server-only';
 import { getDb } from './db';
 import { q, one } from './data';
 import type {
+  DependsType,
   ProjectStatus,
+  ScheduleChange,
+  SchedulePublication,
   ScheduleTask,
   ScheduleTaskRow,
   Subcontractor,
   TaskStatus,
 } from './types';
+import { normalizeMask } from './schedule-math';
 import type { TaskInput, WorkCalendar } from './schedule-math';
 
 /*
@@ -102,7 +106,8 @@ const TASK_SELECT = `
                  'kind',   CASE WHEN sa.user_id IS NOT NULL THEN 'user' ELSE 'sub' END,
                  'ref_id', COALESCE(sa.user_id, sa.subcontractor_id),
                  'name',   COALESCE(u.name, s.name),
-                 'detail', COALESCE(u.role, s.trade)
+                 'detail', COALESCE(u.role, s.trade),
+                 'work_days', sa.work_days
                ) ORDER BY COALESCE(u.name, s.name)
              ) AS assignees
         FROM schedule_assignments sa
@@ -138,7 +143,7 @@ export async function getScheduleTask(id: number): Promise<ScheduleTaskRow | und
  */
 export async function listTaskInputs(projectId: number): Promise<TaskInput[]> {
   return q<TaskInput>(
-    `SELECT id, project_id, start_date, duration_days, depends_on_id, lag_days
+    `SELECT id, project_id, start_date, duration_days, depends_on_id, depends_type, lag_days
        FROM schedule_tasks WHERE project_id = $1`,
     [projectId]
   );
@@ -150,14 +155,15 @@ export async function createScheduleTask(t: {
   start_date: string;
   duration_days: number;
   depends_on_id?: number | null;
+  depends_type?: DependsType;
   lag_days?: number;
   status?: TaskStatus;
   notes?: string | null;
 }): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO schedule_tasks
-       (project_id, name, start_date, duration_days, depends_on_id, lag_days, status, notes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+       (project_id, name, start_date, duration_days, depends_on_id, depends_type, lag_days, status, notes, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM schedule_tasks WHERE project_id = $1))
      RETURNING id`,
     [
@@ -166,6 +172,7 @@ export async function createScheduleTask(t: {
       t.start_date,
       Math.max(1, t.duration_days),
       t.depends_on_id ?? null,
+      t.depends_type ?? 'finish_to_start',
       t.lag_days ?? 0,
       t.status ?? 'not_started',
       t.notes ?? null,
@@ -179,7 +186,15 @@ export async function updateScheduleTask(
   fields: Partial<
     Pick<
       ScheduleTask,
-      'name' | 'start_date' | 'duration_days' | 'depends_on_id' | 'lag_days' | 'status' | 'notes' | 'position'
+      | 'name'
+      | 'start_date'
+      | 'duration_days'
+      | 'depends_on_id'
+      | 'depends_type'
+      | 'lag_days'
+      | 'status'
+      | 'notes'
+      | 'position'
     >
   >
 ): Promise<void> {
@@ -211,11 +226,17 @@ export interface AssigneeInput {
   kind: 'user' | 'sub';
   /** users.id or subcontractors.id. */
   ref_id: number;
+  /**
+   * Day-of-week mask (bit 0 = Sunday … bit 6 = Saturday), or null/undefined for
+   * every working day of the phase. Lets one employee take Mon/Wed on this job
+   * and be free for another on Tuesday.
+   */
+  work_days?: number | null;
 }
 
 /**
  * Replace a phase's assignee list wholesale, in one transaction, so the editor
- * can add and remove people and commit it with a single save.
+ * can add and remove people (and change their day patterns) with a single save.
  */
 export async function setTaskAssignees(taskId: number, assignees: AssigneeInput[]): Promise<void> {
   const db = await getDb();
@@ -225,9 +246,14 @@ export async function setTaskAssignees(taskId: number, assignees: AssigneeInput[
     await client.query('DELETE FROM schedule_assignments WHERE task_id = $1', [taskId]);
     for (const a of assignees) {
       await client.query(
-        `INSERT INTO schedule_assignments (task_id, user_id, subcontractor_id)
-         VALUES ($1,$2,$3)`,
-        [taskId, a.kind === 'user' ? a.ref_id : null, a.kind === 'sub' ? a.ref_id : null]
+        `INSERT INTO schedule_assignments (task_id, user_id, subcontractor_id, work_days)
+         VALUES ($1,$2,$3,$4)`,
+        [
+          taskId,
+          a.kind === 'user' ? a.ref_id : null,
+          a.kind === 'sub' ? a.ref_id : null,
+          normalizeMask(a.work_days),
+        ]
       );
     }
     await client.query('COMMIT');
@@ -287,4 +313,112 @@ export async function deleteHoliday(day: string): Promise<void> {
 export async function loadWorkCalendar(): Promise<WorkCalendar> {
   const rows = await listHolidays();
   return { holidays: new Set(rows.map((r) => r.day)) };
+}
+
+/* --------------------------------------------- Publishing & change history */
+
+/**
+ * The current published version of each job's schedule, keyed by project id.
+ * A job missing from the map has never been published, so its phases can still
+ * be edited freely — no reason required.
+ */
+export async function listPublishedVersions(): Promise<Map<number, SchedulePublication>> {
+  const rows = await q<SchedulePublication>(
+    `SELECT DISTINCT ON (p.project_id)
+            p.*, u.name AS published_by_name
+       FROM schedule_publications p
+       LEFT JOIN users u ON u.id = p.published_by
+      ORDER BY p.project_id, p.version DESC`
+  );
+  return new Map(rows.map((r) => [r.project_id, r]));
+}
+
+export async function getPublishedVersion(
+  projectId: number
+): Promise<SchedulePublication | undefined> {
+  return one<SchedulePublication>(
+    `SELECT p.*, u.name AS published_by_name
+       FROM schedule_publications p
+       LEFT JOIN users u ON u.id = p.published_by
+      WHERE p.project_id = $1
+      ORDER BY p.version DESC
+      LIMIT 1`,
+    [projectId]
+  );
+}
+
+/**
+ * Publish (or re-publish) a job's schedule, bumping its version. Re-publishing
+ * is how a manager says "this is the new baseline" after a batch of changes;
+ * the change log keeps every reason recorded against the version it followed.
+ */
+export async function publishSchedule(
+  projectId: number,
+  publishedBy: number | null,
+  note: string | null
+): Promise<number> {
+  const row = await one<{ version: number }>(
+    `INSERT INTO schedule_publications (project_id, version, note, published_by)
+     VALUES ($1,
+             (SELECT COALESCE(MAX(version), 0) + 1 FROM schedule_publications WHERE project_id = $1),
+             $2, $3)
+     RETURNING version`,
+    [projectId, note, publishedBy]
+  );
+  return row!.version;
+}
+
+export async function unpublishSchedule(projectId: number): Promise<void> {
+  await q('DELETE FROM schedule_publications WHERE project_id = $1', [projectId]);
+}
+
+export async function logScheduleChange(c: {
+  project_id: number;
+  task_id: number | null;
+  task_name: string | null;
+  kind: ScheduleChange['kind'];
+  summary: string;
+  reason: string;
+  version: number | null;
+  changed_by: number | null;
+}): Promise<void> {
+  await q(
+    `INSERT INTO schedule_changes
+       (project_id, task_id, task_name, kind, summary, reason, version, changed_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      c.project_id,
+      c.task_id,
+      c.task_name,
+      c.kind,
+      c.summary,
+      c.reason,
+      c.version,
+      c.changed_by,
+    ]
+  );
+}
+
+/** Change history for one job, newest first. */
+export async function listScheduleChanges(
+  projectId: number,
+  limit = 50
+): Promise<ScheduleChange[]> {
+  return q<ScheduleChange>(
+    `SELECT c.*, u.name AS changed_by_name
+       FROM schedule_changes c
+       LEFT JOIN users u ON u.id = c.changed_by
+      WHERE c.project_id = $1
+      ORDER BY c.created_at DESC, c.id DESC
+      LIMIT $2`,
+    [projectId, limit]
+  );
+}
+
+/** How many reasons have been logged per job — for the board's revision badge. */
+export async function countScheduleChanges(): Promise<Map<number, number>> {
+  const rows = await q<{ project_id: number; n: number }>(
+    'SELECT project_id, COUNT(*)::int AS n FROM schedule_changes GROUP BY project_id'
+  );
+  return new Map(rows.map((r) => [r.project_id, r.n]));
 }

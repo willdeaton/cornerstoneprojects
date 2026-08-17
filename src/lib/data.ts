@@ -23,6 +23,7 @@ import type {
   Category,
   Subcontractor,
   TaskStatus,
+  DependsType,
 } from './types';
 import type {
   BackupData,
@@ -32,7 +33,7 @@ import type {
   BackupSchedulePhase,
 } from './backup-types';
 import { hoursBetween } from './format';
-import { computeSchedule, workingDaySpan } from './schedule-math';
+import { computeSchedule, maskLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
@@ -1596,16 +1597,23 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     start_date: string;
     duration_days: number;
     depends_on_id: number | null;
+    depends_type: DependsType;
     lag_days: number;
     status: TaskStatus;
     notes: string | null;
     position: number;
-    crew: string | null;
+    crew: { name: string; work_days: number | null }[] | null;
   }>(
+    // depends_type comes along so the solver resolves start-to-start links the
+    // same way the app does — otherwise an overlapping phase would export with
+    // finish-to-start dates. The crew arrives as JSON so each person's split-day
+    // pattern can be spelled out below.
     `SELECT t.id, t.project_id, p.name AS project_name, t.name,
-            t.start_date, t.duration_days, t.depends_on_id, t.lag_days,
+            t.start_date, t.duration_days, t.depends_on_id, t.depends_type, t.lag_days,
             t.status, t.notes, t.position,
-            (SELECT string_agg(COALESCE(u.name, s.name), ', ' ORDER BY COALESCE(u.name, s.name))
+            (SELECT json_agg(
+                      json_build_object('name', COALESCE(u.name, s.name), 'work_days', sa.work_days)
+                      ORDER BY COALESCE(u.name, s.name))
                FROM schedule_assignments sa
                LEFT JOIN users u          ON u.id = sa.user_id
                LEFT JOIN subcontractors s ON s.id = sa.subcontractor_id
@@ -1636,7 +1644,9 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
       working_days: workingDaySpan(dates.start, dates.end, calendar),
       status: r.status,
       follows: (r.depends_on_id != null ? nameById.get(r.depends_on_id) : '') ?? '',
-      crew: r.crew ?? '',
+      crew: (r.crew ?? [])
+        .map((c) => (c.work_days == null ? c.name : `${c.name} (${maskLabel(c.work_days)})`))
+        .join(', '),
       notes: r.notes,
     });
   }

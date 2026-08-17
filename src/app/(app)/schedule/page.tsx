@@ -1,10 +1,17 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listProjects, listActiveWorkers } from '@/lib/data';
-import { listScheduleTasks, listSubcontractors, listHolidays } from '@/lib/schedule-data';
+import {
+  listScheduleTasks,
+  listSubcontractors,
+  listHolidays,
+  listPublishedVersions,
+  countScheduleChanges,
+} from '@/lib/schedule-data';
 import { PageHeader } from '@/components/ui';
-import { ScheduleBoard } from './ScheduleBoard';
+import { ScheduleViews } from './ScheduleViews';
 import { MySchedule } from './MySchedule';
+import type { PublishedInfo } from './PublishBar';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,19 +37,33 @@ export default async function SchedulePage() {
     );
   }
 
-  const [projects, workers, subs] = await Promise.all([
+  const [projects, workers, subs, publications, changeCounts] = await Promise.all([
     listProjects(),
     listActiveWorkers(),
     listSubcontractors({ activeOnly: true }),
+    listPublishedVersions(),
+    countScheduleChanges(),
   ]);
+
+  // Publish state per job: which version went out, and how many changes have
+  // been explained since. Plain objects so it crosses to the client component.
+  const published: Record<number, PublishedInfo> = {};
+  for (const [projectId, pub] of publications) {
+    published[projectId] = {
+      version: pub.version,
+      published_at: pub.published_at,
+      published_by_name: pub.published_by_name ?? null,
+      changeCount: changeCounts.get(projectId) ?? 0,
+    };
+  }
 
   return (
     <div>
       <PageHeader
         title="Schedule"
-        subtitle="Plan phases across your jobs, see where work overlaps, and send crews their dates"
+        subtitle="Plan phases across your jobs, see who's working where each week, and send crews their dates"
       />
-      <ScheduleBoard
+      <ScheduleViews
         tasks={tasks}
         projects={projects
           .filter((p) => p.status !== 'completed')
@@ -50,6 +71,8 @@ export default async function SchedulePage() {
         workers={workers.map((w) => ({ id: w.id, name: w.name, role: w.role }))}
         subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
         holidays={holidayDays}
+        published={published}
+        canUnpublish={me.role === 'admin'}
       />
     </div>
   );

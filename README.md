@@ -18,6 +18,25 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   Completed), progress, value, hours logged, and due dates.
 - **Project detail** — editable status & progress, **job notes**, and a
   per-job **time clock**.
+- **Schedule** — plan each job as phases with a duration in working days and
+  optional links between them. Two views over the same data: **Job Timeline**
+  (phases per job, with double-bookings flagged) and **Crew Week** (one row per
+  employee, one column per day — what everyone is doing that week). Weekends and
+  non-working days never count toward a duration and are drawn as breaks, so
+  work carrying into the next week reads as separate stretches rather than
+  continuous weekend work.
+  - **Split days** — each person on a phase can be booked on chosen weekdays, so
+    an employee runs one job Mon/Wed and another Tuesday. Only days genuinely
+    shared between two jobs count as a double-booking.
+  - **Overlapping phases** — a phase can start a set number of working days
+    after the previous phase *starts* (start-to-start), instead of waiting for
+    it to finish, so a sub can work alongside the crew ahead of them.
+  - **Publish & change reasons** — publishing a job's schedule (explicitly, or
+    by sending it out from **Send Schedule**) marks the dates the crew has.
+    After that, any change to dates, durations, phase links or crew requires a
+    typed reason, kept with an auto-generated summary of what moved in the
+    job's change history. Marking a phase in progress or complete is progress,
+    not a schedule change, and needs no reason.
 - **Time Clock** — crew clock in/out of jobs, a live timer, weekly hours, "my
   recent time," and a live "on the clock now" panel.
 - **Users & Auth** — email/password login, sign out, and user management

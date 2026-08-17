@@ -13,21 +13,27 @@ export function SendScheduleModal({
   defaultFrom,
   defaultTo,
   onClose,
+  onSent,
 }: {
   defaultFrom: string;
   defaultTo: string;
   onClose: () => void;
+  /** Called after a send that changed publish state, so the board can refresh. */
+  onSent?: () => void;
 }) {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [includeSubs, setIncludeSubs] = useState(true);
+  const [publish, setPublish] = useState(true);
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<SendScheduleResult | null>(null);
+  const [result, setResult] = useState<(SendScheduleResult & { published?: number }) | null>(null);
 
   async function send() {
     setSending(true);
-    setResult(await sendScheduleAction(from, to, includeSubs));
+    const res = await sendScheduleAction(from, to, includeSubs, publish);
+    setResult(res);
     setSending(false);
+    if (res.published) onSent?.();
   }
 
   return (
@@ -48,6 +54,12 @@ export function SendScheduleModal({
                     : `Sent to ${result.count} of ${result.attempted}.`}
                 </p>
                 {result.reason && <p className="text-brand-gray">{result.reason}</p>}
+                {!!result.published && (
+                  <p className="mt-1 text-brand-gray">
+                    {result.published} {result.published === 1 ? 'job' : 'jobs'} marked published —
+                    changes to those dates now need a reason.
+                  </p>
+                )}
               </div>
             )}
             {result.skipped.length > 0 && (
@@ -100,6 +112,20 @@ export function SendScheduleModal({
                 onChange={(e) => setIncludeSubs(e.target.checked)}
               />
               Also send to subcontractors with an email address
+            </label>
+            <label className="flex items-start gap-2 text-sm text-brand-ink">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={publish}
+                onChange={(e) => setPublish(e.target.checked)}
+              />
+              <span>
+                Mark these jobs&apos; schedules as published
+                <span className="block text-xs text-brand-gray">
+                  The crew now has these dates, so later changes to them will ask for a reason.
+                </span>
+              </span>
             </label>
             <div className="flex justify-end gap-2">
               <button className="btn-secondary" onClick={onClose} disabled={sending}>

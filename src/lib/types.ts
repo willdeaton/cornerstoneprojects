@@ -280,10 +280,19 @@ export interface Subcontractor {
 export type TaskStatus = 'not_started' | 'in_progress' | 'complete';
 
 /**
+ * How a phase hangs off the one before it.
+ *   finish_to_start — starts after the predecessor FINISHES (+ lag)
+ *   start_to_start  — starts a number of working days after the predecessor
+ *                     STARTS, so the two phases run alongside each other
+ */
+export type DependsType = 'finish_to_start' | 'start_to_start';
+
+/**
  * One phase of scheduled work on a job. `start_date` is the EARLIEST start,
  * not necessarily the real one: a phase that follows another starts when its
- * predecessor finishes (plus `lag_days`) if that's later. Real dates are
- * derived by computeSchedule() in ./schedule-math, never stored.
+ * predecessor finishes — or, for a start-to-start link, a set number of days
+ * after that predecessor begins — if that's later. Real dates are derived by
+ * computeSchedule() in ./schedule-math, never stored.
  */
 export interface ScheduleTask {
   id: number;
@@ -294,7 +303,9 @@ export interface ScheduleTask {
   duration_days: number;
   /** Predecessor phase, or null when this phase stands on its own. */
   depends_on_id: number | null;
-  /** Working days to wait after the predecessor finishes. */
+  /** Whether the link hangs off the predecessor's finish or its start. */
+  depends_type: DependsType;
+  /** Working days to wait after the predecessor's finish (or start). */
   lag_days: number;
   status: TaskStatus;
   notes: string | null;
@@ -303,7 +314,10 @@ export interface ScheduleTask {
   updated_at: string;
 }
 
-/** A person or sub attached to a phase, for the phase's whole window. */
+/**
+ * A person or sub attached to a phase. They work every working day of the
+ * phase's window unless `work_days` narrows it to particular weekdays.
+ */
 export interface ScheduleAssignee {
   id: number;
   kind: 'user' | 'sub';
@@ -312,6 +326,11 @@ export interface ScheduleAssignee {
   name: string;
   /** Trade for subs; role for employees. */
   detail: string | null;
+  /**
+   * 7-bit day-of-week mask (bit 0 = Sunday … bit 6 = Saturday), or null for
+   * every working day in the window. See DAY_MASK helpers in ./schedule-math.
+   */
+  work_days: number | null;
 }
 
 /** A phase with its job context and assignees, as the schedule views need it. */
@@ -323,6 +342,41 @@ export type ScheduleTaskRow = ScheduleTask & {
   project_due_date: string | null;
   assignees: ScheduleAssignee[];
 };
+
+/**
+ * A job whose schedule has gone out to the crew. Once a job has one of these,
+ * changes to its phases have to carry a reason (see ScheduleChange).
+ */
+export interface SchedulePublication {
+  id: number;
+  project_id: number;
+  /** 1 for the first publish, then up. Shown as "Published v2". */
+  version: number;
+  note: string | null;
+  published_by: number | null;
+  published_at: string;
+  /** Joined for display; null when the publisher's account is gone. */
+  published_by_name?: string | null;
+}
+
+/** One logged change to a published schedule: what moved, and why. */
+export interface ScheduleChange {
+  id: number;
+  project_id: number;
+  task_id: number | null;
+  /** Copied at write time so history survives the phase being deleted. */
+  task_name: string | null;
+  kind: 'added' | 'updated' | 'deleted';
+  /** Auto-generated, e.g. "Start Mar 3 → Mar 5; duration 5 → 7 days". */
+  summary: string;
+  /** Typed by whoever made the change. */
+  reason: string;
+  /** The published version the change came after. */
+  version: number | null;
+  changed_by: number | null;
+  created_at: string;
+  changed_by_name?: string | null;
+}
 
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   not_started: 'Not Started',
