@@ -127,7 +127,11 @@ export interface ScheduleLine {
   notes: string | null;
 }
 
-/** A bordered table of scheduled work — the sibling of detailTable for lists. */
+/**
+ * A bordered table of scheduled work — the sibling of detailTable for lists.
+ * Job names, phase names and notes are all typed by hand, so every field goes
+ * through esc() before it reaches the body.
+ */
 function scheduleTable(lines: ScheduleLine[]): string {
   const head = ['Dates', 'Job', 'Work']
     .map(
@@ -139,14 +143,14 @@ function scheduleTable(lines: ScheduleLine[]): string {
     .map(
       (l) => `
         <tr>
-          <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top;white-space:nowrap;font-weight:bold">${l.dates}</td>
+          <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top;white-space:nowrap;font-weight:bold">${esc(l.dates)}</td>
           <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
-            ${l.project}
-            ${l.location ? `<br /><span style="${MUTED}">${l.location}</span>` : ''}
+            ${esc(l.project)}
+            ${l.location ? `<br /><span style="${MUTED}">${esc(l.location)}</span>` : ''}
           </td>
           <td style="padding:10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
-            ${l.phase}
-            ${l.notes ? `<br /><span style="${MUTED}">${l.notes}</span>` : ''}
+            ${esc(l.phase)}
+            ${l.notes ? `<br /><span style="${MUTED}">${esc(l.notes)}</span>` : ''}
           </td>
         </tr>`
     )
@@ -164,8 +168,8 @@ export function buildScheduleEmail(
   range: { from: string; to: string },
   lines: ScheduleLine[]
 ): RenderedEmail {
-  const hello = firstName ? `Hi ${firstName},` : 'Hi,';
-  const span = `${range.from} – ${range.to}`;
+  const hello = firstName ? `Hi ${esc(firstName)},` : 'Hi,';
+  const span = esc(`${range.from} – ${range.to}`);
   return {
     subject: `Your schedule: ${span}`,
     html: `
@@ -211,6 +215,104 @@ export function buildWelcomeEmail(
           Once you're in, we recommend setting a password of your own — use
           &ldquo;Forgot password&rdquo; on the sign-in page at any time.
         </p>
+        ${SIGNOFF}
+      </div>
+    `,
+  };
+}
+
+/** One direct report's week, as shown in the Monday approval email. */
+export interface ApprovalReportSummary {
+  user_name: string;
+  /** Net hours per day, Monday..Sunday (7 entries). */
+  days: { date: string; hours: number }[];
+  total_hours: number;
+  notes: string[];
+}
+
+/** Escape user-entered text (names, shift notes) interpolated into email HTML. */
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Short weekday + date header cell, e.g. "Mon 2/9". */
+function dayHeader(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  const wd = d.toLocaleDateString('en-US', { weekday: 'short' });
+  return `${wd} ${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * SCHEDULED (Monday morning): one email per manager summarizing every direct
+ * report's prior week — day-by-day net hours and the weekly total — with a
+ * tokenized link to approve the hours without logging in.
+ */
+export function renderWeeklyApprovalEmail(
+  managerName: string,
+  weekLabel: string,
+  reports: ApprovalReportSummary[],
+  approveUrl: string
+): RenderedEmail {
+  const firstName = (managerName || '').trim().split(/\s+/)[0] || '';
+  const hello = firstName ? `Hi ${esc(firstName)},` : 'Hi,';
+
+  const th = `padding:6px 8px;${MUTED};text-align:right;border-bottom:1px solid #e2e5e2;white-space:nowrap`;
+  const td = 'padding:6px 8px;text-align:right;color:#1f2421;border-bottom:1px solid #eef0ee';
+
+  const sections = reports
+    .map((r) => {
+      if (r.total_hours <= 0) {
+        return `
+          <div style="margin:20px 0">
+            <p style="margin:0 0 4px;font-weight:bold;color:#1f2421">${esc(r.user_name)}</p>
+            <p style="margin:0;${MUTED}">No time recorded.</p>
+          </div>`;
+      }
+      const headCells = r.days.map((d) => `<th style="${th}">${dayHeader(d.date)}</th>`).join('');
+      const hourCells = r.days
+        .map((d) => `<td style="${td}">${d.hours > 0 ? d.hours.toFixed(1) : '—'}</td>`)
+        .join('');
+      const notes = r.notes.length
+        ? `<p style="margin:6px 0 0;${MUTED}">Notes: ${r.notes.map(esc).join(' · ')}</p>`
+        : '';
+      return `
+        <div style="margin:20px 0">
+          <p style="margin:0 0 6px;font-weight:bold;color:#1f2421">
+            ${esc(r.user_name)}
+            <span style="font-weight:normal;${MUTED}"> — ${r.total_hours.toFixed(1)} hours</span>
+          </p>
+          <table style="border-collapse:collapse;font-size:13px">
+            <tr>${headCells}<th style="${th}">Total</th></tr>
+            <tr>${hourCells}<td style="${td};font-weight:bold">${r.total_hours.toFixed(1)}</td></tr>
+          </table>
+          ${notes}
+        </div>`;
+    })
+    .join('');
+
+  return {
+    subject: `Time approval needed — week of ${weekLabel}`,
+    html: `
+      <div style="${WRAP}">
+        <p>${hello}</p>
+        <p>Here are your team's hours for the week of <strong>${weekLabel}</strong>.
+        Please review and approve them for payroll.</p>
+        ${sections}
+        <p style="margin:24px 0">
+          <a href="${approveUrl}"
+             style="background:#7ab648;color:#1f2421;text-decoration:none;font-weight:bold;padding:12px 20px;border-radius:8px;display:inline-block">
+            Review &amp; approve hours
+          </a>
+        </p>
+        <p style="${MUTED}">
+          If the button doesn't work, copy and paste this link into your browser:<br />
+          <a href="${approveUrl}" style="color:#4a7a2b">${approveUrl}</a>
+        </p>
+        <p style="${MUTED}">No login needed — this link is unique to you and expires in 14 days.</p>
         ${SIGNOFF}
       </div>
     `,

@@ -3,8 +3,8 @@
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { AdminWeek } from '@/lib/data';
-import { shortDate, dateTime, duration } from '@/lib/format';
-import { setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
+import { shortDate, dateTime, duration, money } from '@/lib/format';
+import { approveWeekAction, setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
 import {
   TimeEntryModal,
   type ProjectOption,
@@ -22,16 +22,20 @@ export function TimesheetReview({
   weeks,
   projects,
   users,
+  isAdmin,
 }: {
   weeks: AdminWeek[];
   projects: ProjectOption[];
   users: UserOption[];
+  isAdmin: boolean;
 }) {
   const [pending, start] = useTransition();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [addUserId, setAddUserId] = useState<number | undefined>(undefined);
   const [editing, setEditing] = useState<TimeEntryInit | null>(null);
+  const [checkNums, setCheckNums] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   function refresh() {
@@ -51,15 +55,39 @@ export function TimesheetReview({
   }
 
   function markWeek(userId: number, weekStart: string, paid: boolean) {
+    const k = key(weekStart, userId);
+    const checkNumber = paid ? checkNums[k]?.trim() || null : null;
+    setError(null);
     start(async () => {
-      await setWeekPaidAction(userId, weekStart, paid);
+      const res = await setWeekPaidAction(userId, weekStart, paid, checkNumber);
+      if (!res.ok) {
+        setError(res.error ?? 'Could not update paid status.');
+        return;
+      }
+      setCheckNums((prev) => {
+        const next = { ...prev };
+        delete next[k];
+        return next;
+      });
       router.refresh();
     });
   }
 
   function markEntry(entryId: number, paid: boolean) {
+    setError(null);
     start(async () => {
-      await setEntryPaidAction(entryId, paid);
+      const res = await setEntryPaidAction(entryId, paid);
+      if (!res.ok) {
+        setError(res.error ?? 'Could not update paid status.');
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  function approve(userId: number, weekStart: string) {
+    start(async () => {
+      await approveWeekAction(userId, weekStart);
       router.refresh();
     });
   }
@@ -120,6 +148,7 @@ export function TimesheetReview({
   return (
     <div className="space-y-6">
       <div className="flex justify-end">{addButton}</div>
+      {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {weeks.map((week) => (
         <div key={week.week_start} className="card overflow-hidden">
           {/* Week header */}
@@ -142,13 +171,15 @@ export function TimesheetReview({
 
           {/* Per-employee rows */}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
                   <th className="px-5 py-2.5 font-semibold">Employee</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Net Hours</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Check Amount</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Shifts</th>
                   <th className="px-3 py-2.5 font-semibold">Status</th>
+                  <th className="px-3 py-2.5 font-semibold">Approval</th>
                   <th className="px-5 py-2.5 text-right font-semibold">Paid</th>
                 </tr>
               </thead>
@@ -181,35 +212,83 @@ export function TimesheetReview({
                         <td className="px-3 py-3 text-right font-semibold text-brand-ink">
                           {u.total_hours.toFixed(1)}h
                         </td>
+                        <td className="px-3 py-3 text-right font-semibold text-brand-ink">
+                          {u.hourly_rate != null ? (
+                            money(u.total_hours * u.hourly_rate, { cents: true })
+                          ) : (
+                            <span className="font-normal text-brand-gray">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-3 text-right text-brand-gray">{u.closed_count}</td>
                         <td className="px-3 py-3">
                           {u.closed_count === 0 ? (
                             <span className="text-xs text-brand-gray">In progress</span>
                           ) : u.all_paid ? (
-                            <span className="text-xs font-medium text-brand-green-dark">Paid</span>
+                            <span className="text-xs font-medium text-brand-green-dark">
+                              Paid{u.check_number ? ` · Check #${u.check_number}` : ''}
+                            </span>
                           ) : (
                             <span className="text-xs font-medium text-amber-700">
                               {u.unpaid_hours.toFixed(1)}h unpaid
                             </span>
                           )}
                         </td>
+                        <td className="px-3 py-3">
+                          {u.approved_at ? (
+                            <span className="badge bg-brand-green/20 text-brand-green-dark">
+                              Approved
+                              {u.approved_by_name ? ` by ${u.approved_by_name}` : ''}{' '}
+                              {shortDate(u.approved_at)}
+                            </span>
+                          ) : (
+                            <button
+                              className="rounded-lg border border-brand-green/50 bg-brand-green/10 px-2.5 py-1 text-xs font-semibold text-brand-green-dark transition hover:bg-brand-green/20 disabled:opacity-50"
+                              disabled={pending}
+                              onClick={() => approve(u.user_id, week.week_start)}
+                            >
+                              Approve
+                            </button>
+                          )}
+                        </td>
                         <td className="px-5 py-3 text-right">
-                          <label className="inline-flex cursor-pointer items-center gap-2">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 accent-[#98C73A]"
-                              checked={u.closed_count > 0 && u.all_paid}
-                              disabled={pending || u.closed_count === 0}
-                              onChange={(e) => markWeek(u.user_id, week.week_start, e.target.checked)}
-                            />
-                            <span className="text-xs text-brand-gray">Mark week</span>
-                          </label>
+                          {isAdmin ? (
+                            <div className="flex items-center justify-end gap-2">
+                              {!(u.closed_count > 0 && u.all_paid) && (
+                                <input
+                                  type="text"
+                                  className="input h-8 w-24 px-2 py-1 text-xs"
+                                  placeholder="Check #"
+                                  aria-label={`Check number for ${u.user_name}`}
+                                  value={checkNums[k] ?? ''}
+                                  disabled={pending || u.closed_count === 0}
+                                  onChange={(e) =>
+                                    setCheckNums((prev) => ({ ...prev, [k]: e.target.value }))
+                                  }
+                                />
+                              )}
+                              <label className="inline-flex cursor-pointer items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 accent-[#98C73A]"
+                                  checked={u.closed_count > 0 && u.all_paid}
+                                  disabled={pending || u.closed_count === 0}
+                                  onChange={(e) => markWeek(u.user_id, week.week_start, e.target.checked)}
+                                />
+                                <span className="text-xs text-brand-gray">Mark week</span>
+                              </label>
+                            </div>
+                          ) : (
+                            /* Managers see the read-only status (with check
+                               number) in the Status column; marking paid is
+                               admin-only. */
+                            <span className="text-xs text-brand-gray">—</span>
+                          )}
                         </td>
                       </tr>
 
                       {isOpen && (
                         <tr className="border-b border-black/5 bg-black/[0.015]">
-                          <td colSpan={5} className="px-5 py-3">
+                          <td colSpan={6} className="px-5 py-3">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr className="text-left uppercase tracking-wide text-brand-gray">
@@ -246,13 +325,21 @@ export function TimesheetReview({
                                       {en.clock_out ? `${en.net_hours.toFixed(2)}h` : duration(en.clock_in, null)}
                                     </td>
                                     <td className="py-2 text-right">
-                                      <input
-                                        type="checkbox"
-                                        className="h-4 w-4 accent-[#98C73A]"
-                                        checked={en.paid}
-                                        disabled={pending || !en.clock_out}
-                                        onChange={(e) => markEntry(en.id, e.target.checked)}
-                                      />
+                                      {isAdmin ? (
+                                        <input
+                                          type="checkbox"
+                                          className="h-4 w-4 accent-[#98C73A]"
+                                          checked={en.paid}
+                                          disabled={pending || !en.clock_out}
+                                          onChange={(e) => markEntry(en.id, e.target.checked)}
+                                        />
+                                      ) : en.paid ? (
+                                        <span className="font-medium text-brand-green-dark">
+                                          Paid{en.check_number ? ` · #${en.check_number}` : ''}
+                                        </span>
+                                      ) : (
+                                        <span className="text-brand-gray">—</span>
+                                      )}
                                     </td>
                                     <td className="py-2 text-right">
                                       {en.clock_out ? (

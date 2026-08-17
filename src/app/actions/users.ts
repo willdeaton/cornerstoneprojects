@@ -13,13 +13,17 @@ import {
   setUserRole,
   setUserActive,
   setUserPassword,
+  setUserRate,
   deleteUser,
   countAdmins,
   getUserRole,
+  setUserManager,
+  getUserManagerInfo,
+  managerChainContains,
   USER_EMAIL_FLAGS,
 } from '@/lib/data';
 
-const ROLES: Role[] = ['admin', 'manager', 'worker'];
+const ROLES: Role[] = ['admin', 'manager', 'worker', 'employee'];
 
 /** Pull the per-user email fields + subscription flags out of a form payload.
  *  Checkbox names map 1:1 to the DB boolean column names. */
@@ -34,6 +38,18 @@ function readEmailFields(formData: FormData) {
   };
 }
 
+/** Parse an hourly-rate input: empty = null (no rate), otherwise a
+ *  non-negative dollar amount ("$" and "," are tolerated and stripped). */
+function parseRate(raw: string): { ok: true; rate: number | null } | { ok: false; error: string } {
+  const s = raw.trim();
+  if (!s) return { ok: true, rate: null };
+  const n = Number(s.replace(/[$,]/g, ''));
+  if (!Number.isFinite(n) || n < 0) {
+    return { ok: false, error: 'Hourly rate must be a non-negative number.' };
+  }
+  return { ok: true, rate: n };
+}
+
 async function requireManager() {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
@@ -46,6 +62,30 @@ async function requireManager() {
 export interface UserFormState {
   error?: string;
   success?: string;
+}
+
+/**
+ * Check a proposed manager assignment. Returns an error message, or null when
+ * the assignment is valid. `userId` is null when the report doesn't exist yet
+ * (user creation), so self-assignment/cycles are impossible.
+ */
+async function validateManager(userId: number | null, managerId: number): Promise<string | null> {
+  if (userId !== null && managerId === userId) {
+    return 'A user cannot be their own manager.';
+  }
+  const manager = await getUserManagerInfo(managerId);
+  if (!manager) return 'Selected manager does not exist.';
+  if (!manager.active) return 'Selected manager is not an active user.';
+  if (manager.role !== 'admin' && manager.role !== 'manager') {
+    return 'Selected manager must have the admin or manager role.';
+  }
+
+  // Walk up the chain from the proposed manager; if the user being assigned
+  // already appears above them, the assignment would create a reporting cycle.
+  if (userId !== null && (await managerChainContains(managerId, userId))) {
+    return 'That assignment would create a reporting cycle (the selected manager already reports up to this user).';
+  }
+  return null;
 }
 
 export async function createUserAction(
@@ -63,12 +103,26 @@ export async function createUserAction(
   if (!ROLES.includes(role)) return { error: 'Invalid role.' };
   if (await emailExists(email)) return { error: 'A user with that email already exists.' };
 
+  const managerRaw = String(formData.get('manager_id') ?? '').trim();
+  let managerId: number | null = null;
+  if (managerRaw) {
+    managerId = Number(managerRaw);
+    if (!Number.isInteger(managerId)) return { error: 'Invalid manager.' };
+    const err = await validateManager(null, managerId);
+    if (err) return { error: err };
+  }
+
+  const parsed = parseRate(String(formData.get('hourly_rate') ?? ''));
+  if (!parsed.ok) return { error: parsed.error };
+
   const emailFields = readEmailFields(formData);
   await createUserRow({
     name,
     email,
     password_hash: hashPassword(password),
     role,
+    manager_id: managerId,
+    hourly_rate: parsed.rate,
     ...emailFields,
   });
 
@@ -130,6 +184,33 @@ export async function deleteUserAction(id: number): Promise<{ ok: boolean; error
   }
   await deleteUser(id);
   revalidatePath('/settings/users');
+  return { ok: true };
+}
+
+export async function setUserManagerAction(
+  userId: number,
+  managerId: number | null
+): Promise<{ ok: boolean; error?: string }> {
+  await requireManager();
+  if (!Number.isInteger(userId)) return { ok: false, error: 'Missing user id.' };
+  if (!(await getUserManagerInfo(userId))) return { ok: false, error: 'User not found.' };
+  if (managerId !== null) {
+    if (!Number.isInteger(managerId)) return { ok: false, error: 'Invalid manager.' };
+    const err = await validateManager(userId, managerId);
+    if (err) return { ok: false, error: err };
+  }
+  await setUserManager(userId, managerId);
+  revalidatePath('/settings/users');
+  return { ok: true };
+}
+
+export async function setUserRateAction(id: number, rateInput: string) {
+  await requireManager();
+  const parsed = parseRate(rateInput);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  await setUserRate(id, parsed.rate);
+  revalidatePath('/settings/users');
+  revalidatePath('/timesheets');
   return { ok: true };
 }
 

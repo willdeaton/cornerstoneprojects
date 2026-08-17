@@ -6,7 +6,13 @@ import { Modal } from '@/components/Modal';
 import { createUserAction, type UserFormState } from '@/app/actions/users';
 import { SubscriptionFields } from './SubscriptionFields';
 
-export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
+export function AddUserButton({
+  canGrantAdmin,
+  managers,
+}: {
+  canGrantAdmin: boolean;
+  managers: { id: number; name: string }[];
+}) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState<UserFormState, FormData>(createUserAction, {});
   const router = useRouter();
@@ -38,14 +44,41 @@ export function AddUserButton({ canGrantAdmin }: { canGrantAdmin: boolean }) {
             <div>
               <label className="label">Role</label>
               <select name="role" className="input" defaultValue="worker">
+                <option value="employee">Employee</option>
                 <option value="worker">Worker</option>
                 <option value="manager">Manager</option>
                 {canGrantAdmin && <option value="admin">Admin</option>}
               </select>
             </div>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Manager</label>
+              <select name="manager_id" className="input" defaultValue="">
+                <option value="">— No manager —</option>
+                {managers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-brand-gray">
+                Who this user reports to. Used for weekly time approvals.
+              </p>
+            </div>
+            <div>
+              <label className="label">Hourly rate ($/hr)</label>
+              <input
+                name="hourly_rate"
+                className="input"
+                inputMode="decimal"
+                placeholder="e.g. 22.50 (optional)"
+              />
+            </div>
+          </div>
           <p className="text-xs text-brand-gray">
-            Workers can clock in/out and add notes. Managers &amp; admins can also manage users.
+            Employees can only use the time clock and see their own time. Workers can also view
+            projects and add notes. Managers &amp; admins can manage users.
           </p>
           <div className="border-t border-black/5 pt-4">
             <SubscriptionFields />

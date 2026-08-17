@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth';
 import { listQuotes } from '@/lib/data';
 import type { QuoteStatus } from '@/lib/types';
 import { PageHeader } from '@/components/ui';
@@ -18,6 +20,10 @@ export default async function QuotesPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
+  const me = await getCurrentUser();
+  if (!me) redirect('/login');
+  if (me.role === 'employee') redirect('/time');
+
   const { status } = await searchParams;
   const filter = (status ?? 'open') as string;
   const quotes = await listQuotes(filter === 'all' ? undefined : (filter as QuoteStatus));
