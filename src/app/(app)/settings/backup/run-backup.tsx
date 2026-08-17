@@ -172,6 +172,34 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
     }))
   );
 
+  addSheet(
+    'Schedule',
+    data.schedule.map((s) => ({
+      Project: s.project_name,
+      Phase: s.phase,
+      Start: s.start_date,
+      End: s.end_date,
+      'Working Days': s.working_days,
+      Status: s.status,
+      Follows: s.follows,
+      Crew: s.crew,
+      Notes: s.notes ?? '',
+    }))
+  );
+
+  addSheet(
+    'Subcontractors',
+    data.subcontractors.map((s) => ({
+      Name: s.name,
+      Trade: s.trade ?? '',
+      Contact: s.contact_name ?? '',
+      Email: s.email ?? '',
+      Phone: s.phone ?? '',
+      Active: s.active ? 'Yes' : 'No',
+      Notes: s.notes ?? '',
+    }))
+  );
+
   return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
 }
 

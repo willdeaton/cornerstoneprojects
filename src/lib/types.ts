@@ -260,6 +260,76 @@ export interface TimeBreak {
   created_at: string;
 }
 
+/* ----------------------------------------------------------- Scheduling */
+
+/** A subcontractor the company schedules work with. */
+export interface Subcontractor {
+  id: number;
+  name: string;
+  /** Framing, Drywall, Electrical, … */
+  trade: string | null;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TaskStatus = 'not_started' | 'in_progress' | 'complete';
+
+/**
+ * One phase of scheduled work on a job. `start_date` is the EARLIEST start,
+ * not necessarily the real one: a phase that follows another starts when its
+ * predecessor finishes (plus `lag_days`) if that's later. Real dates are
+ * derived by computeSchedule() in ./schedule-math, never stored.
+ */
+export interface ScheduleTask {
+  id: number;
+  project_id: number;
+  name: string;
+  start_date: string;
+  /** Length in working days (weekends and holidays don't count). */
+  duration_days: number;
+  /** Predecessor phase, or null when this phase stands on its own. */
+  depends_on_id: number | null;
+  /** Working days to wait after the predecessor finishes. */
+  lag_days: number;
+  status: TaskStatus;
+  notes: string | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A person or sub attached to a phase, for the phase's whole window. */
+export interface ScheduleAssignee {
+  id: number;
+  kind: 'user' | 'sub';
+  /** users.id or subcontractors.id, depending on `kind`. */
+  ref_id: number;
+  name: string;
+  /** Trade for subs; role for employees. */
+  detail: string | null;
+}
+
+/** A phase with its job context and assignees, as the schedule views need it. */
+export type ScheduleTaskRow = ScheduleTask & {
+  project_name: string;
+  customer: string;
+  location: string | null;
+  project_status: ProjectStatus;
+  project_due_date: string | null;
+  assignees: ScheduleAssignee[];
+};
+
+export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
+  not_started: 'Not Started',
+  in_progress: 'In Progress',
+  complete: 'Complete',
+};
+
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
   not_started: 'Not Started',
   in_progress: 'In Progress',

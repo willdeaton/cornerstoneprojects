@@ -14,9 +14,13 @@ import {
   buildJobCompletedEmail,
   buildPasswordResetEmail,
   buildWelcomeEmail,
+  buildScheduleEmail,
   renderWeeklyApprovalEmail,
+  type ScheduleLine,
 } from './templates';
 import { listManagersWithReports, managerWeekSummary } from '../data';
+import { listScheduleTasks, listAssigneeContacts, loadWorkCalendar } from '../schedule-data';
+import { assigneeWindows, computeSchedule, rangesOverlap } from '../schedule-math';
 import { issueApprovalToken } from '../time-approval-tokens';
 import { appOrigin } from '../app-origin';
 
@@ -157,6 +161,111 @@ async function sendProjectEvent(
     // Best-effort: never let an email failure bubble into the business action.
     console.error(`[email] ${label} failed:`, err);
     return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message };
+  }
+}
+
+/* ------------------------------------------------- On demand: schedule send */
+
+export interface SendScheduleResult extends SendResult {
+  /** Assignees with work in the range who couldn't be emailed, and why. */
+  skipped: { name: string; reason: string }[];
+}
+
+/** "Mon, Mar 3" — compact enough for a table cell, unambiguous about the day. */
+function scheduleDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+/** One day, or a span — a single-day phase shouldn't read "Mar 3 – Mar 3". */
+function scheduleSpan(start: string, end: string): string {
+  return start === end ? scheduleDay(start) : `${scheduleDay(start)} – ${scheduleDay(end)}`;
+}
+
+/**
+ * ON DEMAND: a manager sends out the schedule for a date range. Each assignee
+ * gets one email covering only their own work, so recipients come from the
+ * assignments themselves rather than the flag-based subscription lists (the
+ * same way the password-reset and welcome sends address a known person).
+ *
+ * Best-effort per recipient, like every other send here: one unreachable
+ * address never aborts the batch. Assignees with no address on file are
+ * returned in `skipped` rather than silently dropped.
+ */
+export async function sendScheduleEmails(
+  from: string,
+  to: string,
+  includeSubs: boolean
+): Promise<SendScheduleResult> {
+  const skipped: { name: string; reason: string }[] = [];
+  try {
+    const loaded = await loadConfigOrReason();
+    if (!loaded.ok) {
+      return { status: 'error', count: 0, attempted: 0, reason: loaded.reason, skipped };
+    }
+
+    const [tasks, calendar, contacts] = await Promise.all([
+      listScheduleTasks(),
+      loadWorkCalendar(),
+      listAssigneeContacts(),
+    ]);
+    const { windows } = computeSchedule(tasks, calendar);
+    const booked = assigneeWindows(tasks, windows).filter(
+      (w) => rangesOverlap(w.start, w.end, from, to) && (includeSubs || w.key.startsWith('user:'))
+    );
+
+    // Group each assignee's work, earliest first, and hang on to the job
+    // context the email body needs.
+    const taskById = new Map(tasks.map((t) => [t.id, t]));
+    const perAssignee = new Map<string, { name: string; lines: ScheduleLine[] }>();
+    for (const w of [...booked].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))) {
+      const task = taskById.get(w.taskId);
+      const entry = perAssignee.get(w.key) ?? { name: w.name, lines: [] };
+      entry.lines.push({
+        dates: scheduleSpan(w.start, w.end),
+        project: w.projectName,
+        phase: w.taskName,
+        location: task?.location ?? null,
+        notes: task?.notes ?? null,
+      });
+      perAssignee.set(w.key, entry);
+    }
+
+    if (perAssignee.size === 0) {
+      return { status: 'sent', count: 0, attempted: 0, reason: 'No one is scheduled in that range.', skipped };
+    }
+
+    const byKey = new Map(contacts.map((c) => [c.key, c]));
+    const range = { from: scheduleDay(from), to: scheduleDay(to) };
+    let sent = 0;
+    let attempted = 0;
+
+    for (const [key, entry] of perAssignee) {
+      const contact = byKey.get(key);
+      if (!contact?.email) {
+        skipped.push({ name: entry.name, reason: 'No email address on file' });
+        continue;
+      }
+      attempted++;
+      try {
+        const firstName = entry.name.trim().split(/\s+/)[0] ?? '';
+        const { subject, html } = buildScheduleEmail(firstName, range, entry.lines);
+        await sendEmail(loaded.cfg, contact.email, subject, html);
+        sent++;
+      } catch (err) {
+        console.error(`[email] schedule send to ${contact.email} failed:`, err);
+        skipped.push({ name: entry.name, reason: 'Send failed' });
+      }
+    }
+
+    return { status: 'sent', count: sent, attempted, skipped };
+  } catch (err) {
+    console.error('[email] schedule send failed:', err);
+    return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message, skipped };
   }
 }
 

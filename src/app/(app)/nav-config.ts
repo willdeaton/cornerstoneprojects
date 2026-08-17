@@ -15,7 +15,9 @@ export const SETTINGS_GROUPS: NavGroupDef[] = [
     label: 'Data',
     items: [
       { href: '/settings/customers', label: 'Customers' },
+      { href: '/settings/subcontractors', label: 'Subcontractors' },
       { href: '/settings/pricing', label: 'Pricing' },
+      { href: '/settings/schedule', label: 'Non-Working Days' },
       { href: '/settings/backup', label: 'Backup' },
     ],
   },

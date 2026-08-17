@@ -117,6 +117,74 @@ export function buildJobCompletedEmail(recipient: Recipient, project: Project): 
   };
 }
 
+/** One row of a schedule email: a stretch of work on one job. */
+export interface ScheduleLine {
+  /** Pre-formatted, e.g. "Mon, Mar 3 – Fri, Mar 7". */
+  dates: string;
+  project: string;
+  phase: string;
+  location: string | null;
+  notes: string | null;
+}
+
+/**
+ * A bordered table of scheduled work — the sibling of detailTable for lists.
+ * Job names, phase names and notes are all typed by hand, so every field goes
+ * through esc() before it reaches the body.
+ */
+function scheduleTable(lines: ScheduleLine[]): string {
+  const head = ['Dates', 'Job', 'Work']
+    .map(
+      (h) =>
+        `<th style="text-align:left;padding:8px 12px 8px 0;border-bottom:2px solid #1f2421;${MUTED};text-transform:uppercase;font-size:11px;letter-spacing:.04em">${h}</th>`
+    )
+    .join('');
+  const body = lines
+    .map(
+      (l) => `
+        <tr>
+          <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top;white-space:nowrap;font-weight:bold">${esc(l.dates)}</td>
+          <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
+            ${esc(l.project)}
+            ${l.location ? `<br /><span style="${MUTED}">${esc(l.location)}</span>` : ''}
+          </td>
+          <td style="padding:10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
+            ${esc(l.phase)}
+            ${l.notes ? `<br /><span style="${MUTED}">${esc(l.notes)}</span>` : ''}
+          </td>
+        </tr>`
+    )
+    .join('');
+  return `<table style="border-collapse:collapse;width:100%;margin:16px 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * SENT ON DEMAND: a manager sends out the schedule for a date range. Each
+ * employee (and optionally each sub) gets only their own work. Recipients are
+ * whoever is assigned in the range — not the flag-based subscription lists.
+ */
+export function buildScheduleEmail(
+  firstName: string,
+  range: { from: string; to: string },
+  lines: ScheduleLine[]
+): RenderedEmail {
+  const hello = firstName ? `Hi ${esc(firstName)},` : 'Hi,';
+  const span = esc(`${range.from} – ${range.to}`);
+  return {
+    subject: `Your schedule: ${span}`,
+    html: `
+      <div style="${WRAP}">
+        <p>${hello}</p>
+        <p>Here's your schedule for <strong>${span}</strong>:</p>
+        ${scheduleTable(lines)}
+        <p style="${MUTED}">Dates can shift as jobs move — this is the plan as of
+        today. Check with your manager before making travel plans around it.</p>
+        ${SIGNOFF}
+      </div>
+    `,
+  };
+}
+
 /** EVENT-DRIVEN: an admin created a new account. Sent to the new user. */
 export function buildWelcomeEmail(
   firstName: string,
