@@ -3,8 +3,22 @@
 import { useMemo, useState } from 'react';
 import { Modal } from '@/components/Modal';
 import { shortDate } from '@/lib/format';
-import { computeSchedule, today, workingDaySpan } from '@/lib/schedule-math';
-import type { ScheduleTaskRow, TaskStatus } from '@/lib/types';
+import {
+  DAY_INITIALS,
+  DAY_LABELS,
+  DAY_MASK_WEEKDAYS,
+  computeSchedule,
+  isSplitPattern,
+  maskDows,
+  maskLabel,
+  normalizeMask,
+  today,
+  toggleDow,
+  workedSegments,
+  workingDaySpan,
+} from '@/lib/schedule-math';
+import { diffTask, needsReason, summarizeChanges } from '@/lib/schedule-diff';
+import type { DependsType, ScheduleTaskRow, TaskStatus } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
 import { saveTaskAction, deleteTaskAction } from '@/app/actions/schedule';
 
@@ -27,11 +41,19 @@ export interface SubOption {
 
 /** 'user:4' / 'sub:2' — the same key the conflict finder groups by. */
 type AssigneeKey = string;
+/** Who's on the phase, and which weekdays each of them works it (null = all). */
+type Crew = Map<AssigneeKey, number | null>;
 
 /**
  * Create or edit one phase of work. The dates shown under the duration field are
  * the real computed ones — this runs the same solver the timeline does, so a
  * phase that follows another shows where it actually lands before you save.
+ *
+ * Two things beyond plain dates:
+ *  · each person can be booked on only some weekdays (split days), so an
+ *    employee can run this job Mon/Wed and be free elsewhere Tuesday;
+ *  · once the job's schedule is published, saving requires a reason, and the
+ *    exact wording that gets logged is previewed before you commit.
  */
 export function TaskModal({
   task,
@@ -41,6 +63,7 @@ export function TaskModal({
   subs,
   holidays,
   defaultProjectId,
+  publishedVersions,
   onClose,
   onSaved,
 }: {
@@ -54,6 +77,8 @@ export function TaskModal({
   holidays: string[];
   /** Pre-selects (and locks) the job when opened from a project page. */
   defaultProjectId?: number;
+  /** Published version per job id — jobs listed here need change reasons. */
+  publishedVersions?: Record<number, number>;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -64,23 +89,42 @@ export function TaskModal({
   const [startDate, setStartDate] = useState(task?.start_date ?? today());
   const [duration, setDuration] = useState(String(task?.duration_days ?? 5));
   const [dependsOn, setDependsOn] = useState<number | null>(task?.depends_on_id ?? null);
+  const [dependsType, setDependsType] = useState<DependsType>(
+    task?.depends_type ?? 'finish_to_start'
+  );
   const [lag, setLag] = useState(String(task?.lag_days ?? 0));
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? 'not_started');
   const [notes, setNotes] = useState(task?.notes ?? '');
-  const [picked, setPicked] = useState<Set<AssigneeKey>>(
-    () => new Set((task?.assignees ?? []).map((a) => `${a.kind}:${a.ref_id}`))
+  const [crew, setCrew] = useState<Crew>(
+    () => new Map((task?.assignees ?? []).map((a) => [`${a.kind}:${a.ref_id}`, a.work_days]))
   );
+  const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
   // Opened from a job's own page, the job is fixed — phases don't move between jobs.
   const projectLocked = defaultProjectId != null;
+  const publishedVersion = publishedVersions?.[projectId] ?? null;
 
   // Phases available as a predecessor: same job, never the phase itself.
   const predecessorOptions = useMemo(
     () => allTasks.filter((t) => t.project_id === projectId && t.id !== task?.id),
     [allTasks, projectId, task?.id]
+  );
+
+  const draftAssignees = useMemo(
+    () =>
+      [...crew.entries()].map(([key, workDays]) => {
+        const [kind, id] = key.split(':');
+        // Normalized here so the change preview matches what the server records.
+        return {
+          kind: kind as 'user' | 'sub',
+          ref_id: Number(id),
+          work_days: normalizeMask(workDays),
+        };
+      }),
+    [crew]
   );
 
   // Run the solver over the job as it would be after this edit, so the preview
@@ -97,6 +141,7 @@ export function TaskModal({
         start_date: t.start_date,
         duration_days: t.duration_days,
         depends_on_id: t.depends_on_id,
+        depends_type: t.depends_type,
         lag_days: t.lag_days,
       }));
     const draft = {
@@ -105,19 +150,96 @@ export function TaskModal({
       start_date: startDate,
       duration_days: durationDays,
       depends_on_id: dependsOn,
+      depends_type: dependsType,
       lag_days: lagDays,
     };
     const { windows } = computeSchedule([...others, draft], calendar);
     return windows.get(draftId) ?? null;
-  }, [allTasks, projectId, task?.id, startDate, duration, lag, dependsOn, calendar]);
+  }, [allTasks, projectId, task?.id, startDate, duration, lag, dependsOn, dependsType, calendar]);
+
+  // The wording that gets logged, and whether a reason is required at all: an
+  // edit that only marks progress doesn't need one, even on a published job.
+  const changes = useMemo(() => {
+    if (!task) return null;
+    const names = {
+      phase: (id: number) => allTasks.find((t) => t.id === id)?.name ?? 'a deleted phase',
+      // The pickers only list active people, so fall back to the names already
+      // on the phase — otherwise a deactivated employee reads as a crew change.
+      person: (kind: 'user' | 'sub', refId: number) =>
+        (kind === 'user' ? workers.find((w) => w.id === refId) : subs.find((s) => s.id === refId))
+          ?.name ??
+        task.assignees?.find((a) => a.kind === kind && a.ref_id === refId)?.name ??
+        `#${refId}`,
+    };
+    return diffTask(
+      {
+        name: task.name,
+        start_date: task.start_date,
+        duration_days: task.duration_days,
+        depends_on_id: task.depends_on_id,
+        depends_type: task.depends_type ?? 'finish_to_start',
+        lag_days: task.lag_days,
+        notes: task.notes,
+        status: task.status,
+        assignees: task.assignees ?? [],
+      },
+      {
+        name: name.trim(),
+        start_date: startDate,
+        duration_days: Math.max(1, Math.round(Number(duration) || 1)),
+        depends_on_id: dependsOn,
+        depends_type: dependsType,
+        lag_days: Math.max(0, Math.round(Number(lag) || 0)),
+        notes: notes.trim() === '' ? null : notes.trim(),
+        status,
+        assignees: draftAssignees,
+      },
+      names
+    );
+  }, [
+    task,
+    allTasks,
+    workers,
+    subs,
+    name,
+    startDate,
+    duration,
+    dependsOn,
+    dependsType,
+    lag,
+    notes,
+    status,
+    draftAssignees,
+  ]);
+
+  const reasonRequired =
+    publishedVersion != null && (task ? !!changes && needsReason(changes) : true);
 
   function toggle(key: AssigneeKey) {
-    setPicked((prev) => {
-      const next = new Set(prev);
+    setCrew((prev) => {
+      const next = new Map(prev);
       if (next.has(key)) next.delete(key);
-      else next.add(key);
+      else next.set(key, null);
       return next;
     });
+  }
+
+  /** Flip one weekday for one person, switching them onto a split pattern. */
+  function toggleDay(key: AssigneeKey, dow: number) {
+    setCrew((prev) => {
+      const next = new Map(prev);
+      const current = next.get(key);
+      // Someone on "every working day" starts from Mon–Fri, so the first click
+      // removes a day rather than leaving them booked on one day only.
+      const base = current ?? DAY_MASK_WEEKDAYS;
+      const flipped = toggleDow(base, dow);
+      next.set(key, flipped === 0 ? null : flipped);
+      return next;
+    });
+  }
+
+  function clearDays(key: AssigneeKey) {
+    setCrew((prev) => new Map(prev).set(key, null));
   }
 
   async function submit() {
@@ -130,13 +252,12 @@ export function TaskModal({
       start_date: startDate,
       duration_days: Math.max(1, Math.round(Number(duration) || 1)),
       depends_on_id: dependsOn,
+      depends_type: dependsType,
       lag_days: Math.max(0, Math.round(Number(lag) || 0)),
       status,
       notes,
-      assignees: [...picked].map((key) => {
-        const [kind, id] = key.split(':');
-        return { kind: kind as 'user' | 'sub', ref_id: Number(id) };
-      }),
+      assignees: draftAssignees,
+      reason,
     });
     if (res.ok) onSaved();
     else {
@@ -152,8 +273,23 @@ export function TaskModal({
       ? `Delete "${task.name}"? ${following} later phase${following > 1 ? 's' : ''} will no longer follow it and will fall back to its own start date.`
       : `Delete "${task.name}"?`;
     if (!confirm(warning)) return;
+
+    // A published job needs a reason for the removal too.
+    let why = reason.trim();
+    if (publishedVersion != null && !why) {
+      const typed = prompt(
+        `This job's schedule is published (v${publishedVersion}). Why is this phase being removed?`
+      );
+      if (typed == null) return;
+      why = typed.trim();
+      if (!why) {
+        setError('A reason is required to change a published schedule.');
+        return;
+      }
+    }
+
     setSaving(true);
-    const res = await deleteTaskAction(task.id);
+    const res = await deleteTaskAction(task.id, why);
     if (res.ok) onSaved();
     else {
       setError(res.error ?? 'Could not delete.');
@@ -163,10 +299,24 @@ export function TaskModal({
 
   const dueDate = projects.find((p) => p.id === projectId)?.due_date ?? null;
   const pastDue = preview && dueDate ? preview.end > dueDate : false;
+  // Working stretches of the phase itself — one per week, so the preview shows
+  // the same weekend breaks the timeline does.
+  const segments = preview ? workedSegments(preview.start, preview.end, calendar) : [];
+  const splitCrew = [...crew.entries()].filter(([, mask]) => isSplitPattern(mask));
 
   return (
     <Modal open onClose={onClose} title={task ? 'Edit Phase' : 'Schedule Work'} wide>
       <div className="space-y-4">
+        {publishedVersion != null && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="font-semibold">Published schedule (v{publishedVersion})</p>
+            <p>
+              The crew has these dates. Any change to the dates, duration, links or crew needs a
+              reason, which is saved to this job&apos;s change history.
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className="label">Job *</label>
@@ -199,9 +349,7 @@ export function TaskModal({
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className="label">
-              {dependsOn ? 'Earliest Start' : 'Start Date'} *
-            </label>
+            <label className="label">{dependsOn ? 'Earliest Start' : 'Start Date'} *</label>
             <input
               className="input"
               type="date"
@@ -221,7 +369,9 @@ export function TaskModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {/* Phase links. Start-to-start is what lets a sub run alongside an
+            earlier phase instead of waiting for it to finish. */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <label className="label">Starts After</label>
             <select
@@ -238,7 +388,21 @@ export function TaskModal({
             </select>
           </div>
           <div>
-            <label className="label">Wait After It (working days)</label>
+            <label className="label">Relative To</label>
+            <select
+              className="input"
+              value={dependsType}
+              disabled={dependsOn == null}
+              onChange={(e) => setDependsType(e.target.value as DependsType)}
+            >
+              <option value="finish_to_start">When that phase finishes</option>
+              <option value="start_to_start">When that phase starts (can overlap)</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">
+              {dependsType === 'start_to_start' ? 'Days After It Starts' : 'Wait After It Finishes'}
+            </label>
             <input
               className="input"
               type="number"
@@ -250,6 +414,16 @@ export function TaskModal({
           </div>
         </div>
 
+        {dependsOn != null && (
+          <p className="text-xs text-brand-gray">
+            {dependsType === 'start_to_start'
+              ? `Starts ${Math.max(0, Math.round(Number(lag) || 0))} working day${
+                  Math.round(Number(lag) || 0) === 1 ? '' : 's'
+                } after "${predecessorOptions.find((t) => t.id === dependsOn)?.name ?? 'that phase'}" begins — the two phases run alongside each other.`
+              : `Starts after "${predecessorOptions.find((t) => t.id === dependsOn)?.name ?? 'that phase'}" is complete.`}
+          </p>
+        )}
+
         {/* Live result of the dependency chain, weekends and holidays included. */}
         {preview && (
           <div className="rounded-lg border border-black/10 bg-black/[.02] px-4 py-3 text-sm">
@@ -260,6 +434,18 @@ export function TaskModal({
               {workingDaySpan(preview.start, preview.end, calendar)} working days
               {preview.driven && ' · pushed out by the phase it follows'}
             </p>
+            {segments.length > 1 && (
+              <p className="mt-1 text-brand-gray">
+                Runs in {segments.length} stretches (weekends and non-working days off):{' '}
+                {segments
+                  .map((s) =>
+                    s.start === s.end
+                      ? shortDate(s.start)
+                      : `${shortDate(s.start)}–${shortDate(s.end)}`
+                  )
+                  .join(', ')}
+              </p>
+            )}
             {pastDue && (
               <p className="mt-1 font-medium text-amber-700">
                 Ends after this job&apos;s due date of {shortDate(dueDate)}.
@@ -275,17 +461,41 @@ export function TaskModal({
               heading="Employees"
               empty="No active employees."
               options={workers.map((w) => ({ key: `user:${w.id}`, name: w.name, detail: w.role }))}
-              picked={picked}
+              crew={crew}
               onToggle={toggle}
+              onToggleDay={toggleDay}
+              onClearDays={clearDays}
             />
             <AssigneePicker
               heading="Subcontractors"
               empty="No subs yet — add them under Settings → Subcontractors."
               options={subs.map((s) => ({ key: `sub:${s.id}`, name: s.name, detail: s.trade }))}
-              picked={picked}
+              crew={crew}
               onToggle={toggle}
+              onToggleDay={toggleDay}
+              onClearDays={clearDays}
             />
           </div>
+          <p className="mt-2 text-xs text-brand-gray">
+            Everyone works every working day of the phase unless you pick days for them. Use the day
+            buttons to split someone across jobs — Mon/Wed here, Tuesday somewhere else. Only the
+            days they share with another job count as a double-booking.
+          </p>
+          {splitCrew.length > 0 && (
+            <p className="mt-1 text-xs font-medium text-brand-green-dark">
+              Split days:{' '}
+              {splitCrew
+                .map(([key, mask]) => {
+                  const [kind, id] = key.split(':');
+                  const person =
+                    kind === 'user'
+                      ? workers.find((w) => w.id === Number(id))
+                      : subs.find((s) => s.id === Number(id));
+                  return `${person?.name ?? key} — ${maskLabel(mask)}`;
+                })
+                .join('; ')}
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -314,6 +524,32 @@ export function TaskModal({
           </div>
         </div>
 
+        {publishedVersion != null && (
+          <div>
+            <label className="label">
+              Reason For Change {reasonRequired ? '*' : <span className="text-brand-gray">(optional)</span>}
+            </label>
+            <input
+              className="input"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Customer pushed the start back a week"
+            />
+            {changes && changes.length > 0 && (
+              <p className="mt-1 text-xs text-brand-gray">
+                Will be logged as: {summarizeChanges(changes)}
+              </p>
+            )}
+            {!reasonRequired && task && (
+              <p className="mt-1 text-xs text-brand-gray">
+                {changes && changes.length > 0
+                  ? 'This edit only changes progress, so a reason is optional.'
+                  : 'Nothing has changed yet.'}
+              </p>
+            )}
+          </div>
+        )}
+
         {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -332,7 +568,16 @@ export function TaskModal({
             <button className="btn-secondary" onClick={onClose} disabled={saving}>
               Cancel
             </button>
-            <button className="btn-primary" onClick={submit} disabled={saving}>
+            <button
+              className="btn-primary"
+              onClick={submit}
+              disabled={saving || (reasonRequired && reason.trim() === '')}
+              title={
+                reasonRequired && reason.trim() === ''
+                  ? 'A reason is required to change a published schedule'
+                  : undefined
+              }
+            >
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
@@ -346,14 +591,18 @@ function AssigneePicker({
   heading,
   empty,
   options,
-  picked,
+  crew,
   onToggle,
+  onToggleDay,
+  onClearDays,
 }: {
   heading: string;
   empty: string;
   options: { key: string; name: string; detail: string | null }[];
-  picked: Set<string>;
+  crew: Crew;
   onToggle: (key: string) => void;
+  onToggleDay: (key: string, dow: number) => void;
+  onClearDays: (key: string) => void;
 }) {
   return (
     <div className="rounded-lg border border-black/10 p-3">
@@ -361,18 +610,72 @@ function AssigneePicker({
       {options.length === 0 ? (
         <p className="text-sm text-brand-gray">{empty}</p>
       ) : (
-        <div className="max-h-40 space-y-1 overflow-y-auto">
-          {options.map((o) => (
-            <label key={o.key} className="flex items-center gap-2 text-sm text-brand-ink">
-              <input type="checkbox" checked={picked.has(o.key)} onChange={() => onToggle(o.key)} />
-              <span className="truncate">
-                {o.name}
-                {o.detail && <span className="text-brand-gray"> · {o.detail}</span>}
-              </span>
-            </label>
-          ))}
+        <div className="max-h-56 space-y-1.5 overflow-y-auto">
+          {options.map((o) => {
+            const picked = crew.has(o.key);
+            const mask = crew.get(o.key) ?? null;
+            return (
+              <div key={o.key}>
+                <label className="flex items-center gap-2 text-sm text-brand-ink">
+                  <input type="checkbox" checked={picked} onChange={() => onToggle(o.key)} />
+                  <span className="truncate">
+                    {o.name}
+                    {o.detail && <span className="text-brand-gray"> · {o.detail}</span>}
+                  </span>
+                </label>
+                {picked && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1 pl-6">
+                    <DayToggles mask={mask} onToggle={(dow) => onToggleDay(o.key, dow)} />
+                    {isSplitPattern(mask) ? (
+                      <button
+                        className="ml-1 text-[11px] font-medium text-brand-green-dark hover:underline"
+                        onClick={() => onClearDays(o.key)}
+                        title="Put them back on every working day of the phase"
+                      >
+                        reset
+                      </button>
+                    ) : (
+                      <span className="ml-1 text-[11px] text-brand-gray">all working days</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
+  );
+}
+
+/** Mon–Sun buttons for one person's split-day pattern. */
+function DayToggles({ mask, onToggle }: { mask: number | null; onToggle: (dow: number) => void }) {
+  // Monday first, the way a work week reads; Sat/Sun sit at the end and are
+  // only ever on if someone deliberately schedules weekend work.
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const on = mask == null ? new Set(maskDows(DAY_MASK_WEEKDAYS)) : new Set(maskDows(mask));
+  return (
+    <span className="flex gap-0.5">
+      {order.map((dow) => {
+        const active = on.has(dow);
+        return (
+          <button
+            key={dow}
+            type="button"
+            onClick={() => onToggle(dow)}
+            title={DAY_LABELS[dow]}
+            aria-label={DAY_LABELS[dow]}
+            aria-pressed={active}
+            className={`h-6 w-6 rounded text-[11px] font-semibold transition-colors ${
+              active
+                ? 'bg-brand-green text-white'
+                : 'bg-black/5 text-brand-gray hover:bg-black/10'
+            } ${dow === 0 || dow === 6 ? 'opacity-80' : ''}`}
+          >
+            {DAY_INITIALS[dow]}
+          </button>
+        );
+      })}
+    </span>
   );
 }

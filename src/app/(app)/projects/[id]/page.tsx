@@ -10,7 +10,13 @@ import {
   listProjectInvoices,
   listActiveWorkers,
 } from '@/lib/data';
-import { listScheduleTasks, listSubcontractors, listHolidays } from '@/lib/schedule-data';
+import {
+  listScheduleTasks,
+  listSubcontractors,
+  listHolidays,
+  getPublishedVersion,
+  listScheduleChanges,
+} from '@/lib/schedule-data';
 import { computeSchedule, projectedEnd } from '@/lib/schedule-math';
 import { money, shortDate } from '@/lib/format';
 import { ProjectStatusBadge } from '@/components/ui';
@@ -39,11 +45,13 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
   const invoices = await listProjectInvoices(id);
-  const [scheduleTasks, holidays, workers, subs] = await Promise.all([
+  const [scheduleTasks, holidays, workers, subs, publication, scheduleChanges] = await Promise.all([
     listScheduleTasks({ projectId: id }),
     listHolidays(),
     listActiveWorkers(),
     listSubcontractors({ activeOnly: true }),
+    getPublishedVersion(id),
+    listScheduleChanges(id),
   ]);
   const holidayDays = holidays.map((h) => h.day);
   // Projected finish = the latest end across the scheduled phases, chains resolved.
@@ -131,6 +139,18 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             workers={workers.map((w) => ({ id: w.id, name: w.name, role: w.role }))}
             subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
             holidays={holidayDays}
+            published={
+              publication
+                ? {
+                    version: publication.version,
+                    published_at: publication.published_at,
+                    published_by_name: publication.published_by_name ?? null,
+                    changeCount: scheduleChanges.length,
+                  }
+                : null
+            }
+            changes={scheduleChanges}
+            canUnpublish={user.role === 'admin'}
           />
 
           <InvoiceSection project={project} invoices={invoices} />

@@ -639,4 +639,76 @@ Your City, ST 00000',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+
+  /* ==================================================================
+   * Split days: which days of the week an assignee actually works a phase.
+   *
+   * work_days is a 7-bit mask indexed by JavaScript's getDay() (bit 0 =
+   * Sunday … bit 6 = Saturday). NULL means "every working day in the
+   * phase's window" — the original behaviour, and still the default — so
+   * existing rows need no backfill. A mask lets one employee run a job
+   * Mon/Wed while working somewhere else Tuesday: the phase window is
+   * unchanged, but that person is only booked on their own days, and the
+   * double-booking check compares days rather than whole windows.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE schedule_assignments ADD COLUMN IF NOT EXISTS work_days SMALLINT;
+    ALTER TABLE schedule_assignments DROP CONSTRAINT IF EXISTS schedule_assignments_work_days_check;
+    ALTER TABLE schedule_assignments ADD CONSTRAINT schedule_assignments_work_days_check
+      CHECK (work_days IS NULL OR (work_days > 0 AND work_days <= 127));
+  `);
+
+  /* ==================================================================
+   * Overlapping phases.
+   *
+   * A phase used to be able to follow another only after it finished.
+   * depends_type adds a start-to-start link, so a sub can start a set
+   * number of working days after the phase before it STARTS and the two
+   * run alongside each other. lag_days is read against whichever anchor
+   * depends_type names.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS depends_type TEXT
+      NOT NULL DEFAULT 'finish_to_start';
+    ALTER TABLE schedule_tasks DROP CONSTRAINT IF EXISTS schedule_tasks_depends_type_check;
+    ALTER TABLE schedule_tasks ADD CONSTRAINT schedule_tasks_depends_type_check
+      CHECK (depends_type IN ('finish_to_start','start_to_start'));
+  `);
+
+  /* ==================================================================
+   * Publishing a job's schedule, and the reasons it changed afterwards.
+   *
+   * Publishing marks the moment a job's dates went out to the crew. From
+   * then on every change to that job's phases (dates, duration, links,
+   * crew, adding or deleting a phase) has to carry a typed reason, which
+   * is recorded here with an auto-generated summary of what actually
+   * moved. schedule_changes.task_name is copied rather than joined so the
+   * history survives the phase being deleted.
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schedule_publications (
+      id           SERIAL PRIMARY KEY,
+      project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      version      INTEGER NOT NULL,
+      note         TEXT,
+      published_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      published_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sched_pub_project_version
+      ON schedule_publications(project_id, version);
+
+    CREATE TABLE IF NOT EXISTS schedule_changes (
+      id         SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      task_id    INTEGER REFERENCES schedule_tasks(id) ON DELETE SET NULL,
+      task_name  TEXT,
+      kind       TEXT NOT NULL CHECK (kind IN ('added','updated','deleted')),
+      summary    TEXT NOT NULL,
+      reason     TEXT NOT NULL,
+      version    INTEGER,
+      changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sched_changes_project ON schedule_changes(project_id, created_at DESC);
+  `);
 }

@@ -6,21 +6,25 @@ import { useRouter } from 'next/navigation';
 import { shortDate } from '@/lib/format';
 import {
   addDays,
-  assigneeWindows,
+  assigneeBookings,
   computeSchedule,
   conflictedTaskIds,
   eachDay,
   findConflicts,
   fromDay,
+  isSplitPattern,
   isWeekend,
+  maskLabel,
   projectedEnd,
   rangesOverlap,
   today,
+  workedSegments,
   type ComputedWindow,
 } from '@/lib/schedule-math';
 import type { ScheduleTaskRow } from '@/lib/types';
 import { TaskModal, type ProjectOption, type SubOption, type WorkerOption } from './TaskModal';
 import { SendScheduleModal } from './SendScheduleModal';
+import { PublishBar, type PublishedInfo } from './PublishBar';
 
 /** Timeline widths offered by the range switcher. */
 const SPANS = [
@@ -61,12 +65,18 @@ export function ScheduleBoard({
   workers,
   subs,
   holidays,
+  published,
+  canUnpublish = false,
 }: {
   tasks: ScheduleTaskRow[];
   projects: ProjectOption[];
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
+  /** Publish state per job id, for jobs that have been published. */
+  published: Record<number, PublishedInfo>;
+  /** Admins can undo a publish. */
+  canUnpublish?: boolean;
 }) {
   const router = useRouter();
   const [spanDays, setSpanDays] = useState<number>(DEFAULT_SPAN);
@@ -84,9 +94,12 @@ export function ScheduleBoard({
   // live preview — one set of rules, one place.
   const { windows } = useMemo(() => computeSchedule(tasks, calendar), [tasks, calendar]);
 
+  // Conflicts compare the days people actually work, so someone splitting a
+  // week between two jobs (Mon/Wed here, Tue there) isn't flagged — only days
+  // genuinely booked twice are.
   const conflicts = useMemo(
-    () => findConflicts(assigneeWindows(tasks, windows)),
-    [tasks, windows]
+    () => findConflicts(assigneeBookings(tasks, windows, calendar)),
+    [tasks, windows, calendar]
   );
   const conflictedTasks = useMemo(() => conflictedTaskIds(conflicts), [conflicts]);
 
@@ -146,6 +159,14 @@ export function ScheduleBoard({
         return as < bs ? -1 : as > bs ? 1 : 0;
       });
   }, [visible, windows]);
+
+  // Just the version numbers, which is all the phase editor needs to decide
+  // whether a change requires a reason.
+  const publishedVersionMap = useMemo(() => {
+    const out: Record<number, number> = {};
+    for (const [id, info] of Object.entries(published)) out[Number(id)] = info.version;
+    return out;
+  }, [published]);
 
   const assigneeOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -309,6 +330,12 @@ export function ScheduleBoard({
                         Ends {shortDate(g.projected)}
                         {g.slipping && ' · past due date'}
                       </p>
+                      <PublishBar
+                        projectId={g.projectId}
+                        projectName={g.projectName}
+                        published={published[g.projectId] ?? null}
+                        canUnpublish={canUnpublish}
+                      />
                     </div>
                     {days.map((d) => (
                       <div key={d} className={`border-l border-black/5 ${cellTint(d, holidaySet, now)}`} />
@@ -329,6 +356,7 @@ export function ScheduleBoard({
                       gridTemplate={gridTemplate}
                       conflicted={conflictedTasks.has(t.id)}
                       onEdit={() => setEditing({ task: t })}
+                      published={!!published[t.project_id]}
                     />
                   ))}
                 </div>
@@ -339,9 +367,10 @@ export function ScheduleBoard({
       )}
 
       <p className="text-xs text-brand-gray">
-        Weekends and non-working days are shaded and never count toward a phase&apos;s duration. A
+        Weekends and non-working days are shaded and never count toward a phase&apos;s duration —
+        work that carries into the next week shows as separate stretches with the weekend as a gap. A
         phase marked &ldquo;starts after&rdquo; another moves automatically when the one before it
-        slips.
+        slips, and can be set to start alongside it instead of waiting for it to finish.
       </p>
 
       {editing && (
@@ -352,6 +381,7 @@ export function ScheduleBoard({
           workers={workers}
           subs={subs}
           holidays={holidays}
+          publishedVersions={publishedVersionMap}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -365,6 +395,7 @@ export function ScheduleBoard({
           defaultFrom={rangeStart}
           defaultTo={rangeEnd}
           onClose={() => setSending(false)}
+          onSent={() => router.refresh()}
         />
       )}
     </div>
@@ -383,6 +414,7 @@ function PhaseRow({
   holidaySet,
   gridTemplate,
   conflicted,
+  published,
   onEdit,
 }: {
   task: ScheduleTaskRow;
@@ -394,21 +426,50 @@ function PhaseRow({
   holidaySet: Set<string>;
   gridTemplate: string;
   conflicted: boolean;
+  published: boolean;
   onEdit: () => void;
 }) {
-  const crew = task.assignees.map((a) => a.name).join(', ');
-  // Clip the bar to the visible range; a phase entirely outside it gets no bar,
-  // and the row still shows its dates in the label column.
-  const inView = !!dates && dates.start <= rangeEnd && dates.end >= rangeStart;
-  const startIdx = dates ? days.indexOf(clamp(dates.start, rangeStart, rangeEnd)) : -1;
-  const endIdx = dates ? days.indexOf(clamp(dates.end, rangeStart, rangeEnd)) : -1;
-  const runsEarlier = !!dates && dates.start < rangeStart;
-  const runsLater = !!dates && dates.end > rangeEnd;
+  const crew = task.assignees
+    .map((a) => (isSplitPattern(a.work_days) ? `${a.name} (${maskLabel(a.work_days)})` : a.name))
+    .join(', ');
+  const splitCrew = task.assignees.filter((a) => isSplitPattern(a.work_days));
+
+  // One bar per unbroken run of working days, clipped to the visible range. That
+  // gap over a weekend is the point: a phase that spans two weeks reads as two
+  // stretches instead of one bar that looks like Saturday work.
+  const segments = useMemo(() => {
+    if (!dates) return [];
+    return workedSegments(dates.start, dates.end, { holidays: holidaySet })
+      .filter((s) => s.start <= rangeEnd && s.end >= rangeStart)
+      .map((s) => {
+        const from = clamp(s.start, rangeStart, rangeEnd);
+        const to = clamp(s.end, rangeStart, rangeEnd);
+        return {
+          key: s.start,
+          startIdx: days.indexOf(from),
+          endIdx: days.indexOf(to),
+          clippedLeft: s.start < rangeStart,
+          clippedRight: s.end > rangeEnd,
+          label: `${shortDate(s.start)} – ${shortDate(s.end)}`,
+        };
+      })
+      .filter((s) => s.startIdx >= 0 && s.endIdx >= s.startIdx);
+  }, [dates, holidaySet, days, rangeStart, rangeEnd]);
+
+  const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}${
+    crew ? `\n${crew}` : ''
+  }${conflicted ? '\nDouble-booked with another job' : ''}${
+    published ? '\nPublished — changes need a reason' : ''
+  }`;
 
   return (
     <div className="grid" style={{ gridTemplateColumns: gridTemplate }}>
+      {/* Everything in this row is pinned to grid row 1 on purpose: the bars are
+          explicitly placed, and auto-placed cells would be bumped into a second
+          row wherever a bar already occupies a column. */}
       <button
         onClick={onEdit}
+        style={{ gridRow: 1, gridColumn: 1 }}
         className="sticky left-0 z-20 bg-white px-4 py-2 text-left hover:bg-black/[.03]"
       >
         <span className="flex items-center gap-1.5">
@@ -418,31 +479,43 @@ function PhaseRow({
         <span className="block truncate text-xs text-brand-gray">
           {dates ? `${shortDate(dates.start)} – ${shortDate(dates.end)}` : '—'}
         </span>
+        {splitCrew.length > 0 && (
+          <span className="block truncate text-[11px] text-brand-green-dark">
+            {splitCrew.map((a) => `${a.name.split(' ')[0]}: ${maskLabel(a.work_days)}`).join(' · ')}
+          </span>
+        )}
       </button>
 
-      {days.map((d) => (
-        <div key={d} className={`h-11 border-l border-black/5 ${cellTint(d, holidaySet, now)}`} />
+      {days.map((d, i) => (
+        <div
+          key={d}
+          style={{ gridRow: 1, gridColumn: i + 2 }}
+          className={`h-11 border-l border-black/5 ${cellTint(d, holidaySet, now)}`}
+        />
       ))}
 
-      {inView && startIdx >= 0 && endIdx >= startIdx && (
+      {segments.map((s, i) => (
         <button
+          key={s.key}
           onClick={onEdit}
-          title={`${task.name} — ${shortDate(dates!.start)} to ${shortDate(dates!.end)}${
-            crew ? `\n${crew}` : ''
-          }${conflicted ? '\nDouble-booked with another job' : ''}`}
-          style={{ gridRow: 1, gridColumn: `${startIdx + 2} / ${endIdx + 3}` }}
+          title={tooltip}
+          style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
           className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white transition-opacity hover:opacity-90 ${
             BAR_TINT[task.status]
           } ${conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''} ${
-            runsEarlier ? 'rounded-l-none' : ''
-          } ${runsLater ? 'rounded-r-none' : ''}`}
+            s.clippedLeft ? 'rounded-l-none' : ''
+          } ${s.clippedRight ? 'rounded-r-none' : ''}`}
         >
-          <span className="truncate">
-            {task.name}
-            {crew && <span className="opacity-80"> · {crew}</span>}
-          </span>
+          {/* Only the first visible stretch carries the label; the rest are the
+              continuation of the same phase and stay clean. */}
+          {i === 0 && (
+            <span className="truncate">
+              {task.name}
+              {crew && <span className="opacity-80"> · {crew}</span>}
+            </span>
+          )}
         </button>
-      )}
+      ))}
     </div>
   );
 }

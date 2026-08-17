@@ -12,7 +12,7 @@
  * ============================================================================
  */
 
-import type { ScheduleTaskRow } from './types';
+import type { DependsType, ScheduleTaskRow, TaskStatus } from './types';
 
 /** Days the crew doesn't work: weekends always, plus any listed holidays. */
 export interface WorkCalendar {
@@ -112,6 +112,117 @@ export function workingDaySpan(start: string, end: string, cal: WorkCalendar): n
   return count;
 }
 
+/* ------------------------------------------------------ Day-of-week masks */
+
+/**
+ * Which weekdays someone works a phase, as a 7-bit mask indexed by
+ * Date#getDay() — bit 0 Sunday … bit 6 Saturday. A null mask means "every
+ * working day of the window", which is what everyone gets until a split-day
+ * pattern is set. Weekends and holidays are still excluded either way: the
+ * mask narrows the working days, it never adds one back.
+ */
+export const DAY_MASK_ALL = 0b1111111;
+/** Mon–Fri — the mask the split-day editor opens on. */
+export const DAY_MASK_WEEKDAYS = 0b0111110;
+
+/** Short labels indexed the same way as the mask bits. */
+export const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+/** Single letters for the compact day toggles. */
+export const DAY_INITIALS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
+
+/**
+ * The canonical form of a mask: 1..126, or null for "every working day". An
+ * empty mask would book nobody and a full week means the same thing as null, so
+ * both collapse — the editor, the action and the column all agree on this.
+ */
+export function normalizeMask(mask: number | null | undefined): number | null {
+  if (mask == null) return null;
+  const m = Math.round(mask) & DAY_MASK_ALL;
+  return m === 0 || m === DAY_MASK_ALL ? null : m;
+}
+
+export function maskHasDow(mask: number | null, dow: number): boolean {
+  return mask == null || (mask & (1 << dow)) !== 0;
+}
+
+export function maskFromDows(dows: number[]): number {
+  return dows.reduce((m, d) => m | (1 << d), 0);
+}
+
+export function toggleDow(mask: number, dow: number): number {
+  return mask ^ (1 << dow);
+}
+
+/** The days a mask names, ascending — [1,3] for a Mon/Wed pattern. */
+export function maskDows(mask: number): number[] {
+  const out: number[] = [];
+  for (let d = 0; d < 7; d++) if ((mask & (1 << d)) !== 0) out.push(d);
+  return out;
+}
+
+/**
+ * True when this mask actually splits the week — i.e. it leaves out a weekday
+ * someone would otherwise work. A full week or plain Mon–Fri isn't a split, so
+ * the UI stays quiet for the normal case.
+ */
+export function isSplitPattern(mask: number | null): boolean {
+  if (mask == null) return false;
+  return (mask & DAY_MASK_WEEKDAYS) !== DAY_MASK_WEEKDAYS;
+}
+
+/** "Mon, Wed" — the working weekdays a mask covers, for labels and emails. */
+export function maskLabel(mask: number | null): string {
+  if (mask == null) return 'Every working day';
+  const days = maskDows(mask);
+  if (days.length === 0) return 'No days';
+  return days.map((d) => DAY_LABELS[d]).join(', ');
+}
+
+/** A day this person works: a working day the mask also allows. */
+export function worksDay(day: string, mask: number | null, cal: WorkCalendar): boolean {
+  return isWorkingDay(day, cal) && maskHasDow(mask, fromDay(day).getDay());
+}
+
+/* --------------------------------------------------------- Day segments */
+
+/** A run of consecutive calendar days actually worked. */
+export interface DaySegment {
+  start: string;
+  end: string;
+}
+
+/**
+ * Split an inclusive window into the stretches actually worked, breaking at
+ * every non-working day and at any day the mask leaves out.
+ *
+ * This is what keeps a Mon–Fri phase from looking like it runs through the
+ * weekend: a two-week phase comes back as two segments, one per week, with the
+ * weekend showing as a gap. A Mon/Wed pattern comes back as one segment per
+ * day.
+ */
+export function workedSegments(
+  start: string,
+  end: string,
+  cal: WorkCalendar,
+  mask: number | null = null
+): DaySegment[] {
+  const out: DaySegment[] = [];
+  if (end < start) return out;
+  let open: DaySegment | null = null;
+  for (let d = start; d <= end; d = addDays(d, 1)) {
+    if (worksDay(d, mask, cal)) {
+      if (open && open.end === addDays(d, -1)) open.end = d;
+      else {
+        open = { start: d, end: d };
+        out.push(open);
+      }
+    } else {
+      open = null;
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------- Dependency solving */
 
 /** The fields computeSchedule needs from a phase. */
@@ -121,6 +232,8 @@ export interface TaskInput {
   start_date: string;
   duration_days: number;
   depends_on_id: number | null;
+  /** Defaults to 'finish_to_start' when absent. */
+  depends_type?: DependsType | null;
   lag_days: number;
 }
 
@@ -129,6 +242,21 @@ export interface ComputedWindow {
   end: string;
   /** True when a predecessor pushed this phase past its own earliest start. */
   driven: boolean;
+}
+
+/**
+ * Where a link's lag is measured from. Finish-to-start counts working days
+ * after the day the predecessor ends; start-to-start counts them from the day
+ * it begins, so lag 0 means "same day" and the two phases overlap.
+ */
+function linkedStart(
+  pred: ComputedWindow,
+  type: DependsType,
+  lagDays: number,
+  cal: WorkCalendar
+): string {
+  if (type === 'start_to_start') return addWorkingDays(pred.start, lagDays, cal);
+  return addWorkingDays(addDays(pred.end, 1), lagDays, cal);
 }
 
 export interface ComputedSchedule {
@@ -140,8 +268,11 @@ export interface ComputedSchedule {
 /**
  * Resolve every phase's real window from the dependency chain:
  *
- *   start = max(own earliest start, first working day after predecessor + lag)
+ *   start = max(own earliest start, anchor + lag)
  *   end   = start advanced by (duration - 1) working days
+ *
+ * where the anchor is the first working day after the predecessor ends
+ * (finish-to-start) or the day it begins (start-to-start).
  *
  * Memoized depth-first resolution — each phase has at most one predecessor, so
  * a chain resolves in one pass. A phase re-entered while still resolving is in
@@ -171,7 +302,12 @@ export function computeSchedule(tasks: TaskInput[], cal: WorkCalendar): Computed
           resolving.add(task.id);
           const predWindow = resolve(pred);
           resolving.delete(task.id);
-          const after = addWorkingDays(addDays(predWindow.end, 1), task.lag_days, cal);
+          const after = linkedStart(
+            predWindow,
+            task.depends_type ?? 'finish_to_start',
+            task.lag_days,
+            cal
+          );
           if (after > earliest) {
             earliest = after;
             driven = true;
@@ -228,64 +364,103 @@ export function projectedEnd(
   return latest;
 }
 
-/* ------------------------------------------------------------- Conflicts */
+/* ------------------------------------------------------------- Bookings */
 
-/** One booked window for one assignee, flattened across all jobs. */
-export interface AssigneeWindow {
-  /** 'user:4' / 'sub:2' — the identity conflicts are grouped by. */
+/**
+ * One stretch of days a single assignee actually works, on one phase. A phase
+ * is flattened into one of these per person per unbroken run of worked days,
+ * so weekends, holidays and split-day patterns all show up as gaps rather than
+ * being papered over by the phase's outer window.
+ */
+export interface AssigneeBooking {
+  /** 'user:4' / 'sub:2' — the identity bookings are grouped by. */
   key: string;
+  kind: 'user' | 'sub';
+  refId: number;
   name: string;
+  /** Role for employees, trade for subs. */
+  detail: string | null;
+  /** This person's day pattern on the phase (null = every working day). */
+  workDays: number | null;
   taskId: number;
   taskName: string;
+  taskStatus: TaskStatus;
+  taskNotes: string | null;
   projectId: number;
   projectName: string;
+  customer: string;
+  location: string | null;
+  /** The phase's whole window, for context. */
+  windowStart: string;
+  windowEnd: string;
+  /** The worked stretch itself — every day between these IS worked. */
   start: string;
   end: string;
 }
 
-/** Flatten phases into one booking per assignee, over the phase's window. */
-export function assigneeWindows(
+/**
+ * Flatten phases into per-assignee worked stretches. Pass the same calendar the
+ * windows were computed with.
+ */
+export function assigneeBookings(
   tasks: ScheduleTaskRow[],
-  windows: Map<number, ComputedWindow>
-): AssigneeWindow[] {
-  const out: AssigneeWindow[] = [];
+  windows: Map<number, ComputedWindow>,
+  cal: WorkCalendar
+): AssigneeBooking[] {
+  const out: AssigneeBooking[] = [];
   for (const task of tasks) {
     const w = windows.get(task.id);
     if (!w) continue;
     for (const a of task.assignees ?? []) {
-      out.push({
-        key: `${a.kind}:${a.ref_id}`,
-        name: a.name,
-        taskId: task.id,
-        taskName: task.name,
-        projectId: task.project_id,
-        projectName: task.project_name,
-        start: w.start,
-        end: w.end,
-      });
+      for (const seg of workedSegments(w.start, w.end, cal, a.work_days)) {
+        out.push({
+          key: `${a.kind}:${a.ref_id}`,
+          kind: a.kind,
+          refId: a.ref_id,
+          name: a.name,
+          detail: a.detail,
+          workDays: a.work_days,
+          taskId: task.id,
+          taskName: task.name,
+          taskStatus: task.status,
+          taskNotes: task.notes,
+          projectId: task.project_id,
+          projectName: task.project_name,
+          customer: task.customer,
+          location: task.location,
+          windowStart: w.start,
+          windowEnd: w.end,
+          start: seg.start,
+          end: seg.end,
+        });
+      }
     }
   }
   return out;
 }
 
-/** Two bookings for the same assignee that overlap in time. */
+/* ------------------------------------------------------------- Conflicts */
+
+/** Two bookings for the same assignee that land on the same days. */
 export interface Conflict {
   key: string;
   name: string;
   /** The overlapping stretch (the days actually double-booked). */
   start: string;
   end: string;
-  a: AssigneeWindow;
-  b: AssigneeWindow;
+  a: AssigneeBooking;
+  b: AssigneeBooking;
 }
 
 /**
- * Every pair of overlapping bookings per assignee. Two phases on the SAME job
+ * Every pair of overlapping bookings per assignee. Because bookings are the
+ * days actually worked, someone running one job Mon/Wed and another Tuesday is
+ * NOT a conflict — only genuinely shared days are. Two phases on the SAME job
  * are allowed to overlap (a crew can run two phases of one job), so only
- * cross-job overlaps count as conflicts.
+ * cross-job overlaps count.
  */
-export function findConflicts(windows: AssigneeWindow[]): Conflict[] {
-  const byKey = new Map<string, AssigneeWindow[]>();
+export function findConflicts(windows: AssigneeBooking[]): Conflict[] {
+  const byKey = new Map<string, AssigneeBooking[]>();
   for (const w of windows) {
     const list = byKey.get(w.key);
     if (list) list.push(w);
@@ -312,6 +487,55 @@ export function findConflicts(windows: AssigneeWindow[]): Conflict[] {
           b,
         });
       }
+    }
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------ Week views */
+
+/** Monday of the week containing `day`. */
+export function weekStart(day: string): string {
+  const dow = fromDay(day).getDay();
+  // getDay() is 0 for Sunday, which belongs to the week that began 6 days back.
+  return addDays(day, dow === 0 ? -6 : 1 - dow);
+}
+
+/**
+ * A week as "Aug 17 – 23, 2026", or "Aug 31 – Sep 6, 2026" when it straddles
+ * two months. Composed by hand rather than by format options, which have no
+ * combination for "day and year without the month".
+ */
+export function weekLabel(monday: string): string {
+  const a = fromDay(monday);
+  const b = fromDay(addDays(monday, 6));
+  const left = a.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const right =
+    a.getMonth() === b.getMonth()
+      ? String(b.getDate())
+      : b.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `${left} – ${right}, ${b.getFullYear()}`;
+}
+
+/**
+ * Bookings indexed person -> day -> what they're on that day. Every day inside
+ * a booking is a day actually worked, so a lookup miss means "nothing booked",
+ * which is exactly what the crew week grid needs to show someone free.
+ */
+export function bookingsByDay(
+  bookings: AssigneeBooking[]
+): Map<string, Map<string, AssigneeBooking[]>> {
+  const out = new Map<string, Map<string, AssigneeBooking[]>>();
+  for (const b of bookings) {
+    let byDay = out.get(b.key);
+    if (!byDay) {
+      byDay = new Map();
+      out.set(b.key, byDay);
+    }
+    for (const day of eachDay(b.start, b.end)) {
+      const list = byDay.get(day);
+      if (list) list.push(b);
+      else byDay.set(day, [b]);
     }
   }
   return out;
