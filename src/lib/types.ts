@@ -319,11 +319,18 @@ export interface ScheduleTask {
   depends_type: DependsType;
   /** Working days to wait after the predecessor's finish (or start). */
   lag_days: number;
+  /**
+   * How many people this phase needs on site. Set on the timeline alongside the
+   * duration — the two together are the phase's crew budget (crew_size working
+   * days x duration), which the crew week then fills with actual people.
+   */
+  crew_size: number;
   status: TaskStatus;
   /**
    * What time the crew starts each day of this phase, as 'HH:MM' (24-hour),
    * or null when no time is set and they work their normal hours. Individual
-   * days can override it — see `day_times` on ScheduleTaskRow.
+   * days can override it — see `day_times` on ScheduleTaskRow. Set from the
+   * crew week, where the days are in front of you, not from the timeline.
    */
   start_time: string | null;
   notes: string | null;
@@ -342,25 +349,26 @@ export interface TaskDayTime {
 }
 
 /**
- * A person or sub attached to a phase. They work every working day of the
- * phase's window unless `work_days` narrows it to particular weekdays.
+ * One person booked on one phase for one day — the unit crew is scheduled in.
+ *
+ * A week of work for one employee is several of these, and a phase's staffing
+ * is all of them across its window. Booking a day at a time is what lets a
+ * five-day phase needing two people be covered by four people on Monday and
+ * one on Friday, which is how the week usually actually falls.
  */
-export interface ScheduleAssignee {
+export interface CrewDay {
   id: number;
+  /** The day worked, 'YYYY-MM-DD'. */
+  day: string;
   kind: 'user' | 'sub';
   /** users.id or subcontractors.id, depending on `kind`. */
   ref_id: number;
   name: string;
   /** Trade for subs; role for employees. */
   detail: string | null;
-  /**
-   * 7-bit day-of-week mask (bit 0 = Sunday … bit 6 = Saturday), or null for
-   * every working day in the window. See DAY_MASK helpers in ./schedule-math.
-   */
-  work_days: number | null;
 }
 
-/** A phase with its job context and assignees, as the schedule views need it. */
+/** A phase with its job context and day-by-day crew, as the views need it. */
 export type ScheduleTaskRow = ScheduleTask & {
   project_name: string;
   customer: string;
@@ -371,7 +379,8 @@ export type ScheduleTaskRow = ScheduleTask & {
   project_due_date: string | null;
   /** The job's immovable finish date, when it has one. */
   project_hard_finish_date: string | null;
-  assignees: ScheduleAssignee[];
+  /** Who is booked on which day, ascending by day then name. */
+  crew_days: CrewDay[];
   /** Per-day start-time overrides for this phase, ascending by day. */
   day_times: TaskDayTime[];
 };

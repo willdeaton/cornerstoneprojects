@@ -28,8 +28,6 @@ import {
 import {
   assigneeBookings,
   computeSchedule,
-  isSplitPattern,
-  maskLabel,
   rangesOverlap,
   timeLabel,
 } from '../schedule-math';
@@ -237,10 +235,10 @@ export async function sendScheduleEmails(
       else notesByProject.set(n.project_id, [n.body]);
     }
     const { windows } = computeSchedule(tasks, calendar);
-    // Bookings are the days actually worked, so each line covers one unbroken
+    // Bookings are the days actually booked, so each line covers one unbroken
     // stretch: a two-week phase arrives as one line per week rather than one
-    // that reads as if the weekend were a work day, and someone booked Mon/Wed
-    // gets a line per day with their pattern spelled out.
+    // that reads as if the weekend were a work day, and someone booked Mon and
+    // Wed gets a line per day.
     const booked = assigneeBookings(tasks, windows, calendar).filter(
       (w) => rangesOverlap(w.start, w.end, from, to) && (includeSubs || w.kind === 'user')
     );
@@ -253,9 +251,7 @@ export async function sendScheduleEmails(
         dates: scheduleSpan(w.start, w.end),
         startTime: w.startTime ? timeLabel(w.startTime) : null,
         project: w.projectName,
-        phase: isSplitPattern(w.workDays)
-          ? `${w.taskName} (your days: ${maskLabel(w.workDays)})`
-          : w.taskName,
+        phase: w.taskName,
         location: w.location,
         address: w.siteAddress,
         notes: w.taskNotes,

@@ -18,17 +18,36 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   Completed), progress, value, hours logged, and due dates.
 - **Project detail** — editable status & progress, **job notes**, and a
   per-job **time clock**.
-- **Schedule** — plan each job as phases with a duration in working days and
-  optional links between them. Two views over the same data: **Job Timeline**
-  (every live job, expandable to its phases, with double-bookings flagged) and
-  **Crew Week** (one row per employee, one column per day — what everyone is
-  doing that week). Weekends and non-working days never count toward a duration
-  and are drawn as breaks, so work carrying into the next week reads as separate
-  stretches rather than continuous weekend work.
+- **Schedule** — scheduling is two steps, in two views over the same data.
+  **Job Timeline** plans the *work*: each job is a set of phases carrying a
+  duration in working days, how many people that phase needs per day, and
+  optional links between phases. **Crew Week** then staffs that work: one row
+  per employee, one column per day, with a card for every job running that week.
+  Weekends and non-working days never count toward a duration and are drawn as
+  breaks, so work carrying into the next week reads as separate stretches rather
+  than continuous weekend work.
+  - **Plan the work, then staff it** — the timeline never names anybody. A phase
+    says "2 people for 4 days", which is a budget of 8 crew-days; the crew week
+    spends that budget by booking real people onto real days. The budget is a
+    *total*, not a per-day quota, so four people Monday and one Friday is a
+    legitimate way to cover a 2-crew, 5-day phase — which is how a week usually
+    falls. A day carrying more people than planned is flagged, never blocked,
+    and nothing can be booked past the total.
+  - **Staffing a week** — pick a job card, then click the day cells of the
+    people working it; the card counts its crew-days down as you go, and cells
+    stop offering to book once the phase is full. Click a booking to take
+    someone off that day.
+  - **Job cards** — open a card for the crew-facing half of a phase: the time
+    the crew starts, a different time on any individual day (a 6 AM delivery, a
+    late inspection), the notes they read before turning up, and who is booked
+    on each day. These live here rather than on the timeline because none of
+    them make sense without the days in front of you.
   - **Every job on the board** — jobs with nothing scheduled are listed too,
     with their status, so it's obvious which ones haven't been planned yet.
     Expand a job for its phases; collapsed, it still shows the stretch its work
-    covers.
+    covers. Each phase row reads "2 people × 4 days" and how much of that the
+    crew week has covered, and the board can be filtered to phases still
+    needing crew.
   - **Whole weeks from Monday** — the Week, 2-Week and 6-Week views always start
     on a Monday and run to a Sunday, with each week's Monday held in a band
     above its days, so the same weekday is always in the same column.
@@ -37,24 +56,24 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     history with an auto-generated summary of what moved ("Start Mar 3 → Mar 5;
     Duration 5 → 7 working days"), readable from the job or the timeline.
     Marking a phase in progress or complete is progress, not a schedule change,
-    and needs no reason.
+    and needs no reason. Booking crew never needs one either — who turns up is
+    exactly what a manager is expected to keep adjusting.
   - **Publish** — publishing a job's schedule (explicitly, or by sending it out
     from **Send Schedule**) marks the dates the crew has. After that, changes to
-    crew, start times and phase notes need a reason too.
+    the headcount, start times and phase notes need a reason too.
+  - **Moved work drops stale bookings** — shortening or moving a phase releases
+    anyone booked on days it no longer covers, across the whole job, since a
+    phase that slips takes everything after it along.
   - **Hard finish date** — a date a job *must* be done by, separate from the due
     date it's aimed at. The schedule warns whenever the planned work runs past
     it, and moving a date that was already promised is recorded with a reason.
-  - **Daily start times** — a phase can carry the time the crew starts each day,
-    with a different time on any individual day (a 6 AM delivery, a late
-    inspection). Start times show on the timeline, the crew week, everyone's own
-    schedule, and in the schedule email.
   - **Site address & crew notes** — each job carries the full address crews drive
     to (with a directions link) and a **Crew Notes** list — gate codes, parking,
     who to ask for on site — written by managers and read by everyone booked on
     the job.
-  - **Split days** — each person on a phase can be booked on chosen weekdays, so
-    an employee runs one job Mon/Wed and another Tuesday. Only days genuinely
-    shared between two jobs count as a double-booking.
+  - **Double-bookings** — crew is booked a day at a time, so someone running one
+    job Monday and Wednesday and another on Tuesday is not a clash. Only days
+    genuinely shared between two different jobs are flagged.
   - **Overlapping phases** — a phase can start a set number of working days
     after the previous phase *starts* (start-to-start), instead of waiting for
     it to finish, so a sub can work alongside the crew ahead of them.

@@ -1,6 +1,8 @@
 import 'server-only';
 import { Pool, types } from 'pg';
 import { ensureSeed } from './seed';
+import { computeSchedule, eachDay, isWorkingDay } from './schedule-math';
+import type { DependsType } from './types';
 
 /*
  * Postgres data layer.
@@ -617,9 +619,11 @@ Your City, ST 00000',
     CREATE INDEX IF NOT EXISTS idx_sched_tasks_project ON schedule_tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_sched_tasks_depends ON schedule_tasks(depends_on_id);
 
-    -- Who works a phase: exactly one of user_id / subcontractor_id. An assignee
-    -- is on the phase for its whole window — to put someone on part of it,
-    -- schedule that part as its own phase.
+    -- SUPERSEDED by schedule_crew_days (see migrateCrewDays below): crew is
+    -- now booked a day at a time from the crew week, not a whole window at a
+    -- time from the timeline. Kept, and never written to again, so the
+    -- pre-redesign bookings survive and the backfill can be re-run against a
+    -- restored backup.
     CREATE TABLE IF NOT EXISTS schedule_assignments (
       id               SERIAL PRIMARY KEY,
       task_id          INTEGER NOT NULL REFERENCES schedule_tasks(id) ON DELETE CASCADE,
@@ -797,4 +801,163 @@ Your City, ST 00000',
     ALTER TABLE schedule_changes ADD CONSTRAINT schedule_changes_kind_check
       CHECK (kind IN ('added','updated','deleted','job'));
   `);
+
+  await migrateCrewDays(pool);
+}
+
+/* ====================================================================
+ * Crew planning, then crew staffing.
+ *
+ * The timeline plans WORK: a phase says how long it runs and how many
+ * people it needs (crew_size). It no longer names anybody — picking
+ * particular employees while looking at a Gantt chart meant guessing at
+ * a week you couldn't see.
+ *
+ * The crew week STAFFS that work: schedule_crew_days is one row per
+ * person per day on a phase, so a manager fills the phase's budget of
+ * crew_size x working days however the week actually falls — four people
+ * Monday, one on Friday. A phase's remaining budget is what stops it
+ * being over-staffed, and two rows for one person on one day across two
+ * jobs is what a double-booking now is.
+ * ==================================================================== */
+async function migrateCrewDays(pool: Pool) {
+  await pool.query(`
+    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS crew_size INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE schedule_tasks DROP CONSTRAINT IF EXISTS schedule_tasks_crew_size_check;
+    ALTER TABLE schedule_tasks ADD CONSTRAINT schedule_tasks_crew_size_check
+      CHECK (crew_size >= 1);
+
+    -- One person, one day, one phase. Exactly one of user_id /
+    -- subcontractor_id, the same shape schedule_assignments used.
+    CREATE TABLE IF NOT EXISTS schedule_crew_days (
+      id               SERIAL PRIMARY KEY,
+      task_id          INTEGER NOT NULL REFERENCES schedule_tasks(id) ON DELETE CASCADE,
+      day              DATE NOT NULL,
+      user_id          INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      subcontractor_id INTEGER REFERENCES subcontractors(id) ON DELETE CASCADE,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((user_id IS NULL) <> (subcontractor_id IS NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_crew_days_task ON schedule_crew_days(task_id, day);
+    CREATE INDEX IF NOT EXISTS idx_crew_days_day  ON schedule_crew_days(day);
+    -- Partial uniques rather than one composite: a NULL column never
+    -- collides in a plain unique index, so a person could be added twice.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_crew_days_user
+      ON schedule_crew_days(task_id, day, user_id) WHERE user_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_crew_days_sub
+      ON schedule_crew_days(task_id, day, subcontractor_id) WHERE subcontractor_id IS NOT NULL;
+  `);
+
+  await backfillCrewDays(pool);
+}
+
+/**
+ * Carry the old whole-window assignments over to per-day staffing, once.
+ *
+ * schedule_assignments held a person plus an optional weekday mask, which only
+ * means real days once the dependency solver has resolved the phase's window —
+ * so this runs the same solver the app does rather than trying to express it in
+ * SQL. Each person's masked working days become crew-day rows, and the phase's
+ * crew_size becomes the most people it ever had on one day, which is the
+ * headcount that plan was really asking for.
+ *
+ * schedule_assignments itself is left alone: it's the record of who was booked
+ * before the redesign, and keeping it means this can be re-run against a
+ * restored backup.
+ */
+async function backfillCrewDays(pool: Pool) {
+  const done = await pool.query(
+    `SELECT 1 FROM settings WHERE key = 'schedule_crew_days_backfilled'`
+  );
+  if (done.rowCount) return;
+
+  const { rows: tasks } = await pool.query<{
+    id: number;
+    project_id: number;
+    start_date: string;
+    duration_days: number;
+    depends_on_id: number | null;
+    depends_type: DependsType;
+    lag_days: number;
+  }>(
+    `SELECT id, project_id, start_date, duration_days, depends_on_id, depends_type, lag_days
+       FROM schedule_tasks`
+  );
+
+  if (tasks.length > 0) {
+    const [{ rows: assignments }, { rows: holidays }] = await Promise.all([
+      pool.query<{
+        task_id: number;
+        user_id: number | null;
+        subcontractor_id: number | null;
+        work_days: number | null;
+      }>('SELECT task_id, user_id, subcontractor_id, work_days FROM schedule_assignments'),
+      pool.query<{ day: string }>('SELECT day FROM schedule_holidays'),
+    ]);
+
+    const calendar = { holidays: new Set(holidays.map((h) => h.day)) };
+    const { windows } = computeSchedule(tasks, calendar);
+
+    const byTask = new Map<number, typeof assignments>();
+    for (const a of assignments) {
+      const list = byTask.get(a.task_id);
+      if (list) list.push(a);
+      else byTask.set(a.task_id, [a]);
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const task of tasks) {
+        const window = windows.get(task.id);
+        const crew = byTask.get(task.id) ?? [];
+        if (!window || crew.length === 0) continue;
+
+        // How many of them land on each day — the busiest day is the headcount.
+        const perDay = new Map<string, number>();
+        for (const a of crew) {
+          for (const day of eachDay(window.start, window.end)) {
+            if (!worksLegacyDay(day, a.work_days, calendar)) continue;
+            perDay.set(day, (perDay.get(day) ?? 0) + 1);
+            await client.query(
+              `INSERT INTO schedule_crew_days (task_id, day, user_id, subcontractor_id)
+               VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+              [task.id, day, a.user_id, a.subcontractor_id]
+            );
+          }
+        }
+        const size = Math.max(1, ...perDay.values());
+        await client.query('UPDATE schedule_tasks SET crew_size = $1 WHERE id = $2', [
+          size,
+          task.id,
+        ]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  await pool.query(
+    `INSERT INTO settings (key, value) VALUES ('schedule_crew_days_backfilled', 'done')
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`
+  );
+}
+
+/**
+ * Did a pre-redesign assignee work this day? Their `work_days` was a 7-bit
+ * day-of-week mask (bit 0 = Sunday … bit 6 = Saturday) narrowing the phase's
+ * working days, with NULL meaning all of them. The concept lives only here now,
+ * for reading those old rows.
+ */
+function worksLegacyDay(
+  day: string,
+  mask: number | null,
+  cal: { holidays: Set<string> }
+): boolean {
+  if (!isWorkingDay(day, cal)) return false;
+  return mask == null || (mask & (1 << new Date(day + 'T00:00:00').getDay())) !== 0;
 }

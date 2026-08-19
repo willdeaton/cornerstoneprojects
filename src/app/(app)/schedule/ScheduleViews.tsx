@@ -10,13 +10,24 @@ import type { PublishedInfo } from './PublishBar';
 type View = 'timeline' | 'crew';
 
 const VIEWS: { id: View; label: string; hint: string }[] = [
-  { id: 'timeline', label: 'Job Timeline', hint: 'Every live job, expandable to its phases' },
-  { id: 'crew', label: 'Crew Week', hint: 'What each employee is doing this week' },
+  {
+    id: 'timeline',
+    label: 'Job Timeline',
+    hint: 'Plan the work: how long each phase runs and how many people it takes',
+  },
+  {
+    id: 'crew',
+    label: 'Crew Week',
+    hint: 'Staff that work: who is on which job each day, and when they start',
+  },
 ];
 
 /**
- * The two ways managers read the schedule, over one load of the same rows: by
- * job (the timeline) or by person (the week grid). Both derive their dates from
+ * The two halves of scheduling, over one load of the same rows.
+ *
+ * The timeline plans WORK — durations, dependencies, and the headcount each
+ * phase needs. The crew week staffs it — the actual people, a day at a time,
+ * plus the start times and notes they'll read. Both derive their dates from
  * schedule-math, so switching never shows two different answers.
  */
 export function ScheduleViews({
@@ -63,15 +74,19 @@ export function ScheduleViews({
         <ScheduleBoard
           tasks={tasks}
           projects={projects}
-          workers={workers}
-          subs={subs}
           holidays={holidays}
           published={published}
           changeCounts={changeCounts}
           canUnpublish={canUnpublish}
         />
       ) : (
-        <CrewWeek tasks={tasks} workers={workers} subs={subs} holidays={holidays} />
+        <CrewWeek
+          tasks={tasks}
+          workers={workers}
+          subs={subs}
+          holidays={holidays}
+          published={published}
+        />
       )}
     </div>
   );

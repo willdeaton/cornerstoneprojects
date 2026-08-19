@@ -12,12 +12,15 @@ import {
   listScheduleTasks,
   listScheduleChanges,
   listTaskInputs,
+  listHolidays,
   listAssigneeContacts,
   getPublishedVersion,
   publishSchedule,
   unpublishSchedule,
   logScheduleChange,
-  setTaskAssignees,
+  addCrewDay,
+  removeCrewDay,
+  pruneCrewDays,
   setTaskDayTimes,
   createCrewNote,
   updateCrewNote,
@@ -28,11 +31,18 @@ import {
   deleteSubcontractor,
   addHoliday,
   deleteHoliday,
-  type AssigneeInput,
+  type CrewDayInput,
   type DayTimeInput,
 } from '@/lib/schedule-data';
 import { sendScheduleEmails, type SendScheduleResult } from '@/lib/email/send';
-import { addDays, isValidTime, normalizeMask, wouldCycle } from '@/lib/schedule-math';
+import {
+  addDays,
+  computeSchedule,
+  crewBudget,
+  isValidTime,
+  isWorkingDay,
+  wouldCycle,
+} from '@/lib/schedule-math';
 import { shortDate } from '@/lib/format';
 import {
   diffTask,
@@ -127,17 +137,14 @@ export interface TaskFields {
   name: string;
   start_date: string;
   duration_days: number;
+  /** People needed per day. With the duration, the phase's crew budget. */
+  crew_size?: number;
   depends_on_id?: number | null;
   /** Whether the link hangs off the predecessor's finish or its start. */
   depends_type?: DependsType;
   lag_days?: number;
   status?: TaskStatus;
-  /** Daily start time as 'HH:MM'; null or '' for the crew's normal hours. */
-  start_time?: string | null;
-  /** Per-day start-time overrides, replacing whatever the phase had. */
-  day_times?: TaskDayTime[];
   notes?: string | null;
-  assignees?: AssigneeInput[];
   /**
    * Why this changed. Required for anything that moves the dates, and — once the
    * job's schedule has been published — for anything that moves work or people
@@ -146,39 +153,39 @@ export interface TaskFields {
   reason?: string | null;
 }
 
-/**
- * Name lookups for the change log: phase names come from the job's own phases,
- * people from the schedulable roster. Anyone already assigned contributes their
- * name too — the roster only lists active people, and someone since deactivated
- * would otherwise read as a different person and fake a crew change.
- */
+/** Phase names for the change log, so a link reads as a name and not an id. */
 async function diffNames(projectId: number): Promise<DiffNames> {
-  const [tasks, contacts] = await Promise.all([
-    listScheduleTasks({ projectId }),
-    listAssigneeContacts(),
-  ]);
+  const tasks = await listScheduleTasks({ projectId });
   const phases = new Map(tasks.map((t) => [t.id, t.name]));
-  const people = new Map(contacts.map((c) => [c.key, c.name]));
-  for (const t of tasks) {
-    for (const a of t.assignees ?? []) {
-      if (!people.has(`${a.kind}:${a.ref_id}`)) people.set(`${a.kind}:${a.ref_id}`, a.name);
-    }
-  }
-  return {
-    phase: (id) => phases.get(id) ?? 'a deleted phase',
-    person: (kind, refId) => people.get(`${kind}:${refId}`) ?? `#${refId}`,
-  };
+  return { phase: (id) => phases.get(id) ?? 'a deleted phase' };
 }
 
 /**
- * Create or update one phase together with its assignee list and day start
- * times. Rejects a dependency that points at another job or that would close a
- * loop, so the solver in schedule-math never has to untangle one after the fact.
+ * Where a job's phases land, given the whole job's dependency chain. Every
+ * crew-staffing check needs this: a phase's window decides both which days can
+ * be booked and how big its crew budget is, and neither is stored.
+ */
+async function jobWindows(projectId: number) {
+  const [tasks, holidays] = await Promise.all([listTaskInputs(projectId), listHolidays()]);
+  const calendar = { holidays: new Set(holidays.map((h) => h.day)) };
+  return { ...computeSchedule(tasks, calendar), calendar };
+}
+
+/**
+ * Create or update one phase of work: what it is, when it can start, how long
+ * it runs and how many people it needs. Deliberately not WHO — crew is booked a
+ * day at a time from the crew week, where the days are visible.
+ *
+ * Rejects a dependency that points at another job or that would close a loop,
+ * so the solver in schedule-math never has to untangle one after the fact.
  *
  * Any edit that moves the dates has to carry `reason`, published or not; once
  * the job's schedule is published, so does anything that moves work or people.
  * Either way the reason is logged with a summary of what actually changed, so
  * the job keeps a readable record of every move.
+ *
+ * A phase that moves or shrinks drops any crew booked on days it no longer
+ * covers — a booking outside the window is work nobody is doing.
  */
 export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
   const me = await requireManager();
@@ -216,22 +223,17 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     }
   }
 
-  const assignees = (input.assignees ?? []).map((a) => ({
-    ...a,
-    work_days: normalizeMask(a.work_days),
-  }));
-
-  const dayTimes = cleanDayTimes(input.day_times);
+  const crewSize = Math.max(1, Math.round(Number(input.crew_size) || 1));
 
   const fields = {
     name,
     start_date: input.start_date,
     duration_days: duration,
+    crew_size: crewSize,
     depends_on_id: dependsOn,
     depends_type: dependsType,
     lag_days: lag,
     status: input.status ?? ('not_started' as TaskStatus),
-    start_time: cleanTime(input.start_time),
     notes: clean(input.notes),
   };
 
@@ -240,12 +242,23 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
   const reason = clean(input.reason);
 
   // What moved, in the same words the editor previewed.
-  let summary = summarizePhase({ name, start_date: fields.start_date, duration_days: duration });
+  let summary = summarizePhase({
+    name,
+    start_date: fields.start_date,
+    duration_days: duration,
+    crew_size: crewSize,
+  });
   // A brand-new phase moves nothing that was promised, so it only needs
   // explaining once the crew has the schedule.
   let mustExplain = !!published;
   if (before) {
-    const draft: TaskDraft = { ...fields, day_times: dayTimes, assignees };
+    // Start times and per-day times are set from the crew week, so they come
+    // through unchanged here and never show up as a change.
+    const draft: TaskDraft = {
+      ...fields,
+      start_time: before.start_time ?? null,
+      day_times: before.day_times ?? [],
+    };
     const changes = diffTask(
       {
         name: before.name,
@@ -254,11 +267,11 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
         depends_on_id: before.depends_on_id,
         depends_type: before.depends_type ?? 'finish_to_start',
         lag_days: before.lag_days,
+        crew_size: before.crew_size,
         start_time: before.start_time ?? null,
         day_times: before.day_times ?? [],
         notes: before.notes,
         status: before.status,
-        assignees: before.assignees ?? [],
       },
       draft,
       await diffNames(input.project_id)
@@ -289,8 +302,11 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     taskId = await createScheduleTask({ project_id: input.project_id, ...fields });
   }
 
-  if (input.assignees) await setTaskAssignees(taskId, assignees);
-  if (input.day_times) await setTaskDayTimes(taskId, dayTimes);
+  // Resolved after the write, so the window reflects the edit — and the whole
+  // job is re-checked, since a phase that moves takes everything after it along.
+  const { windows } = await jobWindows(input.project_id);
+  let orphaned = 0;
+  for (const [id, window] of windows) orphaned += await pruneCrewDays(id, window);
 
   // Logged whenever a reason was given, published or not — the history is the
   // job's record of what moved and why, from the first plan onwards.
@@ -300,7 +316,9 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
       task_id: taskId,
       task_name: name,
       kind: before ? 'updated' : 'added',
-      summary,
+      summary: orphaned
+        ? `${summary} (${orphaned} crew ${orphaned === 1 ? 'day' : 'days'} dropped off days the work no longer covers)`
+        : summary,
       reason,
       version: published?.version ?? null,
       changed_by: me.id,
@@ -392,6 +410,10 @@ export async function shiftTaskAction(
   const moved = addDays(task.start_date, Math.round(days));
   await updateScheduleTask(id, { start_date: moved });
 
+  // Everything after it moves too, so the whole job's crew days are re-checked.
+  const { windows } = await jobWindows(task.project_id);
+  for (const [taskId, window] of windows) await pruneCrewDays(taskId, window);
+
   await logScheduleChange({
     project_id: task.project_id,
     task_id: task.id,
@@ -402,6 +424,163 @@ export async function shiftTaskAction(
     version: published?.version ?? null,
     changed_by: me.id,
   });
+
+  revalidateSchedule(task.project_id);
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------- Crew days */
+
+/** Booking or un-booking one person on one day of a phase. */
+export interface CrewDayFields {
+  task_id: number;
+  day: string;
+  kind: 'user' | 'sub';
+  /** users.id or subcontractors.id. */
+  ref_id: number;
+}
+
+/**
+ * Book one person onto one day of a phase.
+ *
+ * The phase's own dates decide what's allowed: the day has to be a working day
+ * inside its window, and the phase can only hold crew_size x working-days
+ * bookings in total. That budget is spent freely — four people on Monday and
+ * one on Friday is a fine way to staff a 2-crew, 5-day phase — so nothing here
+ * enforces an even spread; the crew week flags a heavy day and lets it stand.
+ *
+ * Staffing is not a timeline change and never asks for a reason, published or
+ * not: who turns up is exactly what a manager is expected to keep adjusting.
+ */
+export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionResult> {
+  await requireManager();
+  const task = await getScheduleTask(input.task_id);
+  if (!task) return { ok: false, error: 'That phase no longer exists.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.day ?? '')) return { ok: false, error: 'Pick a day.' };
+
+  const { windows, calendar } = await jobWindows(task.project_id);
+  const window = windows.get(task.id);
+  if (!window) return { ok: false, error: "That phase has no dates to book against." };
+  if (input.day < window.start || input.day > window.end) {
+    return {
+      ok: false,
+      error: `${task.name} runs ${shortDate(window.start)} – ${shortDate(window.end)} — that day is outside it.`,
+    };
+  }
+  if (!isWorkingDay(input.day, calendar)) {
+    return { ok: false, error: 'That day is a weekend or a non-working day.' };
+  }
+
+  const budget = crewBudget(task, window, calendar);
+  const res = await addCrewDay(
+    task.id,
+    { day: input.day, kind: input.kind, ref_id: input.ref_id },
+    budget.capacity
+  );
+  if (!res.ok) {
+    return res.reason === 'full'
+      ? {
+          ok: false,
+          error: `${task.name} is fully staffed — ${budget.capacity} crew ${
+            budget.capacity === 1 ? 'day' : 'days'
+          } for ${budget.needed} ${budget.needed === 1 ? 'person' : 'people'} over ${budget.days} working ${
+            budget.days === 1 ? 'day' : 'days'
+          }. Raise the crew it needs on the timeline, or take someone off another day.`,
+        }
+      : { ok: false, error: 'They are already booked on this phase that day.' };
+  }
+
+  revalidateSchedule(task.project_id);
+  return { ok: true };
+}
+
+/** Take one person off one day of a phase. */
+export async function unassignCrewDayAction(input: CrewDayFields): Promise<ActionResult> {
+  await requireManager();
+  const task = await getScheduleTask(input.task_id);
+  if (!task) return { ok: true };
+  await removeCrewDay(task.id, { day: input.day, kind: input.kind, ref_id: input.ref_id });
+  revalidateSchedule(task.project_id);
+  return { ok: true };
+}
+
+/* -------------------------------------------------------- Crew job cards */
+
+/**
+ * The crew-facing half of a phase, saved from its job card in the crew week:
+ * what time the crew starts, any day that starts at a different time, and the
+ * notes they read before they turn up.
+ *
+ * These live here rather than on the timeline because they only make sense with
+ * the days in front of you — a 6 AM delivery belongs to a Tuesday, not to a bar
+ * on a Gantt chart. Once the schedule has gone out to the crew, changing any of
+ * it needs a reason, the same as moving work does.
+ */
+export interface CrewCardFields {
+  task_id: number;
+  /** Daily start time as 'HH:MM'; null or '' for the crew's normal hours. */
+  start_time?: string | null;
+  /** Per-day start-time overrides, replacing whatever the phase had. */
+  day_times?: TaskDayTime[];
+  /** What the crew should know about this job — shown on their own schedule. */
+  notes?: string | null;
+  reason?: string | null;
+}
+
+export async function saveCrewCardAction(input: CrewCardFields): Promise<ActionResult> {
+  const me = await requireManager();
+  const task = await getScheduleTask(input.task_id);
+  if (!task) return { ok: false, error: 'That phase no longer exists.' };
+
+  const startTime = cleanTime(input.start_time);
+  const dayTimes = cleanDayTimes(input.day_times);
+  const notes = clean(input.notes);
+
+  const before: TaskDraft = {
+    name: task.name,
+    start_date: task.start_date,
+    duration_days: task.duration_days,
+    depends_on_id: task.depends_on_id,
+    depends_type: task.depends_type ?? 'finish_to_start',
+    lag_days: task.lag_days,
+    crew_size: task.crew_size,
+    start_time: task.start_time ?? null,
+    day_times: task.day_times ?? [],
+    notes: task.notes,
+    status: task.status,
+  };
+  const changes = diffTask(
+    before,
+    { ...before, start_time: startTime, day_times: dayTimes, notes },
+    await diffNames(task.project_id)
+  );
+  if (changes.length === 0) return { ok: true };
+
+  const published = await getPublishedVersion(task.project_id);
+  const reason = clean(input.reason);
+  if (needsReason(changes, !!published) && !reason) {
+    return {
+      ok: false,
+      needsReason: true,
+      error: `This job's schedule was published (v${published?.version}). Add a reason for the change.`,
+    };
+  }
+
+  await updateScheduleTask(task.id, { start_time: startTime, notes });
+  await setTaskDayTimes(task.id, dayTimes);
+
+  if (reason) {
+    await logScheduleChange({
+      project_id: task.project_id,
+      task_id: task.id,
+      task_name: task.name,
+      kind: 'updated',
+      summary: summarizeChanges(changes),
+      reason,
+      version: published?.version ?? null,
+      changed_by: me.id,
+    });
+  }
 
   revalidateSchedule(task.project_id);
   return { ok: true };

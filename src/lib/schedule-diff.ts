@@ -11,9 +11,9 @@
  *   · TIMELINE — the dates themselves move: start, duration, or the link to
  *     another phase. These always need a reason, published or not, because the
  *     point of the history is to answer "why did this move?" later.
- *   · SCHEDULE — work or people shift without the timeline moving: the crew,
- *     the daily start times, the crew-facing notes. These need a reason once
- *     the schedule has been published to the crew.
+ *   · SCHEDULE — work or people shift without the timeline moving: how many
+ *     people the phase needs, the daily start times, the crew-facing notes.
+ *     These need a reason once the schedule has been published to the crew.
  *
  *  Marking a phase in progress or complete is progress reporting, not a
  *  schedule change, so it never demands a reason.
@@ -21,8 +21,8 @@
  */
 
 import { shortDate } from './format';
-import { maskLabel, timeLabel } from './schedule-math';
-import type { DependsType, ScheduleAssignee, TaskDayTime, TaskStatus } from './types';
+import { timeLabel } from './schedule-math';
+import type { DependsType, TaskDayTime, TaskStatus } from './types';
 import { TASK_STATUS_LABELS } from './types';
 
 /** The editable shape of a phase, as both the modal and the action hold it. */
@@ -33,13 +33,14 @@ export interface TaskDraft {
   depends_on_id: number | null;
   depends_type: DependsType;
   lag_days: number;
+  /** People needed per day. */
+  crew_size: number;
   /** Daily start time as 'HH:MM', or null for the crew's normal hours. */
   start_time: string | null;
   /** Per-day start-time overrides. */
   day_times: TaskDayTime[];
   notes: string | null;
   status: TaskStatus;
-  assignees: { kind: 'user' | 'sub'; ref_id: number; work_days?: number | null }[];
 }
 
 /** What a phase looked like before the edit. */
@@ -50,11 +51,11 @@ export interface TaskBefore {
   depends_on_id: number | null;
   depends_type: DependsType;
   lag_days: number;
+  crew_size: number;
   start_time: string | null;
   day_times: TaskDayTime[];
   notes: string | null;
   status: TaskStatus;
-  assignees: Pick<ScheduleAssignee, 'kind' | 'ref_id' | 'name' | 'work_days'>[];
 }
 
 export interface FieldChange {
@@ -67,10 +68,9 @@ export interface FieldChange {
   timelineRelevant: boolean;
 }
 
-/** Looks up display names for phases and people referenced by id. */
+/** Looks up display names for phases referenced by id. */
 export interface DiffNames {
   phase: (id: number) => string;
-  person: (kind: 'user' | 'sub', refId: number) => string;
 }
 
 const DEPENDS_LABEL: Record<DependsType, string> = {
@@ -88,22 +88,6 @@ export function describeLink(
   if (dependsOnId == null) return 'Own start date';
   const wait = lagDays === 0 ? '' : ` + ${lagDays} working day${lagDays === 1 ? '' : 's'}`;
   return `${names.phase(dependsOnId)} — ${DEPENDS_LABEL[type]}${wait}`;
-}
-
-/** "Dave Ruiz (Mon, Wed)" — a crew line that shows any split-day pattern. */
-function personLabel(name: string, workDays: number | null | undefined): string {
-  return workDays == null ? name : `${name} (${maskLabel(workDays)})`;
-}
-
-function crewLabel(
-  people: { kind: 'user' | 'sub'; ref_id: number; work_days?: number | null; name?: string }[],
-  names: DiffNames
-): string {
-  if (people.length === 0) return 'Nobody';
-  return [...people]
-    .map((p) => personLabel(p.name ?? names.person(p.kind, p.ref_id), p.work_days))
-    .sort((a, b) => a.localeCompare(b))
-    .join(', ');
 }
 
 /** "Mar 4 at 6:00 AM, Mar 5 (no set time)" — the per-day start-time overrides. */
@@ -153,7 +137,7 @@ export function diffTask(before: TaskBefore, draft: TaskDraft, names: DiffNames)
     describeLink(draft.depends_on_id, draft.depends_type, draft.lag_days, names),
     { timeline: true }
   );
-  push('Crew', crewLabel(before.assignees, names), crewLabel(draft.assignees, names));
+  push('Crew needed', crewSizeLabel(before.crew_size), crewSizeLabel(draft.crew_size));
   push(
     'Daily start time',
     before.start_time ? timeLabel(before.start_time) : 'Not set',
@@ -193,13 +177,20 @@ export function summarizeChanges(changes: FieldChange[]): string {
   return changes.map((c) => `${c.label} ${c.from} → ${c.to}`).join('; ');
 }
 
+/** "2 people per day" — how the headcount reads in the change log. */
+function crewSizeLabel(size: number): string {
+  return `${size} ${size === 1 ? 'person' : 'people'} per day`;
+}
+
 /** One-line summary for a phase being added to (or dropped from) a job. */
 export function summarizePhase(draft: {
   name: string;
   start_date: string;
   duration_days: number;
+  crew_size?: number;
 }): string {
+  const crew = draft.crew_size ? `, ${crewSizeLabel(draft.crew_size)}` : '';
   return `${draft.name} — starts ${shortDate(draft.start_date)}, ${draft.duration_days} working day${
     draft.duration_days === 1 ? '' : 's'
-  }`;
+  }${crew}`;
 }

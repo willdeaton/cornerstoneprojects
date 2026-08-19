@@ -8,11 +8,9 @@ import {
   projectHours,
   listProjectFiles,
   listProjectInvoices,
-  listActiveWorkers,
 } from '@/lib/data';
 import {
   listScheduleTasks,
-  listSubcontractors,
   listHolidays,
   getPublishedVersion,
   listScheduleChanges,
@@ -47,16 +45,13 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
   const invoices = await listProjectInvoices(id);
-  const [scheduleTasks, holidays, workers, subs, publication, scheduleChanges, crewNotes] =
-    await Promise.all([
-      listScheduleTasks({ projectId: id }),
-      listHolidays(),
-      listActiveWorkers(),
-      listSubcontractors({ activeOnly: true }),
-      getPublishedVersion(id),
-      listScheduleChanges(id),
-      listCrewNotes(id),
-    ]);
+  const [scheduleTasks, holidays, publication, scheduleChanges, crewNotes] = await Promise.all([
+    listScheduleTasks({ projectId: id }),
+    listHolidays(),
+    getPublishedVersion(id),
+    listScheduleChanges(id),
+    listCrewNotes(id),
+  ]);
   const holidayDays = holidays.map((h) => h.day);
   // Projected finish = the latest end across the scheduled phases, chains resolved.
   const projectedFinish = projectedEnd(
@@ -171,8 +166,6 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
               hard_finish_date: project.hard_finish_date,
             }}
             tasks={scheduleTasks}
-            workers={workers.map((w) => ({ id: w.id, name: w.name, role: w.role }))}
-            subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
             holidays={holidayDays}
             published={
               publication
