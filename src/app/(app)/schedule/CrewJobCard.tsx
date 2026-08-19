@@ -27,7 +27,10 @@ import { saveCrewCardAction, unassignCrewDayAction } from '@/app/actions/schedul
  * about a Tuesday, not about a bar on a Gantt chart.
  *
  * Who is booked shows here too, day by day, so a card is one place to read
- * "this is the job, this is the crew, this is when they start".
+ * "this is the job, this is the crew, this is when they start". On a
+ * subcontracted phase the sub isn't listed per day and can't be taken off one:
+ * they hold the whole phase, so their days follow its dates and change on the
+ * timeline.
  */
 export function CrewJobCard({
   task,
@@ -93,6 +96,7 @@ export function CrewJobCard({
       depends_type: task.depends_type ?? 'finish_to_start',
       lag_days: task.lag_days,
       crew_size: task.crew_size,
+      subcontractor_id: task.subcontractor_id,
       status: task.status,
     };
     return diffTask(
@@ -103,7 +107,7 @@ export function CrewJobCard({
         day_times: draftDayTimes,
         notes: notes.trim() === '' ? null : notes.trim(),
       },
-      { phase: () => task.name }
+      { phase: () => task.name, sub: () => task.subcontractor_name ?? 'a subcontractor' }
     );
   }, [task, draftStartTime, draftDayTimes, notes]);
 
@@ -156,11 +160,24 @@ export function CrewJobCard({
             {window ? `${shortDate(window.start)} → ${shortDate(window.end)}` : 'No dates yet'}
           </p>
           <p className="mt-0.5 text-brand-gray">{task.customer}</p>
-          <p className="mt-1 font-medium text-brand-ink">
-            {budget.filled} of {budget.capacity} crew {budget.capacity === 1 ? 'day' : 'days'}{' '}
-            booked · {budget.needed} {budget.needed === 1 ? 'person' : 'people'} a day for{' '}
-            {budget.days} working {budget.days === 1 ? 'day' : 'days'}
-          </p>
+          {task.subcontractor_name && (
+            <p className="mt-1 font-medium text-brand-ink">
+              Subcontracted to {task.subcontractor_name} — on site all {budget.days} working{' '}
+              {budget.days === 1 ? 'day' : 'days'}
+            </p>
+          )}
+          {budget.capacity > 0 ? (
+            <p className="mt-1 font-medium text-brand-ink">
+              {task.subcontractor_name ? 'Our crew: ' : ''}
+              {budget.filled} of {budget.capacity} crew {budget.capacity === 1 ? 'day' : 'days'}{' '}
+              booked · {budget.needed} a day for {budget.days} working{' '}
+              {budget.days === 1 ? 'day' : 'days'}
+            </p>
+          ) : (
+            !task.subcontractor_name && (
+              <p className="mt-1 font-medium text-brand-ink">Nobody booked on this phase</p>
+            )
+          )}
           {task.site_address && (
             <a
               href={mapsUrl(task.site_address)}
@@ -247,7 +264,11 @@ export function CrewJobCard({
                     )}
                     <span className="flex flex-wrap items-center gap-1">
                       {crew.length === 0 ? (
-                        <span className="text-xs text-brand-gray/70">nobody booked</span>
+                        <span className="text-xs text-brand-gray/70">
+                          {task.subcontractor_name
+                            ? `${task.subcontractor_name} (subcontracted)`
+                            : 'nobody booked'}
+                        </span>
                       ) : (
                         crew.map((c) => {
                           const key = `${day}:${c.kind}:${c.ref_id}`;

@@ -20,19 +20,28 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   per-job **time clock**.
 - **Schedule** — scheduling is two steps, in two views over the same data.
   **Job Timeline** plans the *work*: each job is a set of phases carrying a
-  duration in working days, how many people that phase needs per day, and
-  optional links between phases. **Crew Week** then staffs that work: one row
+  duration in working days, who does it — our own crew as a headcount, or a
+  named subcontractor — and optional links between phases. **Crew Week** then staffs that work: one row
   per employee, one column per day, with a card for every job running that week.
   Weekends and non-working days never count toward a duration and are drawn as
   breaks, so work carrying into the next week reads as separate stretches rather
   than continuous weekend work.
-  - **Plan the work, then staff it** — the timeline never names anybody. A phase
-    says "2 people for 4 days", which is a budget of 8 crew-days; the crew week
-    spends that budget by booking real people onto real days. The budget is a
-    *total*, not a per-day quota, so four people Monday and one Friday is a
-    legitimate way to cover a 2-crew, 5-day phase — which is how a week usually
-    falls. A day carrying more people than planned is flagged, never blocked,
-    and nothing can be booked past the total.
+  - **Plan the work, then staff it** — the timeline never names our own people.
+    A phase says "2 people for 4 days", which is a budget of 8 crew-days; the
+    crew week spends that budget by booking real people onto real days. The
+    budget is a *total*, not a per-day quota, so four people Monday and one
+    Friday is a legitimate way to cover a 2-crew, 5-day phase — which is how a
+    week usually falls. A day carrying more people than planned is flagged,
+    never blocked, and nothing can be booked past the total.
+  - **Subcontracted phases** — a sub *is* picked on the timeline, because that's
+    when the work is contracted. Mark a phase as a subcontractor's and choose
+    them, and they're on site every working day of it: their dates follow the
+    phase, so a phase that slips takes them with it and there's nothing to
+    re-book. A subcontracted phase can still carry a headcount for the people we
+    send alongside them — the supervisor — which the crew week books as usual.
+    Subs appear in the crew week (tick "Include subs") with their contracted days
+    shown dashed and un-clickable, and the same sub on two different jobs over
+    the same days is flagged as a double-booking exactly like an employee.
   - **Staffing a week** — pick a job card, then click the day cells of the
     people working it; the card counts its crew-days down as you go, and cells
     stop offering to book once the phase is full. Click a booking to take
@@ -45,9 +54,9 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **Every job on the board** — jobs with nothing scheduled are listed too,
     with their status, so it's obvious which ones haven't been planned yet.
     Expand a job for its phases; collapsed, it still shows the stretch its work
-    covers. Each phase row reads "2 people × 4 days" and how much of that the
-    crew week has covered, and the board can be filtered to phases still
-    needing crew.
+    covers. Each phase row reads either "2 people × 4 days" plus how much of
+    that the crew week has covered, or the subcontractor carrying it, and the
+    board can be filtered to phases still needing crew.
   - **Whole weeks from Monday** — the Week, 2-Week and 6-Week views always start
     on a Monday and run to a Sunday, with each week's Monday held in a band
     above its days, so the same weekday is always in the same column.
@@ -60,7 +69,8 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     exactly what a manager is expected to keep adjusting.
   - **Publish** — publishing a job's schedule (explicitly, or by sending it out
     from **Send Schedule**) marks the dates the crew has. After that, changes to
-    the headcount, start times and phase notes need a reason too.
+    the headcount, the subcontractor, start times and phase notes need a reason
+    too.
   - **Moved work drops stale bookings** — shortening or moving a phase releases
     anyone booked on days it no longer covers, across the whole job, since a
     phase that slips takes everything after it along.

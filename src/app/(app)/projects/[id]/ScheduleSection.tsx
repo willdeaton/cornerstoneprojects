@@ -14,7 +14,11 @@ import {
 } from '@/lib/schedule-math';
 import type { ScheduleChange, ScheduleTaskRow } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
-import { TaskModal, type ProjectOption } from '@/app/(app)/schedule/TaskModal';
+import {
+  TaskModal,
+  type ProjectOption,
+  type SubOption,
+} from '@/app/(app)/schedule/TaskModal';
 
 import { PublishBar, ScheduleHistory, type PublishedInfo } from '@/app/(app)/schedule/PublishBar';
 import { HardFinishControl } from '@/app/(app)/schedule/HardFinishControl';
@@ -41,6 +45,7 @@ const STATUS_BAR: Record<ScheduleTaskRow['status'], string> = {
 export function ScheduleSection({
   project,
   tasks,
+  subs,
   holidays,
   published = null,
   changes = [],
@@ -48,6 +53,8 @@ export function ScheduleSection({
 }: {
   project: ProjectOption;
   tasks: ScheduleTaskRow[];
+  /** The subcontractor catalog, for phases that get contracted out. */
+  subs: SubOption[];
   holidays: string[];
   /** Publish state for this job, or null if its schedule hasn't gone out. */
   published?: PublishedInfo | null;
@@ -234,16 +241,24 @@ export function ScheduleSection({
                   const roster = crewRoster(task);
                   return (
                     <>
-                      <p className="mt-1.5 text-sm font-medium text-brand-ink">
-                        {budget.needed} {budget.needed === 1 ? 'person' : 'people'} a day ·{' '}
-                        {budget.filled}/{budget.capacity} crew days booked
-                        {budget.remaining > 0 && (
-                          <span className="text-amber-700">
-                            {' '}
-                            · {budget.remaining} still to book
-                          </span>
-                        )}
-                      </p>
+                      {task.subcontractor_name && (
+                        <p className="mt-1.5 text-sm font-medium text-brand-ink">
+                          Subcontracted to {task.subcontractor_name}
+                        </p>
+                      )}
+                      {budget.capacity > 0 && (
+                        <p className="mt-1.5 text-sm font-medium text-brand-ink">
+                          {task.subcontractor_name ? 'Plus ' : ''}
+                          {budget.needed} of ours a day · {budget.filled}/{budget.capacity} crew
+                          days booked
+                          {budget.remaining > 0 && (
+                            <span className="text-amber-700">
+                              {' '}
+                              · {budget.remaining} still to book
+                            </span>
+                          )}
+                        </p>
+                      )}
                       {(task.start_time || (task.day_times ?? []).length > 0) && (
                         <p className="mt-0.5 text-sm text-brand-ink">
                           {task.start_time
@@ -291,6 +306,7 @@ export function ScheduleSection({
           task={editing.task}
           allTasks={tasks}
           projects={[project]}
+          subs={subs}
           holidays={holidays}
           defaultProjectId={project.id}
           publishedVersions={published ? { [project.id]: published.version } : undefined}

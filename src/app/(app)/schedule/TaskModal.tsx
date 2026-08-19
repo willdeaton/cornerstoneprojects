@@ -29,25 +29,35 @@ export interface SubOption {
 }
 
 /**
- * Plan one phase of work: what it is, when it can start, how long it runs and
- * how many people it takes. The dates shown under the duration field are the
- * real computed ones — this runs the same solver the timeline does, so a phase
- * that follows another shows where it actually lands before you save.
+ * Plan one phase of work: what it is, when it can start, how long it runs, and
+ * who does it — our own crew, or a subcontractor. The dates shown under the
+ * duration field are the real computed ones: this runs the same solver the
+ * timeline does, so a phase that follows another shows where it actually lands
+ * before you save.
  *
- * Deliberately no names and no start times. A phase says it needs three people
- * for four days; WHO those three are, and what time they turn up, is settled in
- * the crew week where the days are actually in front of you. Duration and crew
- * size together are the phase's budget — crew_size x working days — and the
- * crew week can't book past it.
+ * The two kinds of work are picked differently on purpose. Our crew is a
+ * HEADCOUNT here and named later: a phase says it needs three people for four
+ * days, and who those three are is settled in the crew week where the days are
+ * in front of you. Duration x headcount is the phase's budget, and the crew week
+ * can't book past it. A subcontractor is chosen HERE, because that's when the
+ * work is contracted — their days on site then follow the phase's dates, so a
+ * phase that slips takes them with it and there's nothing to re-book.
+ *
+ * A subcontracted phase can still ask for our people alongside the sub, which is
+ * how the supervisor we send gets scheduled.
+ *
+ * No start times either way — those belong to particular days, so they're set
+ * on the phase's card in the crew week.
  *
  * Moving the dates always requires a reason, and once the job's schedule is
- * published so does changing the headcount — the exact wording that gets logged
- * is previewed before you commit.
+ * published so does changing the sub or the headcount — the exact wording that
+ * gets logged is previewed before you commit.
  */
 export function TaskModal({
   task,
   allTasks,
   projects,
+  subs,
   holidays,
   defaultProjectId,
   initialProjectId,
@@ -60,6 +70,8 @@ export function TaskModal({
   /** Every phase in scope — used for the predecessor picker and the preview. */
   allTasks: ScheduleTaskRow[];
   projects: ProjectOption[];
+  /** The subcontractor catalog, for phases that are contracted out. */
+  subs: SubOption[];
   holidays: string[];
   /** Pre-selects (and locks) the job when opened from a project page. */
   defaultProjectId?: number;
@@ -77,6 +89,8 @@ export function TaskModal({
   const [startDate, setStartDate] = useState(task?.start_date ?? today());
   const [duration, setDuration] = useState(String(task?.duration_days ?? 5));
   const [crewSize, setCrewSize] = useState(String(task?.crew_size ?? 1));
+  /** null = our own crew does this phase; an id = the sub contracted for it. */
+  const [subId, setSubId] = useState<number | null>(task?.subcontractor_id ?? null);
   const [dependsOn, setDependsOn] = useState<number | null>(task?.depends_on_id ?? null);
   const [dependsType, setDependsType] = useState<DependsType>(
     task?.depends_type ?? 'finish_to_start'
@@ -100,7 +114,12 @@ export function TaskModal({
   );
 
   const durationDays = Math.max(1, Math.round(Number(duration) || 1));
-  const crew = Math.max(1, Math.round(Number(crewSize) || 1));
+  const subbed = subId != null;
+  // Only a subcontracted phase may ask for none of our people.
+  const crew = subbed
+    ? Math.max(0, Math.round(Number(crewSize) || 0))
+    : Math.max(1, Math.round(Number(crewSize) || 1));
+  const sub = subs.find((s) => s.id === subId);
 
   // Run the solver over the job as it would be after this edit, so the preview
   // reflects the real chain rather than just the typed start date.
@@ -147,7 +166,15 @@ export function TaskModal({
   // edit that only marks progress doesn't need one, even on a published job.
   const changes = useMemo(() => {
     if (!task) return null;
-    const names = { phase: (id: number) => allTasks.find((t) => t.id === id)?.name ?? 'a deleted phase' };
+    const names = {
+      phase: (id: number) => allTasks.find((t) => t.id === id)?.name ?? 'a deleted phase',
+      // The picker lists only active subs, so fall back to the name already on
+      // the phase — a sub since deactivated would otherwise read as a change.
+      sub: (id: number) =>
+        subs.find((x) => x.id === id)?.name ??
+        (task?.subcontractor_id === id ? task.subcontractor_name : null) ??
+        `#${id}`,
+    };
     const unchanged = {
       // Set from the crew week, never here — carried through so they can't read
       // as a change.
@@ -163,6 +190,7 @@ export function TaskModal({
         depends_type: task.depends_type ?? 'finish_to_start',
         lag_days: task.lag_days,
         crew_size: task.crew_size,
+        subcontractor_id: task.subcontractor_id,
         notes: task.notes,
         status: task.status,
         ...unchanged,
@@ -175,6 +203,7 @@ export function TaskModal({
         depends_type: dependsType,
         lag_days: Math.max(0, Math.round(Number(lag) || 0)),
         crew_size: crew,
+        subcontractor_id: subId,
         notes: notes.trim() === '' ? null : notes.trim(),
         status,
         ...unchanged,
@@ -184,6 +213,7 @@ export function TaskModal({
   }, [
     task,
     allTasks,
+    subs,
     name,
     startDate,
     durationDays,
@@ -191,6 +221,7 @@ export function TaskModal({
     dependsType,
     lag,
     crew,
+    subId,
     notes,
     status,
   ]);
@@ -212,6 +243,7 @@ export function TaskModal({
       start_date: startDate,
       duration_days: durationDays,
       crew_size: crew,
+      subcontractor_id: subId,
       depends_on_id: dependsOn,
       depends_type: dependsType,
       lag_days: Math.max(0, Math.round(Number(lag) || 0)),
@@ -319,7 +351,7 @@ export function TaskModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className="label">{dependsOn ? 'Earliest Start' : 'Start Date'} *</label>
             <input
@@ -339,16 +371,102 @@ export function TaskModal({
               onChange={(e) => setDuration(e.target.value)}
             />
           </div>
-          <div>
-            <label className="label">Crew Needed (people per day)</label>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              value={crewSize}
-              onChange={(e) => setCrewSize(e.target.value)}
-            />
+        </div>
+
+        {/* Who does the work. Our crew is a headcount the crew week fills with
+            names; a sub is picked here and their days follow the phase. */}
+        <div className="rounded-lg border border-black/10 p-3">
+          <label className="label">Work Done By</label>
+          <div className="flex overflow-hidden rounded-lg border border-black/10">
+            <button
+              type="button"
+              onClick={() => {
+                setSubId(null);
+                // Coming back from a sub phase that needed none of our people,
+                // one is the only sensible headcount to land on.
+                if (Math.round(Number(crewSize) || 0) < 1) setCrewSize('1');
+              }}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                !subbed ? 'bg-brand-green text-white' : 'text-brand-gray hover:bg-black/5'
+              }`}
+            >
+              Our Crew
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (subs.length === 0) return;
+                setSubId(subs[0].id);
+                // A subcontracted phase usually needs nobody of ours on it.
+                setCrewSize('0');
+              }}
+              disabled={subs.length === 0}
+              title={
+                subs.length === 0
+                  ? 'Add subcontractors under Settings → Subcontractors first'
+                  : undefined
+              }
+              className={`border-l border-black/10 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                subbed ? 'bg-brand-green text-white' : 'text-brand-gray hover:bg-black/5'
+              }`}
+            >
+              A Subcontractor
+            </button>
           </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {subbed && (
+              <div>
+                <label className="label">Subcontractor *</label>
+                <select
+                  className="input"
+                  value={subId ?? ''}
+                  onChange={(e) => setSubId(Number(e.target.value))}
+                >
+                  {/* A sub deactivated since this phase was planned still needs
+                      to be selectable, or saving would silently swap them. */}
+                  {task?.subcontractor_id != null &&
+                    !subs.some((x) => x.id === task.subcontractor_id) && (
+                      <option value={task.subcontractor_id}>
+                        {task.subcontractor_name ?? `#${task.subcontractor_id}`} (inactive)
+                      </option>
+                    )}
+                  {subs.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                      {x.trade ? ` — ${x.trade}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="label">
+                {subbed ? 'Our Crew Alongside (people per day)' : 'Crew Needed (people per day)'}
+              </label>
+              <input
+                className="input"
+                type="number"
+                min={subbed ? 0 : 1}
+                value={crewSize}
+                onChange={(e) => setCrewSize(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <p className="mt-2 text-xs text-brand-gray">
+            {subbed ? (
+              <>
+                {sub?.name ?? 'The subcontractor'} is on site every working day of this phase —
+                their dates follow it, so nothing needs re-booking when it moves.{' '}
+                {crew === 0
+                  ? 'None of our crew is booked on it.'
+                  : `The ${crew} of ours alongside them ${crew === 1 ? 'is' : 'are'} booked in the crew week.`}
+              </>
+            ) : (
+              'Pick how many people a day this takes — who they are is booked in the crew week.'
+            )}
+          </p>
         </div>
 
         {/* Phase links. Start-to-start is what lets a sub run alongside an
@@ -417,11 +535,24 @@ export function TaskModal({
               {workingDays} working days
               {preview.driven && ' · pushed out by the phase it follows'}
             </p>
-            <p className="mt-1 font-medium text-brand-ink">
-              {crew} {crew === 1 ? 'person' : 'people'} a day × {workingDays} working{' '}
-              {workingDays === 1 ? 'day' : 'days'} = {capacity} crew{' '}
-              {capacity === 1 ? 'day' : 'days'} to fill in the crew week
-            </p>
+            {subbed && (
+              <p className="mt-1 font-medium text-brand-ink">
+                {sub?.name ?? task?.subcontractor_name ?? 'The subcontractor'} on site all{' '}
+                {workingDays} working {workingDays === 1 ? 'day' : 'days'}
+              </p>
+            )}
+            {capacity > 0 ? (
+              <p className="mt-1 font-medium text-brand-ink">
+                {subbed && 'Plus '}
+                {crew} of ours a day × {workingDays} working{' '}
+                {workingDays === 1 ? 'day' : 'days'} = {capacity} crew{' '}
+                {capacity === 1 ? 'day' : 'days'} to fill in the crew week
+              </p>
+            ) : (
+              !subbed && (
+                <p className="mt-1 font-medium text-brand-ink">Nobody booked on this phase yet</p>
+              )
+            )}
             {segments.length > 1 && (
               <p className="mt-1 text-brand-gray">
                 Runs in {segments.length} stretches (weekends and non-working days off):{' '}
@@ -463,9 +594,11 @@ export function TaskModal({
         )}
 
         <p className="text-xs text-brand-gray">
-          Who works this phase, what time they start and the notes they read are all set on its
-          card in the <span className="font-medium text-brand-ink">Crew Week</span> — a week at a
-          time, against the days themselves.
+          {subbed && crew === 0
+            ? 'The start times and the notes this crew reads are set on the phase\u2019s card in the '
+            : 'Which of our people work this phase, what time everyone starts and the notes they read are all set on its card in the '}
+          <span className="font-medium text-brand-ink">Crew Week</span> — a week at a time, against
+          the days themselves.
         </p>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

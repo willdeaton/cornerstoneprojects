@@ -26,7 +26,7 @@ import {
 } from '@/lib/schedule-math';
 import type { ProjectStatus, ScheduleTaskRow } from '@/lib/types';
 import { PROJECT_STATUS_LABELS } from '@/lib/types';
-import { TaskModal, type ProjectOption } from './TaskModal';
+import { TaskModal, type ProjectOption, type SubOption } from './TaskModal';
 import { SendScheduleModal } from './SendScheduleModal';
 import { PublishBar, type PublishedInfo } from './PublishBar';
 import { HardFinishControl } from './HardFinishControl';
@@ -75,6 +75,7 @@ function initialAnchor(tasks: ScheduleTaskRow[], holidays: string[]): string {
 export function ScheduleBoard({
   tasks,
   projects,
+  subs,
   holidays,
   published,
   changeCounts = {},
@@ -83,6 +84,8 @@ export function ScheduleBoard({
   tasks: ScheduleTaskRow[];
   /** Every live job, including ones with nothing scheduled yet. */
   projects: BoardProject[];
+  /** The subcontractor catalog, for phases that get contracted out. */
+  subs: SubOption[];
   holidays: string[];
   /** Publish state per job id, for jobs that have been published. */
   published: Record<number, PublishedInfo>;
@@ -583,6 +586,7 @@ export function ScheduleBoard({
           initialProjectId={editing.projectId}
           allTasks={tasks}
           projects={projects}
+          subs={subs}
           holidays={holidays}
           publishedVersions={publishedVersionMap}
           onClose={() => setEditing(null)}
@@ -699,10 +703,18 @@ function PhaseRow({
       .filter((s) => s.startIdx >= 0 && s.endIdx >= s.startIdx);
   }, [dates, holidaySet, days, rangeStart, rangeEnd]);
 
-  // What the phase asks for, and how much of it the crew week has covered.
-  const crewNote = `${budget.needed} ${budget.needed === 1 ? 'person' : 'people'} × ${workingDays} ${
+  // What the phase asks for, and how much of it the crew week has covered. A
+  // subcontracted phase leads with the sub — that IS the answer to "who's on
+  // this" — and only mentions our own crew when some are going along.
+  const subName = task.subcontractor_name;
+  const ownCrew = `${budget.needed} ${budget.needed === 1 ? 'person' : 'people'} × ${workingDays} ${
     workingDays === 1 ? 'day' : 'days'
   }`;
+  const crewNote = subName
+    ? budget.capacity === 0
+      ? subName
+      : `${subName} + ${ownCrew}`
+    : ownCrew;
   const staffedNote =
     budget.capacity === 0
       ? ''
@@ -710,13 +722,17 @@ function PhaseRow({
         ? 'fully staffed'
         : `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} to book`;
 
-  const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}
-Needs ${crewNote} = ${budget.capacity} crew ${budget.capacity === 1 ? 'day' : 'days'}
-${budget.filled} booked in the Crew Week${staffedNote ? ` · ${staffedNote}` : ''}${
-    task.site_address ? `\n${task.site_address}` : ''
-  }${conflicted ? '\nSomeone on this phase is double-booked' : ''}${
-    published ? '\nPublished — changes need a reason' : ''
-  }`;
+  const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}${
+    subName ? `\nSubcontracted to ${subName}` : ''
+  }${
+    budget.capacity > 0
+      ? `\n${subName ? 'Our crew: ' : 'Needs '}${ownCrew} = ${budget.capacity} crew ${
+          budget.capacity === 1 ? 'day' : 'days'
+        }\n${budget.filled} booked in the Crew Week${staffedNote ? ` · ${staffedNote}` : ''}`
+      : ''
+  }${task.site_address ? `\n${task.site_address}` : ''}${
+    conflicted ? '\nSomeone on this phase is double-booked' : ''
+  }${published ? '\nPublished — changes need a reason' : ''}`;
 
   return (
     <div className="grid" style={{ gridTemplateColumns: gridTemplate }}>
@@ -735,7 +751,10 @@ ${budget.filled} booked in the Crew Week${staffedNote ? ` · ${staffedNote}` : '
         <span className="block truncate text-xs text-brand-gray">
           {dates ? `${shortDate(dates.start)} – ${shortDate(dates.end)}` : '—'}
         </span>
-        <span className="block truncate text-[11px] font-medium text-brand-ink">{crewNote}</span>
+        <span className="block truncate text-[11px] font-medium text-brand-ink">
+          {subName && <SubGlyph />}
+          {crewNote}
+        </span>
         {staffedNote && (
           <span
             className={`block truncate text-[11px] font-medium ${
@@ -886,6 +905,27 @@ function Chevron({ open }: { open: boolean }) {
       aria-hidden
     >
       <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+/** Marks a phase a subcontractor is carrying rather than our own crew. */
+function SubGlyph() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="mr-0.5 inline-block shrink-0 align-[-1px] text-brand-gray"
+      aria-label="Subcontracted"
+    >
+      <path d="M3 7h18v13H3z" />
+      <path d="M9 7V4h6v3" />
     </svg>
   );
 }

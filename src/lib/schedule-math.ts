@@ -337,8 +337,10 @@ export function projectedEnd(
 /**
  * What a phase asks for and what it has got.
  *
- * The timeline plans the ask — `crew_size` people for `duration_days` working
- * days — which is a budget of that many crew-days. The crew week spends it a
+ * The timeline plans the ask — `crew_size` of OUR people for `duration_days`
+ * working days — which is a budget of that many crew-days. A phase a
+ * subcontractor covers outright asks for none of them, so its budget is zero
+ * and there is nothing for the crew week to fill. The crew week spends it a
  * day at a time, and deliberately not evenly: four people on Monday and one on
  * Friday is a perfectly good way to spend a 2-crew, 5-day phase, and the week
  * usually does fall that way. So the budget is enforced as a total, and a day
@@ -364,7 +366,7 @@ export function crewBudget(
   window: ComputedWindow | undefined,
   cal: WorkCalendar
 ): CrewBudget {
-  const needed = Math.max(1, task.crew_size);
+  const needed = Math.max(0, task.crew_size);
   const days = window ? workingDaySpan(window.start, window.end, cal) : 0;
   const capacity = needed * days;
   const filled = (task.crew_days ?? []).length;
@@ -376,6 +378,13 @@ export function crewBudget(
     remaining: Math.max(0, capacity - filled),
     full: filled >= capacity,
   };
+}
+
+/** True when this phase is a subcontractor's work rather than our crew's. */
+export function isSubPhase(
+  task: Pick<ScheduleTaskRow, 'subcontractor_id'>
+): boolean {
+  return task.subcontractor_id != null;
 }
 
 /** A phase's crew indexed by day — what the crew week reads off a job card. */
@@ -446,6 +455,11 @@ export interface AssigneeBooking {
  * Flatten phases into per-person worked stretches. Pass the same calendar the
  * windows were computed with; days booked outside a phase's window (left behind
  * by a phase that has since moved or shrunk) are dropped rather than shown.
+ *
+ * A subcontracted phase contributes the sub on every working day of its window,
+ * derived rather than booked. That's the whole point of contracting the phase
+ * out on the timeline: the sub is on site for the work, so their days follow it
+ * automatically and a phase that slips takes them with it.
  */
 export function assigneeBookings(
   tasks: ScheduleTaskRow[],
@@ -461,12 +475,28 @@ export function assigneeBookings(
     // Group the phase's crew-day rows by person, then merge each person's days
     // into runs — one booking per unbroken stretch, per start time.
     const byPerson = new Map<string, { person: CrewDay; days: string[] }>();
+    if (task.subcontractor_id != null) {
+      byPerson.set(`sub:${task.subcontractor_id}`, {
+        person: {
+          id: -task.id,
+          day: w.start,
+          kind: 'sub',
+          ref_id: task.subcontractor_id,
+          name: task.subcontractor_name ?? 'Subcontractor',
+          detail: 'Subcontracted phase',
+        },
+        days: eachDay(w.start, w.end).filter((d) => isWorkingDay(d, cal)),
+      });
+    }
     for (const c of task.crew_days ?? []) {
       if (c.day < w.start || c.day > w.end || !isWorkingDay(c.day, cal)) continue;
       const key = `${c.kind}:${c.ref_id}`;
       const entry = byPerson.get(key);
-      if (entry) entry.days.push(c.day);
-      else byPerson.set(key, { person: c, days: [c.day] });
+      // The sub who has the phase is already on every day of it; a stray
+      // crew-day row for them adds nothing.
+      if (entry) {
+        if (!entry.days.includes(c.day)) entry.days.push(c.day);
+      } else byPerson.set(key, { person: c, days: [c.day] });
     }
 
     for (const [key, { person, days }] of byPerson) {

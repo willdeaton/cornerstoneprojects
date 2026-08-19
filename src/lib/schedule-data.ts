@@ -98,10 +98,12 @@ const TASK_SELECT = `
          p.status           AS project_status,
          p.due_date         AS project_due_date,
          p.hard_finish_date AS project_hard_finish_date,
+         sub.name           AS subcontractor_name,
          COALESCE(cd.crew_days, '[]'::json) AS crew_days,
          COALESCE(dt.day_times, '[]'::json) AS day_times
     FROM schedule_tasks t
     JOIN projects p ON p.id = t.project_id
+    LEFT JOIN subcontractors sub ON sub.id = t.subcontractor_id
     LEFT JOIN (
       SELECT d.task_id,
              json_agg(
@@ -167,8 +169,10 @@ export async function createScheduleTask(t: {
   name: string;
   start_date: string;
   duration_days: number;
-  /** People needed per day; with the duration this is the phase's crew budget. */
+  /** Our people needed per day; with the duration, the phase's crew budget. */
   crew_size?: number;
+  /** The sub doing this phase, or null when it's our own crew's work. */
+  subcontractor_id?: number | null;
   depends_on_id?: number | null;
   depends_type?: DependsType;
   lag_days?: number;
@@ -179,8 +183,8 @@ export async function createScheduleTask(t: {
 }): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO schedule_tasks
-       (project_id, name, start_date, duration_days, crew_size, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+       (project_id, name, start_date, duration_days, crew_size, subcontractor_id, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM schedule_tasks WHERE project_id = $1))
      RETURNING id`,
     [
@@ -188,7 +192,8 @@ export async function createScheduleTask(t: {
       t.name,
       t.start_date,
       Math.max(1, t.duration_days),
-      Math.max(1, t.crew_size ?? 1),
+      Math.max(0, t.crew_size ?? 1),
+      t.subcontractor_id ?? null,
       t.depends_on_id ?? null,
       t.depends_type ?? 'finish_to_start',
       t.lag_days ?? 0,
@@ -209,6 +214,7 @@ export async function updateScheduleTask(
       | 'start_date'
       | 'duration_days'
       | 'crew_size'
+      | 'subcontractor_id'
       | 'depends_on_id'
       | 'depends_type'
       | 'lag_days'
