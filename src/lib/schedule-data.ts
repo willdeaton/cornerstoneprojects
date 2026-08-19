@@ -12,13 +12,13 @@ import type {
   Subcontractor,
   TaskStatus,
 } from './types';
-import { normalizeMask } from './schedule-math';
 import type { TaskInput, WorkCalendar } from './schedule-math';
 
 /*
- * Queries for job scheduling: the subcontractor catalog, job phases with their
- * assignees, and the non-working-day list. Derived dates live in
- * ./schedule-math — nothing here computes or stores a real start/end.
+ * Queries for job scheduling: the subcontractor catalog, job phases with the
+ * crew booked on each of their days, and the non-working-day list. Derived
+ * dates live in ./schedule-math — nothing here computes or stores a real
+ * start/end.
  */
 
 /* --------------------------------------------------------- Subcontractors */
@@ -85,9 +85,9 @@ export async function deleteSubcontractor(id: number): Promise<void> {
 const ACTIVE_STATUSES: ProjectStatus[] = ['not_started', 'in_progress'];
 
 /**
- * Each phase joined to its job, with assignees folded in as JSON so one query
- * feeds the whole timeline. Employees contribute their role as `detail`, subs
- * their trade.
+ * Each phase joined to its job, with its day-by-day crew and any per-day start
+ * times folded in as JSON so one query feeds the whole timeline and crew week.
+ * Employees contribute their role as `detail`, subs their trade.
  */
 const TASK_SELECT = `
   SELECT t.*,
@@ -98,7 +98,7 @@ const TASK_SELECT = `
          p.status           AS project_status,
          p.due_date         AS project_due_date,
          p.hard_finish_date AS project_hard_finish_date,
-         COALESCE(a.assignees, '[]'::json) AS assignees,
+         COALESCE(cd.crew_days, '[]'::json) AS crew_days,
          COALESCE(dt.day_times, '[]'::json) AS day_times
     FROM schedule_tasks t
     JOIN projects p ON p.id = t.project_id
@@ -112,22 +112,22 @@ const TASK_SELECT = `
        GROUP BY d.task_id
     ) dt ON dt.task_id = t.id
     LEFT JOIN (
-      SELECT sa.task_id,
+      SELECT c.task_id,
              json_agg(
                json_build_object(
-                 'id',     sa.id,
-                 'kind',   CASE WHEN sa.user_id IS NOT NULL THEN 'user' ELSE 'sub' END,
-                 'ref_id', COALESCE(sa.user_id, sa.subcontractor_id),
+                 'id',     c.id,
+                 'day',    c.day,
+                 'kind',   CASE WHEN c.user_id IS NOT NULL THEN 'user' ELSE 'sub' END,
+                 'ref_id', COALESCE(c.user_id, c.subcontractor_id),
                  'name',   COALESCE(u.name, s.name),
-                 'detail', COALESCE(u.role, s.trade),
-                 'work_days', sa.work_days
-               ) ORDER BY COALESCE(u.name, s.name)
-             ) AS assignees
-        FROM schedule_assignments sa
-        LEFT JOIN users u          ON u.id = sa.user_id
-        LEFT JOIN subcontractors s ON s.id = sa.subcontractor_id
-       GROUP BY sa.task_id
-    ) a ON a.task_id = t.id
+                 'detail', COALESCE(u.role, s.trade)
+               ) ORDER BY c.day, COALESCE(u.name, s.name)
+             ) AS crew_days
+        FROM schedule_crew_days c
+        LEFT JOIN users u          ON u.id = c.user_id
+        LEFT JOIN subcontractors s ON s.id = c.subcontractor_id
+       GROUP BY c.task_id
+    ) cd ON cd.task_id = t.id
 `;
 
 export async function listScheduleTasks(
@@ -167,6 +167,8 @@ export async function createScheduleTask(t: {
   name: string;
   start_date: string;
   duration_days: number;
+  /** People needed per day; with the duration this is the phase's crew budget. */
+  crew_size?: number;
   depends_on_id?: number | null;
   depends_type?: DependsType;
   lag_days?: number;
@@ -177,8 +179,8 @@ export async function createScheduleTask(t: {
 }): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO schedule_tasks
-       (project_id, name, start_date, duration_days, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+       (project_id, name, start_date, duration_days, crew_size, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM schedule_tasks WHERE project_id = $1))
      RETURNING id`,
     [
@@ -186,6 +188,7 @@ export async function createScheduleTask(t: {
       t.name,
       t.start_date,
       Math.max(1, t.duration_days),
+      Math.max(1, t.crew_size ?? 1),
       t.depends_on_id ?? null,
       t.depends_type ?? 'finish_to_start',
       t.lag_days ?? 0,
@@ -205,6 +208,7 @@ export async function updateScheduleTask(
       | 'name'
       | 'start_date'
       | 'duration_days'
+      | 'crew_size'
       | 'depends_on_id'
       | 'depends_type'
       | 'lag_days'
@@ -237,49 +241,104 @@ export async function countDependents(taskId: number): Promise<number> {
   return row?.n ?? 0;
 }
 
-/* ---------------------------------------------------------- Assignments */
+/* ----------------------------------------------------------- Crew days */
 
-export interface AssigneeInput {
+/** One person booked on one day of a phase. */
+export interface CrewDayInput {
+  day: string;
   kind: 'user' | 'sub';
   /** users.id or subcontractors.id. */
   ref_id: number;
-  /**
-   * Day-of-week mask (bit 0 = Sunday … bit 6 = Saturday), or null/undefined for
-   * every working day of the phase. Lets one employee take Mon/Wed on this job
-   * and be free for another on Tuesday.
-   */
-  work_days?: number | null;
 }
 
 /**
- * Replace a phase's assignee list wholesale, in one transaction, so the editor
- * can add and remove people (and change their day patterns) with a single save.
+ * Book one person onto one day of a phase, refusing to spend more crew-days
+ * than the phase was planned for.
+ *
+ * The cap is checked and the row written in one transaction, with the phase
+ * locked for the duration: two managers staffing the same job at the same
+ * moment would otherwise both read "one slot left" and both take it.
+ * `capacity` is the caller's crew_size x working-days figure — the working-day
+ * count is derived from the dependency chain, so only the caller can know it.
  */
-export async function setTaskAssignees(taskId: number, assignees: AssigneeInput[]): Promise<void> {
+export async function addCrewDay(
+  taskId: number,
+  entry: CrewDayInput,
+  capacity: number
+): Promise<{ ok: true } | { ok: false; reason: 'full' | 'duplicate' }> {
   const db = await getDb();
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM schedule_assignments WHERE task_id = $1', [taskId]);
-    for (const a of assignees) {
-      await client.query(
-        `INSERT INTO schedule_assignments (task_id, user_id, subcontractor_id, work_days)
-         VALUES ($1,$2,$3,$4)`,
-        [
-          taskId,
-          a.kind === 'user' ? a.ref_id : null,
-          a.kind === 'sub' ? a.ref_id : null,
-          normalizeMask(a.work_days),
-        ]
-      );
+    await client.query('SELECT id FROM schedule_tasks WHERE id = $1 FOR UPDATE', [taskId]);
+    const { rows } = await client.query<{ n: number }>(
+      'SELECT COUNT(*)::int AS n FROM schedule_crew_days WHERE task_id = $1',
+      [taskId]
+    );
+    if ((rows[0]?.n ?? 0) >= capacity) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'full' };
     }
+    const inserted = await client.query(
+      `INSERT INTO schedule_crew_days (task_id, day, user_id, subcontractor_id)
+       VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+      [
+        taskId,
+        entry.day,
+        entry.kind === 'user' ? entry.ref_id : null,
+        entry.kind === 'sub' ? entry.ref_id : null,
+      ]
+    );
     await client.query('COMMIT');
+    // Already on that day — the click landed twice, or two tabs are open.
+    return inserted.rowCount ? { ok: true } : { ok: false, reason: 'duplicate' };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+}
+
+/** Take one person off one day of a phase. */
+export async function removeCrewDay(taskId: number, entry: CrewDayInput): Promise<void> {
+  await q(
+    `DELETE FROM schedule_crew_days
+      WHERE task_id = $1 AND day = $2
+        AND ${entry.kind === 'user' ? 'user_id' : 'subcontractor_id'} = $3`,
+    [taskId, entry.day, entry.ref_id]
+  );
+}
+
+/**
+ * Drop crew-day rows that no longer fall inside a phase's window — what a phase
+ * that has been shortened or moved leaves behind. Called with the window the
+ * solver just produced, so nobody stays booked on a day the phase isn't on.
+ */
+export async function pruneCrewDays(
+  taskId: number,
+  window: { start: string; end: string } | null
+): Promise<number> {
+  const dropped = window
+    ? await q<{ id: number }>(
+        `DELETE FROM schedule_crew_days
+          WHERE task_id = $1 AND (day < $2 OR day > $3) RETURNING id`,
+        [taskId, window.start, window.end]
+      )
+    : await q<{ id: number }>(
+        'DELETE FROM schedule_crew_days WHERE task_id = $1 RETURNING id',
+        [taskId]
+      );
+  return dropped.length;
+}
+
+/** How many crew-days a phase has booked — the spent half of its budget. */
+export async function countCrewDays(taskId: number): Promise<number> {
+  const row = await one<{ n: number }>(
+    'SELECT COUNT(*)::int AS n FROM schedule_crew_days WHERE task_id = $1',
+    [taskId]
+  );
+  return row?.n ?? 0;
 }
 
 /* ------------------------------------------------------- Day start times */
@@ -291,9 +350,9 @@ export interface DayTimeInput {
 }
 
 /**
- * Replace a phase's per-day start times wholesale, mirroring how assignees are
- * saved: the editor sends the full list and anything missing from it goes back
- * to the phase's own daily start time.
+ * Replace a phase's per-day start times wholesale: the crew-week job card sends
+ * the full list and anything missing from it goes back to the phase's own daily
+ * start time.
  */
 export async function setTaskDayTimes(taskId: number, days: DayTimeInput[]): Promise<void> {
   const db = await getDb();

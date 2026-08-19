@@ -18,9 +18,9 @@ export const dynamic = 'force-dynamic';
 
 /**
  * The schedule reads two ways: managers and admins get the editable timeline
- * across every live job, workers get a read-only week of their own work they can
- * step through a week at a time. Phase windows are derived, not stored, so both
- * views compute them from the same rows via schedule-math.
+ * and crew week across every live job, workers get a read-only week of their own
+ * work they can step through a week at a time. Phase windows are derived, not
+ * stored, so every view computes them from the same rows via schedule-math.
  */
 export default async function SchedulePage() {
   const me = await getCurrentUser();
@@ -33,7 +33,11 @@ export default async function SchedulePage() {
     // Crew notes for the jobs they could be booked on, so the week view can show
     // the job-specific instructions alongside each day.
     const crewNotes = await listCrewNotesForProjects([
-      ...new Set(tasks.filter((t) => t.assignees.some((a) => a.kind === 'user' && a.ref_id === me.id)).map((t) => t.project_id)),
+      ...new Set(
+        tasks
+          .filter((t) => t.crew_days.some((c) => c.kind === 'user' && c.ref_id === me.id))
+          .map((t) => t.project_id)
+      ),
     ]);
     return (
       <div>
@@ -79,7 +83,7 @@ export default async function SchedulePage() {
     <div>
       <PageHeader
         title="Schedule"
-        subtitle="Every live job in one timeline — plan phases, set crew start times, and send crews their dates"
+        subtitle="Plan the work on the timeline, staff it a week at a time in the crew week, and send crews their dates"
       />
       <ScheduleViews
         tasks={tasks}

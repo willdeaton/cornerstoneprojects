@@ -6,20 +6,16 @@ import { shortDate } from '@/lib/format';
 import {
   calendarSpan,
   computeSchedule,
-  isSplitPattern,
-  maskLabel,
+  crewBudget,
+  crewRoster,
   projectedEnd,
   timeLabel,
   workedSegments,
 } from '@/lib/schedule-math';
 import type { ScheduleChange, ScheduleTaskRow } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
-import {
-  TaskModal,
-  type ProjectOption,
-  type SubOption,
-  type WorkerOption,
-} from '@/app/(app)/schedule/TaskModal';
+import { TaskModal, type ProjectOption } from '@/app/(app)/schedule/TaskModal';
+
 import { PublishBar, ScheduleHistory, type PublishedInfo } from '@/app/(app)/schedule/PublishBar';
 import { HardFinishControl } from '@/app/(app)/schedule/HardFinishControl';
 
@@ -45,8 +41,6 @@ const STATUS_BAR: Record<ScheduleTaskRow['status'], string> = {
 export function ScheduleSection({
   project,
   tasks,
-  workers,
-  subs,
   holidays,
   published = null,
   changes = [],
@@ -54,8 +48,6 @@ export function ScheduleSection({
 }: {
   project: ProjectOption;
   tasks: ScheduleTaskRow[];
-  workers: WorkerOption[];
-  subs: SubOption[];
   holidays: string[];
   /** Publish state for this job, or null if its schedule hasn't gone out. */
   published?: PublishedInfo | null;
@@ -234,26 +226,45 @@ export function ScheduleSection({
                     );
                   })}
                 </div>
-                {(task.start_time || (task.day_times ?? []).length > 0) && (
-                  <p className="mt-1.5 text-sm font-medium text-brand-ink">
-                    {task.start_time
-                      ? `Starts ${timeLabel(task.start_time)} daily`
-                      : 'Start time set on some days'}
-                    {(task.day_times ?? []).length > 0 &&
-                      ` · ${task.day_times.length} day${
-                        task.day_times.length === 1 ? '' : 's'
-                      } with their own time`}
-                  </p>
-                )}
-                {task.assignees.length > 0 && (
-                  <p className="mt-1.5 text-sm text-brand-gray">
-                    {task.assignees
-                      .map((a) =>
-                        isSplitPattern(a.work_days) ? `${a.name} (${maskLabel(a.work_days)})` : a.name
-                      )
-                      .join(', ')}
-                  </p>
-                )}
+                {(() => {
+                  // Crew reads as the ask and how much of it the crew week has
+                  // covered — the names come second, since it's the shortfall
+                  // that needs acting on.
+                  const budget = crewBudget(task, dates, { holidays: new Set(holidays) });
+                  const roster = crewRoster(task);
+                  return (
+                    <>
+                      <p className="mt-1.5 text-sm font-medium text-brand-ink">
+                        {budget.needed} {budget.needed === 1 ? 'person' : 'people'} a day ·{' '}
+                        {budget.filled}/{budget.capacity} crew days booked
+                        {budget.remaining > 0 && (
+                          <span className="text-amber-700">
+                            {' '}
+                            · {budget.remaining} still to book
+                          </span>
+                        )}
+                      </p>
+                      {(task.start_time || (task.day_times ?? []).length > 0) && (
+                        <p className="mt-0.5 text-sm text-brand-ink">
+                          {task.start_time
+                            ? `Starts ${timeLabel(task.start_time)} daily`
+                            : 'Start time set on some days'}
+                          {(task.day_times ?? []).length > 0 &&
+                            ` · ${task.day_times.length} day${
+                              task.day_times.length === 1 ? '' : 's'
+                            } with their own time`}
+                        </p>
+                      )}
+                      {roster.length > 0 && (
+                        <p className="mt-0.5 text-sm text-brand-gray">
+                          {roster
+                            .map((a) => `${a.name} (${a.days} ${a.days === 1 ? 'day' : 'days'})`)
+                            .join(', ')}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </button>
             ))}
           </div>
@@ -280,8 +291,6 @@ export function ScheduleSection({
           task={editing.task}
           allTasks={tasks}
           projects={[project]}
-          workers={workers}
-          subs={subs}
           holidays={holidays}
           defaultProjectId={project.id}
           publishedVersions={published ? { [project.id]: published.version } : undefined}

@@ -33,7 +33,7 @@ import type {
   BackupSchedulePhase,
 } from './backup-types';
 import { hoursBetween } from './format';
-import { computeSchedule, maskLabel, timeLabel, workingDaySpan } from './schedule-math';
+import { computeSchedule, timeLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
@@ -1621,26 +1621,28 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     depends_on_id: number | null;
     depends_type: DependsType;
     lag_days: number;
+    crew_size: number;
     status: TaskStatus;
     start_time: string | null;
     notes: string | null;
     position: number;
-    crew: { name: string; work_days: number | null }[] | null;
+    crew: { name: string; days: number }[] | null;
   }>(
     // depends_type comes along so the solver resolves start-to-start links the
     // same way the app does — otherwise an overlapping phase would export with
-    // finish-to-start dates. The crew arrives as JSON so each person's split-day
-    // pattern can be spelled out below.
+    // finish-to-start dates. Crew is booked a day at a time, so it's rolled up
+    // to one row per person with their day count for the spreadsheet.
     `SELECT t.id, t.project_id, p.name AS project_name, t.name,
             t.start_date, t.duration_days, t.depends_on_id, t.depends_type, t.lag_days,
-            t.status, t.start_time, t.notes, t.position,
-            (SELECT json_agg(
-                      json_build_object('name', COALESCE(u.name, s.name), 'work_days', sa.work_days)
-                      ORDER BY COALESCE(u.name, s.name))
-               FROM schedule_assignments sa
-               LEFT JOIN users u          ON u.id = sa.user_id
-               LEFT JOIN subcontractors s ON s.id = sa.subcontractor_id
-              WHERE sa.task_id = t.id) AS crew
+            t.crew_size, t.status, t.start_time, t.notes, t.position,
+            (SELECT json_agg(json_build_object('name', person, 'days', days)
+                             ORDER BY person)
+               FROM (SELECT COALESCE(u.name, s.name) AS person, COUNT(*)::int AS days
+                       FROM schedule_crew_days c
+                       LEFT JOIN users u          ON u.id = c.user_id
+                       LEFT JOIN subcontractors s ON s.id = c.subcontractor_id
+                      WHERE c.task_id = t.id
+                      GROUP BY COALESCE(u.name, s.name)) roster) AS crew
        FROM schedule_tasks t
        JOIN projects p ON p.id = t.project_id
       WHERE t.project_id = ANY($1::int[])
@@ -1668,8 +1670,10 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
       status: r.status,
       start_time: r.start_time ? timeLabel(r.start_time) : '',
       follows: (r.depends_on_id != null ? nameById.get(r.depends_on_id) : '') ?? '',
+      crew_needed: r.crew_size,
+      crew_days_booked: (r.crew ?? []).reduce((n, c) => n + c.days, 0),
       crew: (r.crew ?? [])
-        .map((c) => (c.work_days == null ? c.name : `${c.name} (${maskLabel(c.work_days)})`))
+        .map((c) => `${c.name} (${c.days} ${c.days === 1 ? 'day' : 'days'})`)
         .join(', '),
       notes: r.notes,
     });

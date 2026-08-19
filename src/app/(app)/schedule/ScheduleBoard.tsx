@@ -9,26 +9,24 @@ import {
   assigneeBookings,
   computeSchedule,
   conflictedTaskIds,
+  crewBudget,
   eachDay,
   findConflicts,
   fromDay,
-  isSplitPattern,
   isWeekend,
-  maskLabel,
   projectedEnd,
   rangesOverlap,
-  startTimeOn,
-  timeLabel,
   today,
   weekAlignedRange,
   weekBands,
   weekStart,
   workedSegments,
+  workingDaySpan,
   type ComputedWindow,
 } from '@/lib/schedule-math';
 import type { ProjectStatus, ScheduleTaskRow } from '@/lib/types';
 import { PROJECT_STATUS_LABELS } from '@/lib/types';
-import { TaskModal, type ProjectOption, type SubOption, type WorkerOption } from './TaskModal';
+import { TaskModal, type ProjectOption } from './TaskModal';
 import { SendScheduleModal } from './SendScheduleModal';
 import { PublishBar, type PublishedInfo } from './PublishBar';
 import { HardFinishControl } from './HardFinishControl';
@@ -77,8 +75,6 @@ function initialAnchor(tasks: ScheduleTaskRow[], holidays: string[]): string {
 export function ScheduleBoard({
   tasks,
   projects,
-  workers,
-  subs,
   holidays,
   published,
   changeCounts = {},
@@ -87,8 +83,6 @@ export function ScheduleBoard({
   tasks: ScheduleTaskRow[];
   /** Every live job, including ones with nothing scheduled yet. */
   projects: BoardProject[];
-  workers: WorkerOption[];
-  subs: SubOption[];
   holidays: string[];
   /** Publish state per job id, for jobs that have been published. */
   published: Record<number, PublishedInfo>;
@@ -101,7 +95,8 @@ export function ScheduleBoard({
   const [spanDays, setSpanDays] = useState<number>(DEFAULT_SPAN);
   const [anchor, setAnchor] = useState<string>(() => initialAnchor(tasks, holidays));
   const [projectFilter, setProjectFilter] = useState<number | 'all'>('all');
-  const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
+  /** 'short' narrows the board to phases the crew week hasn't filled yet. */
+  const [staffing, setStaffing] = useState<'all' | 'short'>('all');
   const [editing, setEditing] = useState<Editing>(null);
   const [sending, setSending] = useState(false);
   // Per-job expand/collapse, only for jobs the user has actually clicked. Jobs
@@ -136,19 +131,21 @@ export function ScheduleBoard({
   const rangeEnd = range.end;
   const now = today();
 
+  /** Crew asked for vs crew booked, per phase — what the timeline reports on. */
+  const budgets = useMemo(() => {
+    const out = new Map<number, ReturnType<typeof crewBudget>>();
+    for (const t of tasks) out.set(t.id, crewBudget(t, windows.get(t.id), calendar));
+    return out;
+  }, [tasks, windows, calendar]);
+
   const visible = useMemo(
     () =>
       tasks.filter((t) => {
         if (projectFilter !== 'all' && t.project_id !== projectFilter) return false;
-        if (
-          assigneeFilter !== 'all' &&
-          !t.assignees.some((a) => `${a.kind}:${a.ref_id}` === assigneeFilter)
-        ) {
-          return false;
-        }
+        if (staffing === 'short' && (budgets.get(t.id)?.remaining ?? 0) === 0) return false;
         return true;
       }),
-    [tasks, projectFilter, assigneeFilter]
+    [tasks, projectFilter, staffing, budgets]
   );
 
   /**
@@ -165,7 +162,7 @@ export function ScheduleBoard({
     }
     // With a filter on, only jobs that match it are worth a row; with no
     // filters, every live job appears.
-    const filtering = projectFilter !== 'all' || assigneeFilter !== 'all';
+    const filtering = projectFilter !== 'all' || staffing !== 'all';
 
     return projects
       .filter((p) => !filtering || byProject.has(p.id))
@@ -210,7 +207,7 @@ export function ScheduleBoard({
         if (b.start) return 1;
         return a.projectName.localeCompare(b.projectName);
       });
-  }, [projects, visible, windows, projectFilter, assigneeFilter, rangeStart, rangeEnd]);
+  }, [projects, visible, windows, projectFilter, staffing, rangeStart, rangeEnd]);
 
   const unplanned = groups.filter((g) => g.tasks.length === 0).length;
 
@@ -222,13 +219,12 @@ export function ScheduleBoard({
     return out;
   }, [published]);
 
-  const assigneeOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const t of tasks) {
-      for (const a of t.assignees) seen.set(`${a.kind}:${a.ref_id}`, a.name);
-    }
-    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [tasks]);
+  // Crew-days still to be booked across everything on the board — the one
+  // number that says whether the plan has been staffed yet.
+  const shortfall = useMemo(
+    () => visible.reduce((n, t) => n + (budgets.get(t.id)?.remaining ?? 0), 0),
+    [visible, budgets]
+  );
 
   function isOpen(g: { projectId: number; inRange: boolean }): boolean {
     return openState[g.projectId] ?? g.inRange;
@@ -302,15 +298,11 @@ export function ScheduleBoard({
 
         <select
           className="input w-auto"
-          value={assigneeFilter}
-          onChange={(e) => setAssigneeFilter(e.target.value)}
+          value={staffing}
+          onChange={(e) => setStaffing(e.target.value as 'all' | 'short')}
         >
-          <option value="all">Everyone</option>
-          {assigneeOptions.map(([key, name]) => (
-            <option key={key} value={key}>
-              {name}
-            </option>
-          ))}
+          <option value="all">All phases</option>
+          <option value="short">Still needs crew</option>
         </select>
 
         <div className="ml-auto flex gap-2">
@@ -345,6 +337,13 @@ export function ScheduleBoard({
             <span>
               {groups.length} {groups.length === 1 ? 'job' : 'jobs'}
               {unplanned > 0 && ` · ${unplanned} with nothing scheduled yet`}
+              {shortfall > 0 && (
+                <span className="font-medium text-amber-700">
+                  {' '}
+                  · {shortfall} crew {shortfall === 1 ? 'day' : 'days'} still to be booked in the
+                  Crew Week
+                </span>
+              )}
             </span>
             <button
               className="font-medium text-brand-green-dark hover:underline"
@@ -569,11 +568,13 @@ export function ScheduleBoard({
       )}
 
       <p className="text-xs text-brand-gray">
-        Every live job is listed — expand one to see its phases, or whether it has any yet. Views
-        run in whole weeks from Monday, with each week&apos;s Monday held above its days. Weekends
-        and non-working days are shaded and never count toward a phase&apos;s duration. A phase
-        marked &ldquo;starts after&rdquo; another moves automatically when the one before it slips,
-        and moving any phase&apos;s dates asks for a reason that&apos;s kept with the job.
+        Every live job is listed — expand one to see its phases, or whether it has any yet. A phase
+        here is the work: how long it runs and how many people it takes. Who those people are, and
+        what time they start, is settled a week at a time in the Crew Week. Views run in whole
+        weeks from Monday, with each week&apos;s Monday held above its days; weekends and
+        non-working days are shaded and never count toward a phase&apos;s duration. A phase marked
+        &ldquo;starts after&rdquo; another moves automatically when the one before it slips, and
+        moving any phase&apos;s dates asks for a reason that&apos;s kept with the job.
       </p>
 
       {editing && (
@@ -582,8 +583,6 @@ export function ScheduleBoard({
           initialProjectId={editing.projectId}
           allTasks={tasks}
           projects={projects}
-          workers={workers}
-          subs={subs}
           holidays={holidays}
           publishedVersions={publishedVersionMap}
           onClose={() => setEditing(null)}
@@ -673,15 +672,11 @@ function PhaseRow({
   published: boolean;
   onEdit: () => void;
 }) {
-  const crew = task.assignees
-    .map((a) => (isSplitPattern(a.work_days) ? `${a.name} (${maskLabel(a.work_days)})` : a.name))
-    .join(', ');
-  const splitCrew = task.assignees.filter((a) => isSplitPattern(a.work_days));
-  const dayTimes = useMemo(
-    () => new Map((task.day_times ?? []).map((d) => [d.day, d.start_time])),
-    [task.day_times]
+  const budget = useMemo(
+    () => crewBudget(task, dates, { holidays: holidaySet }),
+    [task, dates, holidaySet]
   );
-  const specialDays = (task.day_times ?? []).length;
+  const workingDays = dates ? workingDaySpan(dates.start, dates.end, { holidays: holidaySet }) : 0;
 
   // One bar per unbroken run of working days, clipped to the visible range. That
   // gap over a weekend is the point: a phase that spans two weeks reads as two
@@ -699,25 +694,29 @@ function PhaseRow({
           endIdx: days.indexOf(to),
           clippedLeft: s.start < rangeStart,
           clippedRight: s.end > rangeEnd,
-          label: `${shortDate(s.start)} – ${shortDate(s.end)}`,
         };
       })
       .filter((s) => s.startIdx >= 0 && s.endIdx >= s.startIdx);
   }, [dates, holidaySet, days, rangeStart, rangeEnd]);
 
-  const timeNote = task.start_time
-    ? `Starts ${timeLabel(task.start_time)} daily${
-        specialDays ? ` · ${specialDays} day${specialDays === 1 ? '' : 's'} differ` : ''
-      }`
-    : specialDays
-      ? `${specialDays} day${specialDays === 1 ? '' : 's'} with a set start time`
-      : '';
+  // What the phase asks for, and how much of it the crew week has covered.
+  const crewNote = `${budget.needed} ${budget.needed === 1 ? 'person' : 'people'} × ${workingDays} ${
+    workingDays === 1 ? 'day' : 'days'
+  }`;
+  const staffedNote =
+    budget.capacity === 0
+      ? ''
+      : budget.remaining === 0
+        ? 'fully staffed'
+        : `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} to book`;
 
-  const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}${
-    timeNote ? `\n${timeNote}` : ''
-  }${crew ? `\n${crew}` : ''}${task.site_address ? `\n${task.site_address}` : ''}${
-    conflicted ? '\nDouble-booked with another job' : ''
-  }${published ? '\nPublished — changes need a reason' : ''}`;
+  const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}
+Needs ${crewNote} = ${budget.capacity} crew ${budget.capacity === 1 ? 'day' : 'days'}
+${budget.filled} booked in the Crew Week${staffedNote ? ` · ${staffedNote}` : ''}${
+    task.site_address ? `\n${task.site_address}` : ''
+  }${conflicted ? '\nSomeone on this phase is double-booked' : ''}${
+    published ? '\nPublished — changes need a reason' : ''
+  }`;
 
   return (
     <div className="grid" style={{ gridTemplateColumns: gridTemplate }}>
@@ -736,12 +735,14 @@ function PhaseRow({
         <span className="block truncate text-xs text-brand-gray">
           {dates ? `${shortDate(dates.start)} – ${shortDate(dates.end)}` : '—'}
         </span>
-        {timeNote && (
-          <span className="block truncate text-[11px] font-medium text-brand-ink">{timeNote}</span>
-        )}
-        {splitCrew.length > 0 && (
-          <span className="block truncate text-[11px] text-brand-green-dark">
-            {splitCrew.map((a) => `${a.name.split(' ')[0]}: ${maskLabel(a.work_days)}`).join(' · ')}
+        <span className="block truncate text-[11px] font-medium text-brand-ink">{crewNote}</span>
+        {staffedNote && (
+          <span
+            className={`block truncate text-[11px] font-medium ${
+              budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
+            }`}
+          >
+            {budget.filled}/{budget.capacity} booked · {staffedNote}
           </span>
         )}
       </button>
@@ -754,35 +755,31 @@ function PhaseRow({
         />
       ))}
 
-      {segments.map((s, i) => {
-        // The time on the first day of this stretch: what the crew reads off the
-        // bar, with any day that differs called out in the tooltip.
-        const start = days[s.startIdx];
-        const time = startTimeOn(start, task.start_time, dayTimes);
-        return (
-          <button
-            key={s.key}
-            onClick={onEdit}
-            title={tooltip}
-            style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
-            className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white transition-opacity hover:opacity-90 ${
-              BAR_TINT[task.status]
-            } ${conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''} ${
-              s.clippedLeft ? 'rounded-l-none' : ''
-            } ${s.clippedRight ? 'rounded-r-none' : ''}`}
-          >
-            {/* Only the first visible stretch carries the label; the rest are the
-                continuation of the same phase and stay clean. */}
-            {i === 0 && (
-              <span className="truncate">
-                {time && <span className="opacity-90">{timeLabel(time)} · </span>}
-                {task.name}
-                {crew && <span className="opacity-80"> · {crew}</span>}
-              </span>
-            )}
-          </button>
-        );
-      })}
+      {segments.map((s, i) => (
+        <button
+          key={s.key}
+          onClick={onEdit}
+          title={tooltip}
+          style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
+          className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white transition-opacity hover:opacity-90 ${
+            BAR_TINT[task.status]
+          } ${conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''} ${
+            s.clippedLeft ? 'rounded-l-none' : ''
+          } ${s.clippedRight ? 'rounded-r-none' : ''}`}
+        >
+          {/* Only the first visible stretch carries the label; the rest are the
+              continuation of the same phase and stay clean. */}
+          {i === 0 && (
+            <span className="truncate">
+              {task.name}
+              <span className="opacity-80"> · {crewNote}</span>
+              {budget.remaining > 0 && (
+                <span className="opacity-80"> · {budget.remaining} to book</span>
+              )}
+            </span>
+          )}
+        </button>
+      ))}
     </div>
   );
 }

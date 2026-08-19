@@ -9,11 +9,10 @@ import {
   assigneeBookings,
   bookingsByDay,
   computeSchedule,
+  crewRoster,
   eachDay,
   fromDay,
-  isSplitPattern,
   isWorkingDay,
-  maskLabel,
   timeLabel,
   today,
   weekLabel,
@@ -32,7 +31,8 @@ import { TASK_STATUS_LABELS } from '@/lib/types';
  * they're doing, day by day, including what time they start and where.
  *
  * Dates come from the same solver the manager timeline uses, and days are built
- * from per-day bookings, so a split week shows only the days that are theirs.
+ * from the crew-day rows themselves, so a week split across jobs shows only the
+ * days that are actually theirs.
  */
 export function MySchedule({
   tasks,
@@ -157,9 +157,11 @@ export function MySchedule({
                 <div className="space-y-4">
                   {items.map((b) => {
                     const task = taskById.get(b.taskId);
-                    const others = (task?.assignees ?? []).filter(
-                      (a) => !(a.kind === 'user' && a.ref_id === userId)
-                    );
+                    // Who else is on this phase at all — not only today, so the
+                    // card reads as "the crew you're with on this job".
+                    const others = task
+                      ? crewRoster(task).filter((a) => !(a.kind === 'user' && a.refId === userId))
+                      : [];
                     const notes = notesByJob.get(b.projectId) ?? [];
                     return (
                       <div key={`${b.taskId}-${b.start}`} className="min-w-0">
@@ -167,11 +169,6 @@ export function MySchedule({
                           <div className="min-w-0">
                             <p className="text-sm font-bold text-brand-ink">
                               {b.startTime ? `Start ${timeLabel(b.startTime)}` : 'No set start time'}
-                              {isSplitPattern(b.workDays) && (
-                                <span className="ml-2 text-xs font-medium text-brand-green-dark">
-                                  your days: {maskLabel(b.workDays)}
-                                </span>
-                              )}
                             </p>
                             <h4 className="mt-0.5 font-semibold text-brand-ink">
                               {b.taskName}
@@ -200,14 +197,7 @@ export function MySchedule({
                             )}
                             {others.length > 0 && (
                               <p className="mt-2 text-sm text-brand-gray">
-                                With{' '}
-                                {others
-                                  .map((a) =>
-                                    isSplitPattern(a.work_days)
-                                      ? `${a.name} (${maskLabel(a.work_days)})`
-                                      : a.name
-                                  )
-                                  .join(', ')}
+                                With {others.map((a) => a.name).join(', ')}
                               </p>
                             )}
                           </div>
