@@ -19,13 +19,19 @@ import {
   type ScheduleLine,
 } from './templates';
 import { listManagersWithReports, managerWeekSummary } from '../data';
-import { listScheduleTasks, listAssigneeContacts, loadWorkCalendar } from '../schedule-data';
+import {
+  listScheduleTasks,
+  listAssigneeContacts,
+  listCrewNotesForProjects,
+  loadWorkCalendar,
+} from '../schedule-data';
 import {
   assigneeBookings,
   computeSchedule,
   isSplitPattern,
   maskLabel,
   rangesOverlap,
+  timeLabel,
 } from '../schedule-math';
 import { issueApprovalToken } from '../time-approval-tokens';
 import { appOrigin } from '../app-origin';
@@ -221,6 +227,15 @@ export async function sendScheduleEmails(
       loadWorkCalendar(),
       listAssigneeContacts(),
     ]);
+    // Crew notes ride along with the schedule: the whole point of them is that
+    // the people working the job read them before they turn up.
+    const crewNotes = await listCrewNotesForProjects([...new Set(tasks.map((t) => t.project_id))]);
+    const notesByProject = new Map<number, string[]>();
+    for (const n of crewNotes) {
+      const list = notesByProject.get(n.project_id);
+      if (list) list.push(n.body);
+      else notesByProject.set(n.project_id, [n.body]);
+    }
     const { windows } = computeSchedule(tasks, calendar);
     // Bookings are the days actually worked, so each line covers one unbroken
     // stretch: a two-week phase arrives as one line per week rather than one
@@ -236,12 +251,15 @@ export async function sendScheduleEmails(
       const entry = perAssignee.get(w.key) ?? { name: w.name, lines: [] };
       entry.lines.push({
         dates: scheduleSpan(w.start, w.end),
+        startTime: w.startTime ? timeLabel(w.startTime) : null,
         project: w.projectName,
         phase: isSplitPattern(w.workDays)
           ? `${w.taskName} (your days: ${maskLabel(w.workDays)})`
           : w.taskName,
         location: w.location,
+        address: w.siteAddress,
         notes: w.taskNotes,
+        crewNotes: notesByProject.get(w.projectId) ?? [],
       });
       perAssignee.set(w.key, entry);
     }

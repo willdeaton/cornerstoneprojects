@@ -67,6 +67,47 @@ export function rangesOverlap(aStart: string, aEnd: string, bStart: string, bEnd
   return aStart <= bEnd && bStart <= aEnd;
 }
 
+/* ------------------------------------------------------------- Time of day */
+
+/**
+ * A start time is plain 'HH:MM' text, 24-hour — the same "a clock time is a
+ * clock time" treatment dates get here, with no timezone attached.
+ */
+export function isValidTime(time: string): boolean {
+  return /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
+}
+
+/** 'HH:MM' -> "7:00 AM"; anything unparseable comes back as given. */
+export function timeLabel(time: string | null | undefined): string {
+  if (!time || !isValidTime(time)) return time ?? '';
+  const [h, m] = time.split(':').map(Number);
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+
+/** A phase's per-day start-time overrides, as the solver wants them. */
+export type DayTimes = Map<string, string | null>;
+
+/** Overrides keyed by day. An entry set to null clears the time for that day. */
+export function dayTimeMap(rows: { day: string; start_time: string | null }[] = []): DayTimes {
+  return new Map(rows.map((r) => [r.day, r.start_time]));
+}
+
+/**
+ * What time work starts on one day of a phase: the day's own override if it has
+ * one (including an override that clears the time), otherwise the phase's daily
+ * start time.
+ */
+export function startTimeOn(
+  day: string,
+  phaseTime: string | null | undefined,
+  overrides?: DayTimes
+): string | null {
+  if (overrides?.has(day)) return overrides.get(day) ?? null;
+  return phaseTime ?? null;
+}
+
 /* --------------------------------------------------------- Working-day math */
 
 /** Saturday or Sunday. */
@@ -390,6 +431,13 @@ export interface AssigneeBooking {
   projectName: string;
   customer: string;
   location: string | null;
+  /** The job's full site address, for the crew views and emails. */
+  siteAddress: string | null;
+  /**
+   * What time work starts on every day of this stretch. A stretch breaks
+   * wherever the time changes, so one booking always means one start time.
+   */
+  startTime: string | null;
   /** The phase's whole window, for context. */
   windowStart: string;
   windowEnd: string;
@@ -411,30 +459,54 @@ export function assigneeBookings(
   for (const task of tasks) {
     const w = windows.get(task.id);
     if (!w) continue;
+    const overrides = dayTimeMap(task.day_times ?? []);
     for (const a of task.assignees ?? []) {
       for (const seg of workedSegments(w.start, w.end, cal, a.work_days)) {
-        out.push({
-          key: `${a.kind}:${a.ref_id}`,
-          kind: a.kind,
-          refId: a.ref_id,
-          name: a.name,
-          detail: a.detail,
-          workDays: a.work_days,
-          taskId: task.id,
-          taskName: task.name,
-          taskStatus: task.status,
-          taskNotes: task.notes,
-          projectId: task.project_id,
-          projectName: task.project_name,
-          customer: task.customer,
-          location: task.location,
-          windowStart: w.start,
-          windowEnd: w.end,
-          start: seg.start,
-          end: seg.end,
-        });
+        // A day that starts at a different time is its own stretch, so every
+        // booking carries exactly one start time and the crew views never have
+        // to say "7 AM (except Wednesday)".
+        for (const run of splitByStartTime(seg, task.start_time, overrides)) {
+          out.push({
+            key: `${a.kind}:${a.ref_id}`,
+            kind: a.kind,
+            refId: a.ref_id,
+            name: a.name,
+            detail: a.detail,
+            workDays: a.work_days,
+            taskId: task.id,
+            taskName: task.name,
+            taskStatus: task.status,
+            taskNotes: task.notes,
+            projectId: task.project_id,
+            projectName: task.project_name,
+            customer: task.customer,
+            location: task.location,
+            siteAddress: task.site_address ?? null,
+            startTime: run.startTime,
+            windowStart: w.start,
+            windowEnd: w.end,
+            start: run.start,
+            end: run.end,
+          });
+        }
       }
     }
+  }
+  return out;
+}
+
+/** Break one worked stretch wherever its start time changes. */
+function splitByStartTime(
+  seg: DaySegment,
+  phaseTime: string | null | undefined,
+  overrides: DayTimes
+): (DaySegment & { startTime: string | null })[] {
+  const out: (DaySegment & { startTime: string | null })[] = [];
+  for (const day of eachDay(seg.start, seg.end)) {
+    const startTime = startTimeOn(day, phaseTime, overrides);
+    const open = out[out.length - 1];
+    if (open && open.startTime === startTime) open.end = day;
+    else out.push({ start: day, end: day, startTime });
   }
   return out;
 }
@@ -515,6 +587,46 @@ export function weekLabel(monday: string): string {
       ? String(b.getDate())
       : b.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   return `${left} – ${right}, ${b.getFullYear()}`;
+}
+
+/**
+ * The Monday-anchored range of `spanDays` days that contains `day`.
+ *
+ * Multi-week views always start on a Monday and run to the Sunday that ends the
+ * last week, so a fortnight is two whole weeks rather than a fortnight of
+ * half-weeks — the crew reads the schedule a week at a time, and a column
+ * headed Wednesday at the far left makes that impossible.
+ */
+export function weekAlignedRange(day: string, spanDays: number): { start: string; end: string } {
+  const start = weekStart(day);
+  const weeks = Math.max(1, Math.ceil(spanDays / 7));
+  return { start, end: addDays(start, weeks * 7 - 1) };
+}
+
+/** One entry per week covered by `days`, for the week band above the columns. */
+export interface WeekBand {
+  /** The Monday that opens the week — the label the band carries. */
+  monday: string;
+  /** Index into `days` of this week's first visible column. */
+  startIdx: number;
+  /** How many of `days` fall in this week. */
+  span: number;
+}
+
+/**
+ * Group a run of days into the weeks they belong to. The band shows each week's
+ * Monday and holds it until the next week starts, so a phase crossing a week
+ * boundary is obvious on a 2- or 6-week timeline.
+ */
+export function weekBands(days: string[]): WeekBand[] {
+  const out: WeekBand[] = [];
+  days.forEach((day, i) => {
+    const monday = weekStart(day);
+    const open = out[out.length - 1];
+    if (open && open.monday === monday) open.span++;
+    else out.push({ monday, startIdx: i, span: 1 });
+  });
+  return out;
 }
 
 /**

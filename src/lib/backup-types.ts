@@ -62,6 +62,8 @@ export interface BackupSchedulePhase {
   end_date: string;
   working_days: number;
   status: TaskStatus;
+  /** The daily start time as the crew sees it ("7:00 AM"), blank when unset. */
+  start_time: string;
   /** Name of the phase this one follows, blank when it stands alone. */
   follows: string;
   /** Assigned employees and subs, comma-separated. */

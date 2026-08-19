@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
+import { getProject, updateProject } from '@/lib/data';
 import {
   createScheduleTask,
   updateScheduleTask,
@@ -17,15 +18,22 @@ import {
   unpublishSchedule,
   logScheduleChange,
   setTaskAssignees,
+  setTaskDayTimes,
+  createCrewNote,
+  updateCrewNote,
+  getCrewNote,
+  deleteCrewNote,
   createSubcontractor,
   updateSubcontractor,
   deleteSubcontractor,
   addHoliday,
   deleteHoliday,
   type AssigneeInput,
+  type DayTimeInput,
 } from '@/lib/schedule-data';
 import { sendScheduleEmails, type SendScheduleResult } from '@/lib/email/send';
-import { addDays, normalizeMask, wouldCycle } from '@/lib/schedule-math';
+import { addDays, isValidTime, normalizeMask, wouldCycle } from '@/lib/schedule-math';
+import { shortDate } from '@/lib/format';
 import {
   diffTask,
   needsReason,
@@ -34,7 +42,7 @@ import {
   type DiffNames,
   type TaskDraft,
 } from '@/lib/schedule-diff';
-import type { DependsType, ScheduleChange, TaskStatus } from '@/lib/types';
+import type { DependsType, ScheduleChange, TaskDayTime, TaskStatus } from '@/lib/types';
 
 /** Result of a save/delete action. */
 export interface ActionResult {
@@ -62,6 +70,37 @@ async function requireManager() {
 function clean(v: unknown): string | null {
   const t = (v ?? '').toString().trim();
   return t === '' ? null : t;
+}
+
+/**
+ * A start time as stored: 'HH:MM' or null. Anything that isn't a clock time
+ * (including the empty string a cleared <input type="time"> submits) is no time
+ * at all rather than a validation error the user has to decode.
+ */
+function cleanTime(v: unknown): string | null {
+  const t = clean(v);
+  if (t == null) return null;
+  // Browsers can hand back 'HH:MM:SS' when seconds are enabled.
+  const trimmed = t.length === 8 ? t.slice(0, 5) : t;
+  return isValidTime(trimmed) ? trimmed : null;
+}
+
+/**
+ * The per-day start times as stored: one row per day, latest wins on duplicates,
+ * sorted so the change log reads in date order. A day whose time is null keeps
+ * its row on purpose — it's how one day opts out of the phase's daily time.
+ */
+function cleanDayTimes(days: TaskDayTime[] | undefined): DayTimeInput[] {
+  if (!days) return [];
+  const byDay = new Map<string, string | null>();
+  for (const d of days) {
+    const day = clean(d.day);
+    if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    byDay.set(day, cleanTime(d.start_time));
+  }
+  return [...byDay.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([day, start_time]) => ({ day, start_time }));
 }
 
 /** Postgres unique-violation (duplicate subcontractor name). */
@@ -93,11 +132,16 @@ export interface TaskFields {
   depends_type?: DependsType;
   lag_days?: number;
   status?: TaskStatus;
+  /** Daily start time as 'HH:MM'; null or '' for the crew's normal hours. */
+  start_time?: string | null;
+  /** Per-day start-time overrides, replacing whatever the phase had. */
+  day_times?: TaskDayTime[];
   notes?: string | null;
   assignees?: AssigneeInput[];
   /**
-   * Why this changed. Required once the job's schedule has been published, for
-   * any edit that moves work or people (see saveTaskAction).
+   * Why this changed. Required for anything that moves the dates, and — once the
+   * job's schedule has been published — for anything that moves work or people
+   * (see saveTaskAction).
    */
   reason?: string | null;
 }
@@ -127,13 +171,14 @@ async function diffNames(projectId: number): Promise<DiffNames> {
 }
 
 /**
- * Create or update one phase together with its assignee list. Rejects a
- * dependency that points at another job or that would close a loop, so the
- * solver in schedule-math never has to untangle one after the fact.
+ * Create or update one phase together with its assignee list and day start
+ * times. Rejects a dependency that points at another job or that would close a
+ * loop, so the solver in schedule-math never has to untangle one after the fact.
  *
- * Once the job's schedule is published, any edit that moves work or people has
- * to carry `reason`; it's recorded against the published version along with a
- * summary of what actually changed.
+ * Any edit that moves the dates has to carry `reason`, published or not; once
+ * the job's schedule is published, so does anything that moves work or people.
+ * Either way the reason is logged with a summary of what actually changed, so
+ * the job keeps a readable record of every move.
  */
 export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
   const me = await requireManager();
@@ -176,6 +221,8 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     work_days: normalizeMask(a.work_days),
   }));
 
+  const dayTimes = cleanDayTimes(input.day_times);
+
   const fields = {
     name,
     start_date: input.start_date,
@@ -184,6 +231,7 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     depends_type: dependsType,
     lag_days: lag,
     status: input.status ?? ('not_started' as TaskStatus),
+    start_time: cleanTime(input.start_time),
     notes: clean(input.notes),
   };
 
@@ -193,9 +241,11 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
 
   // What moved, in the same words the editor previewed.
   let summary = summarizePhase({ name, start_date: fields.start_date, duration_days: duration });
+  // A brand-new phase moves nothing that was promised, so it only needs
+  // explaining once the crew has the schedule.
   let mustExplain = !!published;
   if (before) {
-    const draft: TaskDraft = { ...fields, assignees };
+    const draft: TaskDraft = { ...fields, day_times: dayTimes, assignees };
     const changes = diffTask(
       {
         name: before.name,
@@ -204,6 +254,8 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
         depends_on_id: before.depends_on_id,
         depends_type: before.depends_type ?? 'finish_to_start',
         lag_days: before.lag_days,
+        start_time: before.start_time ?? null,
+        day_times: before.day_times ?? [],
         notes: before.notes,
         status: before.status,
         assignees: before.assignees ?? [],
@@ -217,14 +269,16 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
       return { ok: true };
     }
     summary = summarizeChanges(changes);
-    mustExplain = !!published && needsReason(changes);
+    mustExplain = needsReason(changes, !!published);
   }
 
   if (mustExplain && !reason) {
     return {
       ok: false,
       needsReason: true,
-      error: `This job's schedule was published (v${published!.version}). Add a reason for the change.`,
+      error: published
+        ? `This job's schedule was published (v${published.version}). Add a reason for the change.`
+        : 'Moving a phase changes the timeline — add a reason so the job records why.',
     };
   }
 
@@ -236,8 +290,11 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
   }
 
   if (input.assignees) await setTaskAssignees(taskId, assignees);
+  if (input.day_times) await setTaskDayTimes(taskId, dayTimes);
 
-  if (published && reason) {
+  // Logged whenever a reason was given, published or not — the history is the
+  // job's record of what moved and why, from the first plan onwards.
+  if (reason) {
     await logScheduleChange({
       project_id: input.project_id,
       task_id: taskId,
@@ -245,7 +302,7 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
       kind: before ? 'updated' : 'added',
       summary,
       reason,
-      version: published.version,
+      version: published?.version ?? null,
       changed_by: me.id,
     });
   }
@@ -254,6 +311,11 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
   return { ok: true };
 }
 
+/**
+ * Remove a phase. Dropping work out of a job moves its timeline, so this always
+ * needs a reason — the history has to explain a phase that vanished as much as
+ * one that slipped.
+ */
 export async function deleteTaskAction(id: number, reason?: string | null): Promise<ActionResult> {
   const me = await requireManager();
   const task = await getScheduleTask(id);
@@ -261,28 +323,28 @@ export async function deleteTaskAction(id: number, reason?: string | null): Prom
 
   const published = await getPublishedVersion(task.project_id);
   const why = clean(reason);
-  if (published && !why) {
+  if (!why) {
     return {
       ok: false,
       needsReason: true,
-      error: `This job's schedule was published (v${published.version}). Add a reason for removing this phase.`,
+      error: published
+        ? `This job's schedule was published (v${published.version}). Add a reason for removing this phase.`
+        : 'Add a reason for removing this phase so the job records why.',
     };
   }
 
   await deleteScheduleTask(id);
 
-  if (published && why) {
-    await logScheduleChange({
-      project_id: task.project_id,
-      task_id: null,
-      task_name: task.name,
-      kind: 'deleted',
-      summary: `Removed ${summarizePhase(task)}`,
-      reason: why,
-      version: published.version,
-      changed_by: me.id,
-    });
-  }
+  await logScheduleChange({
+    project_id: task.project_id,
+    task_id: null,
+    task_name: task.name,
+    kind: 'deleted',
+    summary: `Removed ${summarizePhase(task)}`,
+    reason: why,
+    version: published?.version ?? null,
+    changed_by: me.id,
+  });
 
   revalidateSchedule(task.project_id);
   return { ok: true };
@@ -303,7 +365,8 @@ export async function setTaskStatusAction(id: number, status: TaskStatus): Promi
 
 /**
  * Nudge a phase's earliest start by whole calendar days. Anything following it
- * moves too, since downstream dates are always derived from this one.
+ * moves too, since downstream dates are always derived from this one — which is
+ * exactly why the move needs a reason whether or not the schedule went out.
  */
 export async function shiftTaskAction(
   id: number,
@@ -316,31 +379,133 @@ export async function shiftTaskAction(
 
   const published = await getPublishedVersion(task.project_id);
   const why = clean(reason);
-  if (published && !why) {
+  if (!why) {
     return {
       ok: false,
       needsReason: true,
-      error: `This job's schedule was published (v${published.version}). Add a reason for moving this phase.`,
+      error: published
+        ? `This job's schedule was published (v${published.version}). Add a reason for moving this phase.`
+        : 'Moving a phase changes the timeline — add a reason so the job records why.',
     };
   }
 
   const moved = addDays(task.start_date, Math.round(days));
   await updateScheduleTask(id, { start_date: moved });
 
-  if (published && why) {
+  await logScheduleChange({
+    project_id: task.project_id,
+    task_id: task.id,
+    task_name: task.name,
+    kind: 'updated',
+    summary: `Start ${shortDate(task.start_date)} → ${shortDate(moved)}`,
+    reason: why,
+    version: published?.version ?? null,
+    changed_by: me.id,
+  });
+
+  revalidateSchedule(task.project_id);
+  return { ok: true };
+}
+
+/* --------------------------------------------------------- Hard finish date */
+
+/**
+ * Set (or clear) the date a job absolutely has to be finished by. Moving a date
+ * that was already promised needs a reason and is logged with the phase history,
+ * since a hard finish moving is the biggest timeline change a job can have.
+ * Setting one for the first time, or clearing it, doesn't.
+ */
+export async function setHardFinishDateAction(
+  projectId: number,
+  date: string | null,
+  reason?: string | null
+): Promise<ActionResult> {
+  const me = await requireManager();
+  const project = await getProject(projectId);
+  if (!project) return { ok: false, error: 'That job no longer exists.' };
+
+  const next = clean(date);
+  if (next != null && !/^\d{4}-\d{2}-\d{2}$/.test(next)) {
+    return { ok: false, error: 'Pick a valid date.' };
+  }
+  const current = project.hard_finish_date ?? null;
+  if (next === current) return { ok: true };
+
+  const why = clean(reason);
+  // Only a date that was already set counts as a move.
+  if (current != null && next != null && !why) {
+    return {
+      ok: false,
+      needsReason: true,
+      error: 'This job already has a hard finish date — add a reason for moving it.',
+    };
+  }
+
+  await updateProject(projectId, { hard_finish_date: next });
+
+  if (why || current != null) {
+    const published = await getPublishedVersion(projectId);
     await logScheduleChange({
-      project_id: task.project_id,
-      task_id: task.id,
-      task_name: task.name,
-      kind: 'updated',
-      summary: `Start ${task.start_date} → ${moved}`,
-      reason: why,
-      version: published.version,
+      project_id: projectId,
+      task_id: null,
+      task_name: null,
+      kind: 'job',
+      summary:
+        next == null
+          ? `Hard finish date removed (was ${shortDate(current)})`
+          : `Hard finish date ${current == null ? 'set to' : `${shortDate(current)} →`} ${shortDate(next)}`,
+      reason: why ?? 'No reason given',
+      version: published?.version ?? null,
       changed_by: me.id,
     });
   }
 
-  revalidateSchedule(task.project_id);
+  revalidateSchedule(projectId);
+  return { ok: true };
+}
+
+/* --------------------------------------------------------------- Crew notes */
+
+/**
+ * Post or edit a note for the crew on this job — gate codes, parking, who to
+ * ask for on site. Everyone booked on the job sees these on their own schedule,
+ * so they're managers-only to write and never mixed in with internal job notes.
+ */
+export async function saveCrewNoteAction(input: {
+  id?: number;
+  project_id: number;
+  body: string;
+  pinned?: boolean;
+}): Promise<ActionResult> {
+  const me = await requireManager();
+  const body = (input.body ?? '').trim();
+  if (!body) return { ok: false, error: 'Write something for the crew first.' };
+  if (!input.project_id) return { ok: false, error: 'Pick a job for this note.' };
+
+  if (input.id) {
+    const existing = await getCrewNote(input.id);
+    if (!existing) return { ok: false, error: 'That note no longer exists.' };
+    await updateCrewNote(input.id, { body, pinned: input.pinned ?? existing.pinned });
+  } else {
+    await createCrewNote({
+      project_id: input.project_id,
+      body,
+      pinned: input.pinned ?? false,
+      author_id: me.id,
+      author_name: me.name,
+    });
+  }
+
+  revalidateSchedule(input.project_id);
+  return { ok: true };
+}
+
+export async function deleteCrewNoteAction(id: number): Promise<ActionResult> {
+  await requireManager();
+  const note = await getCrewNote(id);
+  if (!note) return { ok: true };
+  await deleteCrewNote(id);
+  revalidateSchedule(note.project_id);
   return { ok: true };
 }
 

@@ -13,6 +13,7 @@ import {
   isSplitPattern,
   isWorkingDay,
   maskLabel,
+  timeLabel,
   today,
   weekLabel,
   weekStart,
@@ -242,16 +243,21 @@ export function CrewWeek({
                             key={`${b.taskId}-${b.start}`}
                             href={`/projects/${b.projectId}`}
                             title={`${b.projectName} — ${b.taskName}${
-                              b.location ? `\n${b.location}` : ''
-                            }${
+                              b.startTime ? `\nStarts ${timeLabel(b.startTime)}` : ''
+                            }${b.siteAddress ? `\n${b.siteAddress}` : b.location ? `\n${b.location}` : ''}${
                               isSplitPattern(b.workDays)
                                 ? `\nDays on this job: ${maskLabel(b.workDays)}`
                                 : ''
-                            }`}
+                            }${b.taskNotes ? `\n${b.taskNotes}` : ''}`}
                             className={`block rounded px-1.5 py-1 text-[11px] leading-tight ${
                               STATUS_CHIP[b.taskStatus]
                             }`}
                           >
+                            {b.startTime && (
+                              <span className="block truncate font-bold">
+                                {timeLabel(b.startTime)}
+                              </span>
+                            )}
                             <span className="block truncate font-semibold">{b.projectName}</span>
                             <span className="block truncate opacity-90">{b.taskName}</span>
                             {isSplitPattern(b.workDays) && (
@@ -273,9 +279,10 @@ export function CrewWeek({
 
       <p className="text-xs text-brand-gray">
         One row per person, one column per day — so a week split across jobs reads exactly as it is.
-        Weekend columns only appear when weekend work is actually booked, and a day shaded red is one
-        where someone is on two different jobs. Set someone&apos;s days on a phase in the phase
-        editor.
+        Each card shows the day&apos;s start time when one is set; hover it for the site address and
+        any phase notes. Weekend columns only appear when weekend work is actually booked, and a day
+        shaded red is one where someone is on two different jobs. Set someone&apos;s days and start
+        times on a phase in the phase editor.
       </p>
     </div>
   );

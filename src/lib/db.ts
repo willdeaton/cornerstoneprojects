@@ -711,4 +711,90 @@ Your City, ST 00000',
     );
     CREATE INDEX IF NOT EXISTS idx_sched_changes_project ON schedule_changes(project_id, created_at DESC);
   `);
+
+  /* ==================================================================
+   * Job-site details the crew needs, and a date that can't move.
+   *
+   * site_address is the address crews drive to — kept apart from
+   * `location` (a short "City, ST" label used on quotes and lists) so the
+   * schedule can show a full, mappable address without changing how jobs
+   * read everywhere else.
+   *
+   * hard_finish_date is a commitment: the job MUST be done by then. It's
+   * separate from due_date (the target) so the schedule can warn louder
+   * when derived work runs past the date that isn't negotiable.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS site_address     TEXT;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS hard_finish_date DATE;
+  `);
+
+  /* ==================================================================
+   * Daily start times.
+   *
+   * schedule_tasks.start_time is the time the crew starts each day of a
+   * phase, as 'HH:MM' text — no timezone, the same way dates are plain
+   * 'YYYY-MM-DD' here. NULL means no time was set and the crew works
+   * their normal hours.
+   *
+   * schedule_task_day_times overrides that for one specific day, for the
+   * morning a crew has to be on site at 6 for a delivery. A row whose
+   * start_time is NULL means "no time set on this day" and overrides the
+   * phase default with nothing, which is how a single day is exempted.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS start_time TEXT;
+    ALTER TABLE schedule_tasks DROP CONSTRAINT IF EXISTS schedule_tasks_start_time_check;
+    ALTER TABLE schedule_tasks ADD CONSTRAINT schedule_tasks_start_time_check
+      CHECK (start_time IS NULL OR start_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$');
+
+    CREATE TABLE IF NOT EXISTS schedule_task_day_times (
+      id         SERIAL PRIMARY KEY,
+      task_id    INTEGER NOT NULL REFERENCES schedule_tasks(id) ON DELETE CASCADE,
+      day        DATE NOT NULL,
+      start_time TEXT CHECK (start_time IS NULL OR start_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sched_day_times_task_day
+      ON schedule_task_day_times(task_id, day);
+  `);
+
+  /* ==================================================================
+   * Crew notes: job-specific messages to the people working it.
+   *
+   * Separate from the `notes` table (internal job notes) because these are
+   * written to be read by the crew — they show up on every assignee's own
+   * schedule and in the schedule email. Pinned notes stay at the top of
+   * the list however old they are.
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crew_notes (
+      id          SERIAL PRIMARY KEY,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      body        TEXT NOT NULL,
+      pinned      BOOLEAN NOT NULL DEFAULT FALSE,
+      author_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      author_name TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_crew_notes_project
+      ON crew_notes(project_id, pinned DESC, created_at DESC);
+  `);
+
+  /* ==================================================================
+   * Change reasons are no longer only for published schedules.
+   *
+   * Moving a phase's dates, its duration, its link to another phase or a
+   * job's hard finish date now always carries a reason, published or not,
+   * so a job's history answers "what moved, and why" from the first plan
+   * onwards. Rows logged before a publish have a NULL version, and
+   * task_id is NULL for a change to the job itself rather than a phase.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE schedule_changes ALTER COLUMN version DROP NOT NULL;
+    ALTER TABLE schedule_changes DROP CONSTRAINT IF EXISTS schedule_changes_kind_check;
+    ALTER TABLE schedule_changes ADD CONSTRAINT schedule_changes_kind_check
+      CHECK (kind IN ('added','updated','deleted','job'));
+  `);
 }

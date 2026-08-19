@@ -178,9 +178,21 @@ export interface Project {
   status: ProjectStatus;
   progress: number;
   location: string | null;
+  /**
+   * The full street address crews drive to. `location` stays the short
+   * "City, ST" label used on quotes and lists; this is the mappable one the
+   * schedule shows the crew.
+   */
+  site_address: string | null;
   start_date: string | null;
   end_date: string | null;
   due_date: string | null;
+  /**
+   * A finish date that cannot move — a contractual or customer commitment.
+   * `due_date` is the target; this is the promise, and the schedule warns
+   * harder when derived work runs past it.
+   */
+  hard_finish_date: string | null;
   invoice_numbers: string | null;
   invoice_notes: string | null;
   created_at: string;
@@ -308,10 +320,25 @@ export interface ScheduleTask {
   /** Working days to wait after the predecessor's finish (or start). */
   lag_days: number;
   status: TaskStatus;
+  /**
+   * What time the crew starts each day of this phase, as 'HH:MM' (24-hour),
+   * or null when no time is set and they work their normal hours. Individual
+   * days can override it — see `day_times` on ScheduleTaskRow.
+   */
+  start_time: string | null;
   notes: string | null;
   position: number;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * A start time set on one specific day of a phase, overriding the phase's own
+ * `start_time`. A row whose `start_time` is null clears the time for that day.
+ */
+export interface TaskDayTime {
+  day: string;
+  start_time: string | null;
 }
 
 /**
@@ -338,10 +365,33 @@ export type ScheduleTaskRow = ScheduleTask & {
   project_name: string;
   customer: string;
   location: string | null;
+  /** The job's site address, so the crew views never need a second query. */
+  site_address: string | null;
   project_status: ProjectStatus;
   project_due_date: string | null;
+  /** The job's immovable finish date, when it has one. */
+  project_hard_finish_date: string | null;
   assignees: ScheduleAssignee[];
+  /** Per-day start-time overrides for this phase, ascending by day. */
+  day_times: TaskDayTime[];
 };
+
+/**
+ * A message written for the people working a job — gate codes, parking, who to
+ * ask for on site. Shown on every assignee's own schedule, unlike the internal
+ * job notes in `Note`.
+ */
+export interface CrewNote {
+  id: number;
+  project_id: number;
+  body: string;
+  /** Pinned notes sort to the top however old they are. */
+  pinned: boolean;
+  author_id: number | null;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+}
 
 /**
  * A job whose schedule has gone out to the crew. Once a job has one of these,
@@ -359,19 +409,24 @@ export interface SchedulePublication {
   published_by_name?: string | null;
 }
 
-/** One logged change to a published schedule: what moved, and why. */
+/**
+ * One logged change to a job's schedule: what moved, and why. Logged whether or
+ * not the schedule has been published — anything that moves dates carries a
+ * reason from the first plan onwards.
+ */
 export interface ScheduleChange {
   id: number;
   project_id: number;
   task_id: number | null;
   /** Copied at write time so history survives the phase being deleted. */
   task_name: string | null;
-  kind: 'added' | 'updated' | 'deleted';
+  /** 'job' is a change to the job itself (its hard finish date), not a phase. */
+  kind: 'added' | 'updated' | 'deleted' | 'job';
   /** Auto-generated, e.g. "Start Mar 3 → Mar 5; duration 5 → 7 days". */
   summary: string;
   /** Typed by whoever made the change. */
   reason: string;
-  /** The published version the change came after. */
+  /** The published version the change came after; null before the first publish. */
   version: number | null;
   changed_by: number | null;
   created_at: string;
