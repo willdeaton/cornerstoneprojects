@@ -16,6 +16,7 @@ import {
   listHolidays,
   getPublishedVersion,
   listScheduleChanges,
+  listCrewNotes,
 } from '@/lib/schedule-data';
 import { computeSchedule, projectedEnd } from '@/lib/schedule-math';
 import { money, shortDate } from '@/lib/format';
@@ -27,6 +28,7 @@ import { ProjectHeaderActions } from './ProjectHeaderActions';
 import { ProjectFiles } from './ProjectFiles';
 import { InvoiceSection } from './InvoiceSection';
 import { ScheduleSection } from './ScheduleSection';
+import { CrewNotesSection } from './CrewNotesSection';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,14 +47,16 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
   const invoices = await listProjectInvoices(id);
-  const [scheduleTasks, holidays, workers, subs, publication, scheduleChanges] = await Promise.all([
-    listScheduleTasks({ projectId: id }),
-    listHolidays(),
-    listActiveWorkers(),
-    listSubcontractors({ activeOnly: true }),
-    getPublishedVersion(id),
-    listScheduleChanges(id),
-  ]);
+  const [scheduleTasks, holidays, workers, subs, publication, scheduleChanges, crewNotes] =
+    await Promise.all([
+      listScheduleTasks({ projectId: id }),
+      listHolidays(),
+      listActiveWorkers(),
+      listSubcontractors({ activeOnly: true }),
+      getPublishedVersion(id),
+      listScheduleChanges(id),
+      listCrewNotes(id),
+    ]);
   const holidayDays = holidays.map((h) => h.day);
   // Projected finish = the latest end across the scheduled phases, chains resolved.
   const projectedFinish = projectedEnd(
@@ -98,12 +102,25 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
               ''
             )}
           </p>
+          {project.site_address && (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                project.site_address
+              )}`}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 block text-sm font-medium text-brand-green-dark hover:underline"
+              title="Directions to the job site"
+            >
+              {project.site_address}
+            </a>
+          )}
         </div>
         <ProjectHeaderActions project={project} />
       </div>
 
       {/* Summary strip */}
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-6">
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-7">
         <Stat label="Contract Value" value={money(project.value)} />
         <Stat label="Hours Logged" value={`${hours.toFixed(1)}h`} />
         <Stat label="Start" value={shortDate(project.start_date)} />
@@ -111,9 +128,26 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
         <Stat
           label="Projected Finish"
           value={shortDate(projectedFinish)}
-          alert={!!(projectedFinish && project.due_date && projectedFinish > project.due_date)}
+          alert={
+            !!(
+              projectedFinish &&
+              ((project.due_date && projectedFinish > project.due_date) ||
+                (project.hard_finish_date && projectedFinish > project.hard_finish_date))
+            )
+          }
         />
         <Stat label="Due" value={shortDate(project.due_date)} />
+        <Stat
+          label="Must Finish By"
+          value={shortDate(project.hard_finish_date)}
+          alert={
+            !!(
+              projectedFinish &&
+              project.hard_finish_date &&
+              projectedFinish > project.hard_finish_date
+            )
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -134,6 +168,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
               name: project.name,
               customer: project.customer,
               due_date: project.due_date,
+              hard_finish_date: project.hard_finish_date,
             }}
             tasks={scheduleTasks}
             workers={workers.map((w) => ({ id: w.id, name: w.name, role: w.role }))}
@@ -152,6 +187,8 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
             changes={scheduleChanges}
             canUnpublish={user.role === 'admin'}
           />
+
+          <CrewNotesSection projectId={project.id} notes={crewNotes} />
 
           <InvoiceSection project={project} invoices={invoices} />
 

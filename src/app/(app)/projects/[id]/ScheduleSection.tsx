@@ -9,6 +9,7 @@ import {
   isSplitPattern,
   maskLabel,
   projectedEnd,
+  timeLabel,
   workedSegments,
 } from '@/lib/schedule-math';
 import type { ScheduleChange, ScheduleTaskRow } from '@/lib/types';
@@ -20,6 +21,7 @@ import {
   type WorkerOption,
 } from '@/app/(app)/schedule/TaskModal';
 import { PublishBar, ScheduleHistory, type PublishedInfo } from '@/app/(app)/schedule/PublishBar';
+import { HardFinishControl } from '@/app/(app)/schedule/HardFinishControl';
 
 const STATUS_BADGE: Record<ScheduleTaskRow['status'], string> = {
   not_started: 'bg-gray-100 text-gray-700',
@@ -36,6 +38,9 @@ const STATUS_BAR: Record<ScheduleTaskRow['status'], string> = {
  * This job's phases in the order they actually happen, with a strip showing how
  * they overlap across the job's own span. Dates are derived from the dependency
  * chain by the same solver the Schedule page uses.
+ *
+ * The change history sits at the bottom whether or not the schedule has been
+ * published — every move of these dates is recorded with the reason for it.
  */
 export function ScheduleSection({
   project,
@@ -54,7 +59,7 @@ export function ScheduleSection({
   holidays: string[];
   /** Publish state for this job, or null if its schedule hasn't gone out. */
   published?: PublishedInfo | null;
-  /** Reasons logged since it was published, newest first. */
+  /** Reasons logged against this job, newest first — publishing isn't required. */
   changes?: ScheduleChange[];
   canUnpublish?: boolean;
 }) {
@@ -95,6 +100,11 @@ export function ScheduleSection({
   }, [tasks, holidays]);
 
   const slipping = !!(projected && project.due_date && projected > project.due_date);
+  const missingHardFinish = !!(
+    projected &&
+    project.hard_finish_date &&
+    projected > project.hard_finish_date
+  );
 
   return (
     <div className="card p-5">
@@ -105,7 +115,15 @@ export function ScheduleSection({
             projectId={project.id}
             projectName={project.name}
             published={published}
+            changeCount={changes.length}
             canUnpublish={canUnpublish}
+            compact={false}
+          />
+          <HardFinishControl
+            projectId={project.id}
+            projectName={project.name}
+            hardFinishDate={project.hard_finish_date ?? null}
+            projectedEnd={projected}
             compact={false}
           />
         </div>
@@ -130,7 +148,9 @@ export function ScheduleSection({
                 Projected Finish
               </span>
               <p
-                className={`text-lg font-bold ${slipping ? 'text-amber-700' : 'text-brand-ink'}`}
+                className={`text-lg font-bold ${
+                  missingHardFinish ? 'text-red-700' : slipping ? 'text-amber-700' : 'text-brand-ink'
+                }`}
               >
                 {shortDate(projected)}
               </p>
@@ -143,7 +163,26 @@ export function ScheduleSection({
                 <p className="text-lg font-bold text-brand-ink">{shortDate(project.due_date)}</p>
               </div>
             )}
-            {slipping && (
+            {project.hard_finish_date && (
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
+                  Must Finish By
+                </span>
+                <p
+                  className={`text-lg font-bold ${
+                    missingHardFinish ? 'text-red-700' : 'text-brand-ink'
+                  }`}
+                >
+                  {shortDate(project.hard_finish_date)}
+                </p>
+              </div>
+            )}
+            {missingHardFinish && (
+              <p className="text-sm font-semibold text-red-700">
+                The scheduled work runs past the date this job has to be finished by.
+              </p>
+            )}
+            {slipping && !missingHardFinish && (
               <p className="text-sm font-medium text-amber-700">
                 The scheduled work runs past this job&apos;s due date.
               </p>
@@ -195,6 +234,17 @@ export function ScheduleSection({
                     );
                   })}
                 </div>
+                {(task.start_time || (task.day_times ?? []).length > 0) && (
+                  <p className="mt-1.5 text-sm font-medium text-brand-ink">
+                    {task.start_time
+                      ? `Starts ${timeLabel(task.start_time)} daily`
+                      : 'Start time set on some days'}
+                    {(task.day_times ?? []).length > 0 &&
+                      ` · ${task.day_times.length} day${
+                        task.day_times.length === 1 ? '' : 's'
+                      } with their own time`}
+                  </p>
+                )}
                 {task.assignees.length > 0 && (
                   <p className="mt-1.5 text-sm text-brand-gray">
                     {task.assignees
@@ -208,22 +258,20 @@ export function ScheduleSection({
             ))}
           </div>
 
-          {published && (
-            <div className="mt-4 border-t border-black/5 pt-3">
-              <button
-                className="text-sm font-medium text-brand-green-dark hover:underline"
-                onClick={() => setShowHistory((s) => !s)}
-              >
-                {showHistory ? 'Hide' : 'Show'} change history
-                {changes.length > 0 ? ` (${changes.length})` : ''}
-              </button>
-              {showHistory && (
-                <div className="mt-2">
-                  <ScheduleHistory changes={changes} />
-                </div>
-              )}
-            </div>
-          )}
+          <div className="mt-4 border-t border-black/5 pt-3">
+            <button
+              className="text-sm font-medium text-brand-green-dark hover:underline"
+              onClick={() => setShowHistory((s) => !s)}
+            >
+              {showHistory ? 'Hide' : 'Show'} change history
+              {changes.length > 0 ? ` (${changes.length})` : ''}
+            </button>
+            {showHistory && (
+              <div className="mt-2">
+                <ScheduleHistory changes={changes} />
+              </div>
+            )}
+          </div>
         </>
       )}
 

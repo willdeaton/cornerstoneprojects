@@ -17,16 +17,23 @@ import {
   maskLabel,
   projectedEnd,
   rangesOverlap,
+  startTimeOn,
+  timeLabel,
   today,
+  weekAlignedRange,
+  weekBands,
+  weekStart,
   workedSegments,
   type ComputedWindow,
 } from '@/lib/schedule-math';
-import type { ScheduleTaskRow } from '@/lib/types';
+import type { ProjectStatus, ScheduleTaskRow } from '@/lib/types';
+import { PROJECT_STATUS_LABELS } from '@/lib/types';
 import { TaskModal, type ProjectOption, type SubOption, type WorkerOption } from './TaskModal';
 import { SendScheduleModal } from './SendScheduleModal';
 import { PublishBar, type PublishedInfo } from './PublishBar';
+import { HardFinishControl } from './HardFinishControl';
 
-/** Timeline widths offered by the range switcher. */
+/** Timeline widths offered by the range switcher, in whole weeks. */
 const SPANS = [
   { days: 7, label: 'Week' },
   { days: 14, label: '2 Weeks' },
@@ -35,19 +42,27 @@ const SPANS = [
 
 const DEFAULT_SPAN = 14;
 
-type Editing = { task?: ScheduleTaskRow } | null;
+type Editing = { task?: ScheduleTaskRow; projectId?: number } | null;
+
+/** A job as the board lists it — every live job, scheduled or not. */
+export interface BoardProject extends ProjectOption {
+  status: ProjectStatus;
+  /** The address the crew drives to, shown under the job name. */
+  site_address?: string | null;
+}
 
 /**
- * Where the timeline opens. Today, unless nothing is scheduled in that window —
- * then it jumps to the next work there is, so the board never opens blank while
- * a job sits a month out.
+ * Where the timeline opens. The week containing today, unless nothing is
+ * scheduled in that window — then it jumps to the week the next work starts in,
+ * so the board never opens blank while a job sits a month out.
  */
 function initialAnchor(tasks: ScheduleTaskRow[], holidays: string[]): string {
   const now = today();
   if (tasks.length === 0) return now;
   const { windows } = computeSchedule(tasks, { holidays: new Set(holidays) });
   const all = [...windows.values()];
-  if (all.some((w) => rangesOverlap(w.start, w.end, now, addDays(now, DEFAULT_SPAN - 1)))) {
+  const opening = weekAlignedRange(now, DEFAULT_SPAN);
+  if (all.some((w) => rangesOverlap(w.start, w.end, opening.start, opening.end))) {
     return now;
   }
   const starts = all
@@ -66,15 +81,19 @@ export function ScheduleBoard({
   subs,
   holidays,
   published,
+  changeCounts = {},
   canUnpublish = false,
 }: {
   tasks: ScheduleTaskRow[];
-  projects: ProjectOption[];
+  /** Every live job, including ones with nothing scheduled yet. */
+  projects: BoardProject[];
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
   /** Publish state per job id, for jobs that have been published. */
   published: Record<number, PublishedInfo>;
+  /** Logged schedule changes per job id, published or not. */
+  changeCounts?: Record<number, number>;
   /** Admins can undo a publish. */
   canUnpublish?: boolean;
 }) {
@@ -85,6 +104,10 @@ export function ScheduleBoard({
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
   const [editing, setEditing] = useState<Editing>(null);
   const [sending, setSending] = useState(false);
+  // Per-job expand/collapse, only for jobs the user has actually clicked. Jobs
+  // they haven't touched follow the default below, which tracks the visible
+  // range — so paging to a quiet week doesn't leave every row shut.
+  const [openState, setOpenState] = useState<Record<number, boolean>>({});
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
   const holidaySet = calendar.holidays;
@@ -103,9 +126,14 @@ export function ScheduleBoard({
   );
   const conflictedTasks = useMemo(() => conflictedTaskIds(conflicts), [conflicts]);
 
-  const days = useMemo(() => eachDay(anchor, addDays(anchor, spanDays - 1)), [anchor, spanDays]);
-  const rangeStart = days[0];
-  const rangeEnd = days[days.length - 1];
+  // Every view is a whole number of weeks starting on a Monday: the crew reads
+  // the schedule a week at a time, and a 2- or 6-week timeline that opened
+  // mid-week would put the same weekday in a different column every time.
+  const range = useMemo(() => weekAlignedRange(anchor, spanDays), [anchor, spanDays]);
+  const days = useMemo(() => eachDay(range.start, range.end), [range]);
+  const bands = useMemo(() => weekBands(days), [days]);
+  const rangeStart = range.start;
+  const rangeEnd = range.end;
   const now = today();
 
   const visible = useMemo(
@@ -123,7 +151,11 @@ export function ScheduleBoard({
     [tasks, projectFilter, assigneeFilter]
   );
 
-  // One group per job, ordered by when its work actually starts.
+  /**
+   * One group per job — every live job, not just the ones with phases. A job
+   * with nothing scheduled still needs to be on the board: that it hasn't been
+   * planned yet is exactly what a manager is looking for.
+   */
   const groups = useMemo(() => {
     const byProject = new Map<number, ScheduleTaskRow[]>();
     for (const t of visible) {
@@ -131,8 +163,14 @@ export function ScheduleBoard({
       if (list) list.push(t);
       else byProject.set(t.project_id, [t]);
     }
-    return [...byProject.values()]
-      .map((list) => {
+    // With a filter on, only jobs that match it are worth a row; with no
+    // filters, every live job appears.
+    const filtering = projectFilter !== 'all' || assigneeFilter !== 'all';
+
+    return projects
+      .filter((p) => !filtering || byProject.has(p.id))
+      .map((p) => {
+        const list = byProject.get(p.id) ?? [];
         const sorted = [...list].sort((a, b) => {
           const aw = windows.get(a.id)?.start ?? a.start_date;
           const bw = windows.get(b.id)?.start ?? b.start_date;
@@ -142,23 +180,39 @@ export function ScheduleBoard({
           sorted.map((t) => t.id),
           windows
         );
-        const head = sorted[0];
+        const start = sorted[0] ? windows.get(sorted[0].id)?.start ?? null : null;
         return {
-          projectId: head.project_id,
-          projectName: head.project_name,
-          customer: head.customer,
-          dueDate: head.project_due_date,
+          projectId: p.id,
+          projectName: p.name,
+          customer: p.customer,
+          address: p.site_address ?? null,
+          status: p.status,
+          dueDate: p.due_date,
+          hardFinish: p.hard_finish_date ?? null,
           projected: end,
-          slipping: !!(end && head.project_due_date && end > head.project_due_date),
+          start,
+          slipping: !!(end && p.due_date && end > p.due_date),
+          missingHardFinish: !!(end && p.hard_finish_date && end > p.hard_finish_date),
+          // Whether any of its work lands in the window on screen — the board
+          // opens these expanded and leaves the rest folded away.
+          inRange: sorted.some((t) => {
+            const w = windows.get(t.id);
+            return !!w && rangesOverlap(w.start, w.end, rangeStart, rangeEnd);
+          }),
           tasks: sorted,
         };
       })
       .sort((a, b) => {
-        const as = windows.get(a.tasks[0].id)?.start ?? '';
-        const bs = windows.get(b.tasks[0].id)?.start ?? '';
-        return as < bs ? -1 : as > bs ? 1 : 0;
+        // Jobs with work planned come first, in the order that work starts;
+        // unscheduled jobs sit together at the bottom, alphabetically.
+        if (a.start && b.start) return a.start < b.start ? -1 : a.start > b.start ? 1 : 0;
+        if (a.start) return -1;
+        if (b.start) return 1;
+        return a.projectName.localeCompare(b.projectName);
       });
-  }, [visible, windows]);
+  }, [projects, visible, windows, projectFilter, assigneeFilter, rangeStart, rangeEnd]);
+
+  const unplanned = groups.filter((g) => g.tasks.length === 0).length;
 
   // Just the version numbers, which is all the phase editor needs to decide
   // whether a change requires a reason.
@@ -176,8 +230,17 @@ export function ScheduleBoard({
     return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
   }, [tasks]);
 
+  function isOpen(g: { projectId: number; inRange: boolean }): boolean {
+    return openState[g.projectId] ?? g.inRange;
+  }
+
+  function setAllOpen(open: boolean) {
+    setOpenState(Object.fromEntries(groups.map((g) => [g.projectId, open])));
+  }
+
   // 220px of labels, then one equal column per day.
   const gridTemplate = `minmax(200px, 220px) repeat(${days.length}, minmax(26px, 1fr))`;
+  const weeks = Math.max(1, Math.round(days.length / 7));
 
   return (
     <div className="space-y-4">
@@ -186,20 +249,20 @@ export function ScheduleBoard({
         <div className="flex overflow-hidden rounded-lg border border-black/10">
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setAnchor(addDays(anchor, -spanDays))}
+            onClick={() => setAnchor(addDays(rangeStart, -7 * weeks))}
             aria-label="Earlier"
           >
             ‹
           </button>
           <button
             className="border-x border-black/10 px-3 py-2 text-sm font-medium text-brand-ink hover:bg-black/5"
-            onClick={() => setAnchor(today())}
+            onClick={() => setAnchor(weekStart(today()))}
           >
-            Today
+            This Week
           </button>
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setAnchor(addDays(anchor, spanDays))}
+            onClick={() => setAnchor(addDays(rangeStart, 7 * weeks))}
             aria-label="Later"
           >
             ›
@@ -269,113 +332,254 @@ export function ScheduleBoard({
 
       {groups.length === 0 ? (
         <div className="card p-10 text-center">
-          <p className="font-semibold text-brand-ink">Nothing scheduled yet</p>
+          <p className="font-semibold text-brand-ink">No jobs to show</p>
           <p className="mt-1 text-sm text-brand-gray">
-            {tasks.length === 0
-              ? 'Add a phase to a job to start building the schedule.'
-              : 'No scheduled work matches these filters.'}
+            {projects.length === 0
+              ? 'Add a project and it will appear here, ready to schedule.'
+              : 'No jobs match these filters.'}
           </p>
         </div>
       ) : (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <div className="min-w-[820px]">
-              {/* Date header */}
-              <div
-                className="grid border-b border-black/10 bg-black/[.02]"
-                style={{ gridTemplateColumns: gridTemplate }}
-              >
-                <div className="sticky left-0 z-20 bg-[#fafafa] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-brand-gray">
-                  {monthLabel(rangeStart, rangeEnd)}
-                </div>
-                {days.map((d) => (
-                  <div
-                    key={d}
-                    className={`border-l border-black/5 py-2 text-center text-[11px] leading-tight ${
-                      d === now
-                        ? 'font-bold text-brand-green-dark'
-                        : isOff(d, holidaySet)
-                          ? 'text-brand-gray/50'
-                          : 'text-brand-gray'
-                    }`}
-                  >
-                    <div>{fromDay(d).toLocaleDateString('en-US', { weekday: 'narrow' })}</div>
-                    <div>{fromDay(d).getDate()}</div>
-                  </div>
-                ))}
-              </div>
+        <>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-brand-gray">
+            <span>
+              {groups.length} {groups.length === 1 ? 'job' : 'jobs'}
+              {unplanned > 0 && ` · ${unplanned} with nothing scheduled yet`}
+            </span>
+            <button
+              className="font-medium text-brand-green-dark hover:underline"
+              onClick={() => setAllOpen(true)}
+            >
+              Expand all
+            </button>
+            <button
+              className="font-medium text-brand-green-dark hover:underline"
+              onClick={() => setAllOpen(false)}
+            >
+              Collapse all
+            </button>
+          </div>
 
-              {groups.map((g) => (
-                <div key={g.projectId} className="border-b border-black/10 last:border-0">
-                  {/* Job header row */}
-                  <div className="grid bg-black/[.02]" style={{ gridTemplateColumns: gridTemplate }}>
-                    <div className="sticky left-0 z-20 bg-[#fafafa] px-4 py-2">
-                      <Link
-                        href={`/projects/${g.projectId}`}
-                        className="block truncate text-sm font-semibold text-brand-ink hover:text-brand-green-dark"
-                      >
-                        {g.projectName}
-                      </Link>
-                      <p className="truncate text-xs text-brand-gray">{g.customer}</p>
-                      <p
-                        className={`mt-0.5 text-xs font-medium ${
-                          g.slipping ? 'text-amber-700' : 'text-brand-gray'
-                        }`}
-                        title={
-                          g.slipping
-                            ? `Projected finish is after the ${shortDate(g.dueDate)} due date`
-                            : undefined
-                        }
-                      >
-                        Ends {shortDate(g.projected)}
-                        {g.slipping && ' · past due date'}
-                      </p>
-                      <PublishBar
-                        projectId={g.projectId}
-                        projectName={g.projectName}
-                        published={published[g.projectId] ?? null}
-                        canUnpublish={canUnpublish}
-                      />
+          <div className="card overflow-hidden">
+            <div className="overflow-x-auto">
+              <div className="min-w-[820px]">
+                {/* Week band: each week's Monday, held until the next week starts. */}
+                <div
+                  className="grid border-b border-black/10 bg-black/[.04]"
+                  style={{ gridTemplateColumns: gridTemplate }}
+                >
+                  <div className="sticky left-0 z-20 bg-[#f4f4f4] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+                    {monthLabel(rangeStart, rangeEnd)}
+                  </div>
+                  {bands.map((b) => (
+                    <div
+                      key={b.monday}
+                      style={{ gridColumn: `${b.startIdx + 2} / ${b.startIdx + b.span + 2}` }}
+                      className={`border-l border-black/10 px-2 py-1.5 text-xs font-semibold ${
+                        b.monday === weekStart(now) ? 'text-brand-green-dark' : 'text-brand-gray'
+                      }`}
+                      title={`Week of ${shortDate(b.monday)}`}
+                    >
+                      Week of {mondayLabel(b.monday)}
                     </div>
-                    {days.map((d) => (
-                      <div key={d} className={`border-l border-black/5 ${cellTint(d, holidaySet, now)}`} />
-                    ))}
-                  </div>
-
-                  {/* One row per phase */}
-                  {g.tasks.map((t) => (
-                    <PhaseRow
-                      key={t.id}
-                      task={t}
-                      dates={windows.get(t.id)}
-                      days={days}
-                      rangeStart={rangeStart}
-                      rangeEnd={rangeEnd}
-                      now={now}
-                      holidaySet={holidaySet}
-                      gridTemplate={gridTemplate}
-                      conflicted={conflictedTasks.has(t.id)}
-                      onEdit={() => setEditing({ task: t })}
-                      published={!!published[t.project_id]}
-                    />
                   ))}
                 </div>
-              ))}
+
+                {/* Date header */}
+                <div
+                  className="grid border-b border-black/10 bg-black/[.02]"
+                  style={{ gridTemplateColumns: gridTemplate }}
+                >
+                  <div className="sticky left-0 z-20 bg-[#fafafa] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+                    Job / Phase
+                  </div>
+                  {days.map((d) => (
+                    <div
+                      key={d}
+                      className={`py-2 text-center text-[11px] leading-tight ${weekEdge(d)} ${
+                        d === now
+                          ? 'font-bold text-brand-green-dark'
+                          : isOff(d, holidaySet)
+                            ? 'text-brand-gray/50'
+                            : 'text-brand-gray'
+                      }`}
+                    >
+                      <div>{fromDay(d).toLocaleDateString('en-US', { weekday: 'narrow' })}</div>
+                      <div>{fromDay(d).getDate()}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {groups.map((g) => {
+                  const open = isOpen(g);
+                  return (
+                    <div key={g.projectId} className="border-b border-black/10 last:border-0">
+                      {/* Job header row — click the name row to fold the job away. */}
+                      <div
+                        className="grid bg-black/[.02]"
+                        style={{ gridTemplateColumns: gridTemplate }}
+                      >
+                        <div
+                          style={{ gridRow: 1, gridColumn: 1 }}
+                          className="sticky left-0 z-20 bg-[#fafafa] px-4 py-2"
+                        >
+                          <div className="flex items-start gap-1.5">
+                            <button
+                              onClick={() =>
+                                setOpenState((prev) => ({ ...prev, [g.projectId]: !open }))
+                              }
+                              className="mt-0.5 shrink-0 text-brand-gray hover:text-brand-ink"
+                              aria-expanded={open}
+                              aria-label={open ? `Collapse ${g.projectName}` : `Expand ${g.projectName}`}
+                              title={open ? 'Collapse this job' : 'Expand this job'}
+                            >
+                              <Chevron open={open} />
+                            </button>
+                            <div className="min-w-0">
+                              <Link
+                                href={`/projects/${g.projectId}`}
+                                className="block truncate text-sm font-semibold text-brand-ink hover:text-brand-green-dark"
+                              >
+                                {g.projectName}
+                              </Link>
+                              <p className="truncate text-xs text-brand-gray">{g.customer}</p>
+                              <p className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                                <span className={`badge ${STATUS_BADGE[g.status]}`}>
+                                  {PROJECT_STATUS_LABELS[g.status]}
+                                </span>
+                                <span className="text-[11px] text-brand-gray">
+                                  {g.tasks.length === 0
+                                    ? 'no phases yet'
+                                    : `${g.tasks.length} ${g.tasks.length === 1 ? 'phase' : 'phases'}`}
+                                </span>
+                              </p>
+                              {g.address && (
+                                <a
+                                  href={mapsUrl(g.address)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-0.5 block truncate text-[11px] text-brand-green-dark hover:underline"
+                                  title={`Directions to ${g.address}`}
+                                >
+                                  {g.address}
+                                </a>
+                              )}
+                              {g.tasks.length > 0 && (
+                                <p
+                                  className={`mt-0.5 text-xs font-medium ${
+                                    g.missingHardFinish
+                                      ? 'text-red-700'
+                                      : g.slipping
+                                        ? 'text-amber-700'
+                                        : 'text-brand-gray'
+                                  }`}
+                                  title={
+                                    g.missingHardFinish
+                                      ? `Projected finish is after the ${shortDate(g.hardFinish)} hard finish date`
+                                      : g.slipping
+                                        ? `Projected finish is after the ${shortDate(g.dueDate)} due date`
+                                        : undefined
+                                  }
+                                >
+                                  Ends {shortDate(g.projected)}
+                                  {g.missingHardFinish
+                                    ? ' · past hard finish'
+                                    : g.slipping
+                                      ? ' · past due date'
+                                      : ''}
+                                </p>
+                              )}
+                              <HardFinishControl
+                                projectId={g.projectId}
+                                projectName={g.projectName}
+                                hardFinishDate={g.hardFinish}
+                                projectedEnd={g.projected}
+                              />
+                              <PublishBar
+                                projectId={g.projectId}
+                                projectName={g.projectName}
+                                published={published[g.projectId] ?? null}
+                                changeCount={changeCounts[g.projectId] ?? 0}
+                                canUnpublish={canUnpublish}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        {days.map((d, i) => (
+                          <div
+                            key={d}
+                            style={{ gridRow: 1, gridColumn: i + 2 }}
+                            className={`min-h-[24px] ${weekEdge(d)} ${cellTint(d, holidaySet, now)}`}
+                          />
+                        ))}
+                        {/* Folded away, the job still shows the stretch its work
+                            covers — collapsing hides the phases, not the job. */}
+                        {!open && (
+                          <RollupBar
+                            start={g.start}
+                            end={g.projected}
+                            days={days}
+                            rangeStart={rangeStart}
+                            rangeEnd={rangeEnd}
+                            phases={g.tasks.length}
+                          />
+                        )}
+                      </div>
+
+                      {/* One row per phase, once the job is expanded */}
+                      {open &&
+                        (g.tasks.length === 0 ? (
+                          <div className="px-4 py-3">
+                            <p className="text-sm text-brand-gray">
+                              Nothing scheduled on this job yet.{' '}
+                              <button
+                                className="font-medium text-brand-green-dark hover:underline"
+                                onClick={() => setEditing({ projectId: g.projectId })}
+                              >
+                                Schedule its first phase
+                              </button>
+                              .
+                            </p>
+                          </div>
+                        ) : (
+                          g.tasks.map((t) => (
+                            <PhaseRow
+                              key={t.id}
+                              task={t}
+                              dates={windows.get(t.id)}
+                              days={days}
+                              rangeStart={rangeStart}
+                              rangeEnd={rangeEnd}
+                              now={now}
+                              holidaySet={holidaySet}
+                              gridTemplate={gridTemplate}
+                              conflicted={conflictedTasks.has(t.id)}
+                              onEdit={() => setEditing({ task: t })}
+                              published={!!published[t.project_id]}
+                            />
+                          ))
+                        ))}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
       <p className="text-xs text-brand-gray">
-        Weekends and non-working days are shaded and never count toward a phase&apos;s duration —
-        work that carries into the next week shows as separate stretches with the weekend as a gap. A
-        phase marked &ldquo;starts after&rdquo; another moves automatically when the one before it
-        slips, and can be set to start alongside it instead of waiting for it to finish.
+        Every live job is listed — expand one to see its phases, or whether it has any yet. Views
+        run in whole weeks from Monday, with each week&apos;s Monday held above its days. Weekends
+        and non-working days are shaded and never count toward a phase&apos;s duration. A phase
+        marked &ldquo;starts after&rdquo; another moves automatically when the one before it slips,
+        and moving any phase&apos;s dates asks for a reason that&apos;s kept with the job.
       </p>
 
       {editing && (
         <TaskModal
           task={editing.task}
+          initialProjectId={editing.projectId}
           allTasks={tasks}
           projects={projects}
           workers={workers}
@@ -398,6 +602,46 @@ export function ScheduleBoard({
           onSent={() => router.refresh()}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The whole job as one muted bar, drawn on its header row while it's collapsed.
+ * Deliberately a single span rather than the worked stretches: it answers "when
+ * is this job on site" at a glance, and expanding the job gives the real shape.
+ */
+function RollupBar({
+  start,
+  end,
+  days,
+  rangeStart,
+  rangeEnd,
+  phases,
+}: {
+  start: string | null;
+  end: string | null;
+  days: string[];
+  rangeStart: string;
+  rangeEnd: string;
+  phases: number;
+}) {
+  if (!start || !end || start > rangeEnd || end < rangeStart) return null;
+  const from = clamp(start, rangeStart, rangeEnd);
+  const to = clamp(end, rangeStart, rangeEnd);
+  const startIdx = days.indexOf(from);
+  const endIdx = days.indexOf(to);
+  if (startIdx < 0 || endIdx < startIdx) return null;
+
+  return (
+    <div
+      style={{ gridRow: 1, gridColumn: `${startIdx + 2} / ${endIdx + 3}` }}
+      className="z-10 my-2 flex h-6 items-center self-center overflow-hidden rounded bg-brand-gray/30 px-2 text-[11px] font-medium text-brand-ink"
+      title={`${shortDate(start)} – ${shortDate(end)} · ${phases} ${phases === 1 ? 'phase' : 'phases'}`}
+    >
+      <span className="truncate">
+        {phases} {phases === 1 ? 'phase' : 'phases'} · {shortDate(start)} – {shortDate(end)}
+      </span>
     </div>
   );
 }
@@ -433,6 +677,11 @@ function PhaseRow({
     .map((a) => (isSplitPattern(a.work_days) ? `${a.name} (${maskLabel(a.work_days)})` : a.name))
     .join(', ');
   const splitCrew = task.assignees.filter((a) => isSplitPattern(a.work_days));
+  const dayTimes = useMemo(
+    () => new Map((task.day_times ?? []).map((d) => [d.day, d.start_time])),
+    [task.day_times]
+  );
+  const specialDays = (task.day_times ?? []).length;
 
   // One bar per unbroken run of working days, clipped to the visible range. That
   // gap over a weekend is the point: a phase that spans two weeks reads as two
@@ -456,11 +705,19 @@ function PhaseRow({
       .filter((s) => s.startIdx >= 0 && s.endIdx >= s.startIdx);
   }, [dates, holidaySet, days, rangeStart, rangeEnd]);
 
+  const timeNote = task.start_time
+    ? `Starts ${timeLabel(task.start_time)} daily${
+        specialDays ? ` · ${specialDays} day${specialDays === 1 ? '' : 's'} differ` : ''
+      }`
+    : specialDays
+      ? `${specialDays} day${specialDays === 1 ? '' : 's'} with a set start time`
+      : '';
+
   const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}${
-    crew ? `\n${crew}` : ''
-  }${conflicted ? '\nDouble-booked with another job' : ''}${
-    published ? '\nPublished — changes need a reason' : ''
-  }`;
+    timeNote ? `\n${timeNote}` : ''
+  }${crew ? `\n${crew}` : ''}${task.site_address ? `\n${task.site_address}` : ''}${
+    conflicted ? '\nDouble-booked with another job' : ''
+  }${published ? '\nPublished — changes need a reason' : ''}`;
 
   return (
     <div className="grid" style={{ gridTemplateColumns: gridTemplate }}>
@@ -470,7 +727,7 @@ function PhaseRow({
       <button
         onClick={onEdit}
         style={{ gridRow: 1, gridColumn: 1 }}
-        className="sticky left-0 z-20 bg-white px-4 py-2 text-left hover:bg-black/[.03]"
+        className="sticky left-0 z-20 bg-white px-4 py-2 pl-9 text-left hover:bg-black/[.03]"
       >
         <span className="flex items-center gap-1.5">
           {dates?.driven && <LinkGlyph />}
@@ -479,6 +736,9 @@ function PhaseRow({
         <span className="block truncate text-xs text-brand-gray">
           {dates ? `${shortDate(dates.start)} – ${shortDate(dates.end)}` : '—'}
         </span>
+        {timeNote && (
+          <span className="block truncate text-[11px] font-medium text-brand-ink">{timeNote}</span>
+        )}
         {splitCrew.length > 0 && (
           <span className="block truncate text-[11px] text-brand-green-dark">
             {splitCrew.map((a) => `${a.name.split(' ')[0]}: ${maskLabel(a.work_days)}`).join(' · ')}
@@ -490,32 +750,39 @@ function PhaseRow({
         <div
           key={d}
           style={{ gridRow: 1, gridColumn: i + 2 }}
-          className={`h-11 border-l border-black/5 ${cellTint(d, holidaySet, now)}`}
+          className={`h-11 ${weekEdge(d)} ${cellTint(d, holidaySet, now)}`}
         />
       ))}
 
-      {segments.map((s, i) => (
-        <button
-          key={s.key}
-          onClick={onEdit}
-          title={tooltip}
-          style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
-          className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white transition-opacity hover:opacity-90 ${
-            BAR_TINT[task.status]
-          } ${conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''} ${
-            s.clippedLeft ? 'rounded-l-none' : ''
-          } ${s.clippedRight ? 'rounded-r-none' : ''}`}
-        >
-          {/* Only the first visible stretch carries the label; the rest are the
-              continuation of the same phase and stay clean. */}
-          {i === 0 && (
-            <span className="truncate">
-              {task.name}
-              {crew && <span className="opacity-80"> · {crew}</span>}
-            </span>
-          )}
-        </button>
-      ))}
+      {segments.map((s, i) => {
+        // The time on the first day of this stretch: what the crew reads off the
+        // bar, with any day that differs called out in the tooltip.
+        const start = days[s.startIdx];
+        const time = startTimeOn(start, task.start_time, dayTimes);
+        return (
+          <button
+            key={s.key}
+            onClick={onEdit}
+            title={tooltip}
+            style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
+            className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white transition-opacity hover:opacity-90 ${
+              BAR_TINT[task.status]
+            } ${conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''} ${
+              s.clippedLeft ? 'rounded-l-none' : ''
+            } ${s.clippedRight ? 'rounded-r-none' : ''}`}
+          >
+            {/* Only the first visible stretch carries the label; the rest are the
+                continuation of the same phase and stay clean. */}
+            {i === 0 && (
+              <span className="truncate">
+                {time && <span className="opacity-90">{timeLabel(time)} · </span>}
+                {task.name}
+                {crew && <span className="opacity-80"> · {crew}</span>}
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -524,6 +791,12 @@ const BAR_TINT: Record<ScheduleTaskRow['status'], string> = {
   not_started: 'bg-brand-gray',
   in_progress: 'bg-status-progress',
   complete: 'bg-brand-green',
+};
+
+const STATUS_BADGE: Record<ProjectStatus, string> = {
+  not_started: 'bg-gray-100 text-gray-700',
+  in_progress: 'bg-amber-100 text-amber-800',
+  completed: 'bg-brand-green/20 text-brand-green-dark',
 };
 
 /* --------------------------------------------------------- Conflict strip */
@@ -570,8 +843,23 @@ function cellTint(day: string, holidays: Set<string>, now: string): string {
   return isOff(day, holidays) ? 'bg-black/[.04]' : '';
 }
 
+/** A firmer rule where a new week starts, so week boundaries read at a glance. */
+function weekEdge(day: string): string {
+  return fromDay(day).getDay() === 1 ? 'border-l border-black/20' : 'border-l border-black/5';
+}
+
 function clamp(day: string, min: string, max: string): string {
   return day < min ? min : day > max ? max : day;
+}
+
+/** "Aug 17" — the Monday label carried across a week band. */
+function mondayLabel(monday: string): string {
+  return fromDay(monday).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/** A tappable directions link for an address typed by hand. */
+function mapsUrl(address: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 
 /** "March 2026", or "Mar – Apr 2026" when the range straddles two months. */
@@ -583,6 +871,26 @@ function monthLabel(from: string, to: string): string {
   }
   const short = { month: 'short' } as const;
   return `${a.toLocaleDateString('en-US', short)} – ${b.toLocaleDateString('en-US', { ...short, year: 'numeric' })}`;
+}
+
+/** Expand/collapse arrow for a job row. */
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`transition-transform ${open ? 'rotate-90' : ''}`}
+      aria-hidden
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
 }
 
 /** Marks a phase whose start is driven by the one before it. */

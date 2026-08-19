@@ -40,9 +40,11 @@ export async function createProjectAction(formData: FormData) {
     value: isNaN(value) ? 0 : value,
     status: (String(formData.get('status') ?? 'not_started') as ProjectStatus) || 'not_started',
     location: String(formData.get('location') ?? '').trim() || null,
+    site_address: String(formData.get('site_address') ?? '').trim() || null,
     start_date: String(formData.get('start_date') ?? '') || null,
     end_date: String(formData.get('end_date') ?? '') || null,
     due_date: String(formData.get('due_date') ?? '') || null,
+    hard_finish_date: String(formData.get('hard_finish_date') ?? '') || null,
   });
   revalidatePath('/projects');
   revalidatePath('/dashboard');
@@ -68,6 +70,14 @@ export async function setProjectProgressAction(id: number, progress: number) {
   revalidatePath('/projects');
 }
 
+/**
+ * Save the Edit Project form. `site_address` is the address the crew drives to —
+ * `location` stays the short label the lists and quotes use — and
+ * `hard_finish_date` is the date the job must be done by, as opposed to the
+ * due-date target. Moving a hard finish date from the schedule asks for a reason
+ * (see setHardFinishDateAction); editing the job's own details is where it's set
+ * up in the first place.
+ */
 export async function updateProjectDetailsAction(id: number, formData: FormData) {
   await requireUser();
   const value = parseFloat(String(formData.get('value') ?? '0').replace(/[$,]/g, ''));
@@ -77,9 +87,11 @@ export async function updateProjectDetailsAction(id: number, formData: FormData)
     category: String(formData.get('category') ?? '').trim() || null,
     value: isNaN(value) ? undefined : value,
     location: String(formData.get('location') ?? '').trim() || null,
+    site_address: String(formData.get('site_address') ?? '').trim() || null,
     start_date: String(formData.get('start_date') ?? '') || null,
     end_date: String(formData.get('end_date') ?? '') || null,
     due_date: String(formData.get('due_date') ?? '') || null,
+    hard_finish_date: String(formData.get('hard_finish_date') ?? '') || null,
   });
   revalidatePath(`/projects/${id}`);
   revalidatePath('/projects');

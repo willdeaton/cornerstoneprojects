@@ -55,11 +55,24 @@ export function AddProjectButton() {
               </select>
             </div>
           </div>
-          <div>
-            <label className="label">Location</label>
-            <input name="location" className="input" placeholder="City, KY" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Location</label>
+              <input name="location" className="input" placeholder="City, KY" />
+            </div>
+            <div>
+              <label className="label">Site Address</label>
+              <input
+                name="site_address"
+                className="input"
+                placeholder="1420 Industrial Dr, Louisville, KY 40213"
+              />
+              <p className="mt-1 text-xs text-brand-gray">
+                Shown to the crew on their schedule, with directions.
+              </p>
+            </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             <div>
               <label className="label">Start Date</label>
               <input name="start_date" type="date" className="input" />
@@ -71,6 +84,11 @@ export function AddProjectButton() {
             <div>
               <label className="label">Due Date</label>
               <input name="due_date" type="date" className="input" />
+            </div>
+            <div>
+              <label className="label">Must Finish By</label>
+              <input name="hard_finish_date" type="date" className="input" />
+              <p className="mt-1 text-xs text-brand-gray">Hard date — can&apos;t move.</p>
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">

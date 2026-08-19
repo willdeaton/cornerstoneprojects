@@ -179,6 +179,7 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
       Phase: s.phase,
       Start: s.start_date,
       End: s.end_date,
+      'Daily Start Time': s.start_time,
       'Working Days': s.working_days,
       Status: s.status,
       Follows: s.follows,

@@ -2,6 +2,7 @@ import 'server-only';
 import { getDb } from './db';
 import { q, one } from './data';
 import type {
+  CrewNote,
   DependsType,
   ProjectStatus,
   ScheduleChange,
@@ -90,14 +91,26 @@ const ACTIVE_STATUSES: ProjectStatus[] = ['not_started', 'in_progress'];
  */
 const TASK_SELECT = `
   SELECT t.*,
-         p.name     AS project_name,
-         p.customer AS customer,
-         p.location AS location,
-         p.status   AS project_status,
-         p.due_date AS project_due_date,
-         COALESCE(a.assignees, '[]'::json) AS assignees
+         p.name             AS project_name,
+         p.customer         AS customer,
+         p.location         AS location,
+         p.site_address     AS site_address,
+         p.status           AS project_status,
+         p.due_date         AS project_due_date,
+         p.hard_finish_date AS project_hard_finish_date,
+         COALESCE(a.assignees, '[]'::json) AS assignees,
+         COALESCE(dt.day_times, '[]'::json) AS day_times
     FROM schedule_tasks t
     JOIN projects p ON p.id = t.project_id
+    LEFT JOIN (
+      SELECT d.task_id,
+             json_agg(
+               json_build_object('day', d.day, 'start_time', d.start_time)
+               ORDER BY d.day
+             ) AS day_times
+        FROM schedule_task_day_times d
+       GROUP BY d.task_id
+    ) dt ON dt.task_id = t.id
     LEFT JOIN (
       SELECT sa.task_id,
              json_agg(
@@ -158,12 +171,14 @@ export async function createScheduleTask(t: {
   depends_type?: DependsType;
   lag_days?: number;
   status?: TaskStatus;
+  /** Daily start time as 'HH:MM', or null for the crew's normal hours. */
+  start_time?: string | null;
   notes?: string | null;
 }): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO schedule_tasks
-       (project_id, name, start_date, duration_days, depends_on_id, depends_type, lag_days, status, notes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+       (project_id, name, start_date, duration_days, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM schedule_tasks WHERE project_id = $1))
      RETURNING id`,
     [
@@ -175,6 +190,7 @@ export async function createScheduleTask(t: {
       t.depends_type ?? 'finish_to_start',
       t.lag_days ?? 0,
       t.status ?? 'not_started',
+      t.start_time ?? null,
       t.notes ?? null,
     ]
   );
@@ -193,6 +209,7 @@ export async function updateScheduleTask(
       | 'depends_type'
       | 'lag_days'
       | 'status'
+      | 'start_time'
       | 'notes'
       | 'position'
     >
@@ -263,6 +280,101 @@ export async function setTaskAssignees(taskId: number, assignees: AssigneeInput[
   } finally {
     client.release();
   }
+}
+
+/* ------------------------------------------------------- Day start times */
+
+/** One day of a phase given its own start time (null clears the day's time). */
+export interface DayTimeInput {
+  day: string;
+  start_time: string | null;
+}
+
+/**
+ * Replace a phase's per-day start times wholesale, mirroring how assignees are
+ * saved: the editor sends the full list and anything missing from it goes back
+ * to the phase's own daily start time.
+ */
+export async function setTaskDayTimes(taskId: number, days: DayTimeInput[]): Promise<void> {
+  const db = await getDb();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM schedule_task_day_times WHERE task_id = $1', [taskId]);
+    for (const d of days) {
+      await client.query(
+        'INSERT INTO schedule_task_day_times (task_id, day, start_time) VALUES ($1,$2,$3)',
+        [taskId, d.day, d.start_time]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/* ------------------------------------------------------------ Crew notes */
+
+/**
+ * Job-specific messages for the crew, pinned ones first then newest. These are
+ * read by everyone booked on the job, so they're kept apart from the internal
+ * job notes in `notes`.
+ */
+export async function listCrewNotes(projectId: number): Promise<CrewNote[]> {
+  return q<CrewNote>(
+    `SELECT * FROM crew_notes WHERE project_id = $1
+      ORDER BY pinned DESC, created_at DESC, id DESC`,
+    [projectId]
+  );
+}
+
+/** Crew notes for several jobs at once — one query for a worker's own schedule. */
+export async function listCrewNotesForProjects(projectIds: number[]): Promise<CrewNote[]> {
+  if (projectIds.length === 0) return [];
+  return q<CrewNote>(
+    `SELECT * FROM crew_notes WHERE project_id = ANY($1::int[])
+      ORDER BY project_id, pinned DESC, created_at DESC, id DESC`,
+    [projectIds]
+  );
+}
+
+export async function createCrewNote(n: {
+  project_id: number;
+  body: string;
+  pinned?: boolean;
+  author_id: number | null;
+  author_name: string;
+}): Promise<number> {
+  const row = await one<{ id: number }>(
+    `INSERT INTO crew_notes (project_id, body, pinned, author_id, author_name)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [n.project_id, n.body, n.pinned ?? false, n.author_id, n.author_name]
+  );
+  return row!.id;
+}
+
+export async function updateCrewNote(
+  id: number,
+  fields: Partial<Pick<CrewNote, 'body' | 'pinned'>>
+): Promise<void> {
+  const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (entries.length === 0) return;
+  const set = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
+  await q(`UPDATE crew_notes SET ${set}, updated_at = now() WHERE id = $${entries.length + 1}`, [
+    ...entries.map(([, v]) => v),
+    id,
+  ]);
+}
+
+export async function getCrewNote(id: number): Promise<CrewNote | undefined> {
+  return one<CrewNote>('SELECT * FROM crew_notes WHERE id = $1', [id]);
+}
+
+export async function deleteCrewNote(id: number): Promise<void> {
+  await q('DELETE FROM crew_notes WHERE id = $1', [id]);
 }
 
 /**

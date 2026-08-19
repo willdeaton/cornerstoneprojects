@@ -16,26 +16,34 @@ export interface PublishedInfo {
   version: number;
   published_at: string;
   published_by_name?: string | null;
-  /** How many changes have been logged since it was first published. */
+  /** How many changes have been logged against the job, published or not. */
   changeCount?: number;
 }
 
 /**
  * Publish state for one job, as a badge plus the actions around it. Publishing
- * says "the crew has these dates"; from then on the phase editor requires a
- * reason for anything that moves work or people, and those reasons are readable
- * here.
+ * says "the crew has these dates": from then on the phase editor requires a
+ * reason for anything that moves work or people, not just for the dates, which
+ * always need one. Either way the reasons are readable here — the change
+ * history opens whether or not the job has been published.
  */
 export function PublishBar({
   projectId,
   projectName,
   published,
+  changeCount = 0,
   canUnpublish = false,
   compact = true,
 }: {
   projectId: number;
   projectName: string;
   published: PublishedInfo | null;
+  /**
+   * Logged changes for this job. Read from `published` when it's set; passed
+   * separately so an unpublished job can still show its history — dates that
+   * move are recorded from the first plan onwards.
+   */
+  changeCount?: number;
   canUnpublish?: boolean;
   /** Compact renders inside the timeline's job header; false is roomier. */
   compact?: boolean;
@@ -61,7 +69,11 @@ export function PublishBar({
   }
 
   async function unpublish() {
-    if (!confirm(`Un-publish the schedule for "${projectName}"? Changes will stop asking for a reason.`)) {
+    if (
+      !confirm(
+        `Un-publish the schedule for "${projectName}"? Crew and start-time changes will stop asking for a reason — moving dates still will.`
+      )
+    ) {
       return;
     }
     setBusy(true);
@@ -78,6 +90,7 @@ export function PublishBar({
   }
 
   const text = compact ? 'text-[11px]' : 'text-xs';
+  const changes = published?.changeCount ?? changeCount;
 
   return (
     <div className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 ${text}`}>
@@ -96,9 +109,7 @@ export function PublishBar({
             onClick={openHistory}
             disabled={busy}
           >
-            {published.changeCount
-              ? `${published.changeCount} change${published.changeCount === 1 ? '' : 's'}`
-              : 'Changes'}
+            {changes ? `${changes} change${changes === 1 ? '' : 's'}` : 'Changes'}
           </button>
           <button
             className="font-medium text-brand-gray hover:text-brand-ink hover:underline"
@@ -119,14 +130,24 @@ export function PublishBar({
           )}
         </>
       ) : (
-        <button
-          className="font-medium text-brand-green-dark hover:underline"
-          onClick={() => setPublishing(true)}
-          disabled={busy}
-          title="Lock these dates in as sent to the crew — later changes will need a reason"
-        >
-          Publish schedule
-        </button>
+        <>
+          <button
+            className="font-medium text-brand-green-dark hover:underline"
+            onClick={() => setPublishing(true)}
+            disabled={busy}
+            title="Lock these dates in as sent to the crew — crew and start-time changes will need a reason too"
+          >
+            Publish schedule
+          </button>
+          <button
+            className="font-medium text-brand-gray hover:text-brand-ink hover:underline"
+            onClick={openHistory}
+            disabled={busy}
+            title="Every change to this job's dates, and the reason given"
+          >
+            {changes ? `${changes} change${changes === 1 ? '' : 's'}` : 'Changes'}
+          </button>
+        </>
       )}
 
       {error && <span className="text-red-700">{error}</span>}
@@ -141,7 +162,7 @@ export function PublishBar({
             <p className="text-sm text-brand-gray">
               {published
                 ? `This makes the current dates version ${published.version + 1} — the new baseline the crew is working to. Changes after it still need a reason.`
-                : 'Marks these dates as the ones the crew has been given. From now on, changing dates, durations, phase links or crew on this job requires a reason, which is kept in the change history.'}
+                : 'Marks these dates as the ones the crew has been given. Moving dates already needs a reason; from now on so does changing crew, start times or phase notes, and every reason is kept in the change history.'}
             </p>
             <div>
               <label className="label">Note (optional)</label>
@@ -182,20 +203,26 @@ const KIND_LABEL: Record<ScheduleChange['kind'], string> = {
   added: 'Phase added',
   updated: 'Phase changed',
   deleted: 'Phase removed',
+  job: 'Job dates',
 };
 
 const KIND_BADGE: Record<ScheduleChange['kind'], string> = {
   added: 'bg-brand-green/15 text-brand-green-dark',
   updated: 'bg-amber-100 text-amber-800',
   deleted: 'bg-red-100 text-red-700',
+  job: 'bg-blue-100 text-blue-800',
 };
 
-/** The logged reasons for one job, newest first. */
+/**
+ * The logged reasons for one job, newest first — every move of the dates,
+ * whether or not the schedule had been published when it happened.
+ */
 export function ScheduleHistory({ changes }: { changes: ScheduleChange[] }) {
   if (changes.length === 0) {
     return (
       <p className="text-sm text-brand-gray">
-        Nothing has changed since this schedule was published.
+        Nothing has moved yet. Every change to this job&apos;s dates is recorded here with the
+        reason it was given.
       </p>
     );
   }
@@ -205,11 +232,13 @@ export function ScheduleHistory({ changes }: { changes: ScheduleChange[] }) {
         <li key={c.id} className="py-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`badge ${KIND_BADGE[c.kind]}`}>{KIND_LABEL[c.kind]}</span>
-            <span className="font-medium text-brand-ink">{c.task_name ?? 'A phase'}</span>
+            <span className="font-medium text-brand-ink">
+              {c.kind === 'job' ? 'This job' : c.task_name ?? 'A phase'}
+            </span>
             <span className="text-xs text-brand-gray">
               {dateTime(c.created_at)}
               {c.changed_by_name ? ` · ${c.changed_by_name}` : ''}
-              {c.version ? ` · after v${c.version}` : ''}
+              {c.version ? ` · after v${c.version}` : ' · before publishing'}
             </span>
           </div>
           <p className="mt-1 text-sm font-medium text-brand-ink">{c.reason}</p>

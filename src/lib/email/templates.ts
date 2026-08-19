@@ -121,10 +121,21 @@ export function buildJobCompletedEmail(recipient: Recipient, project: Project): 
 export interface ScheduleLine {
   /** Pre-formatted, e.g. "Mon, Mar 3 – Fri, Mar 7". */
   dates: string;
+  /** Pre-formatted start time ("7:00 AM"), or null when none is set. */
+  startTime: string | null;
   project: string;
   phase: string;
   location: string | null;
+  /** The full site address the crew drives to, when the job has one. */
+  address: string | null;
   notes: string | null;
+  /** Job-specific messages for the crew, newest first. */
+  crewNotes: string[];
+}
+
+/** A tappable directions link for an address typed by hand. */
+function mapsUrl(address: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 
 /**
@@ -143,14 +154,24 @@ function scheduleTable(lines: ScheduleLine[]): string {
     .map(
       (l) => `
         <tr>
-          <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top;white-space:nowrap;font-weight:bold">${esc(l.dates)}</td>
+          <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top;white-space:nowrap;font-weight:bold">
+            ${esc(l.dates)}
+            ${l.startTime ? `<br /><span style="color:#4a7a2b">Start ${esc(l.startTime)}</span>` : ''}
+          </td>
           <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
             ${esc(l.project)}
-            ${l.location ? `<br /><span style="${MUTED}">${esc(l.location)}</span>` : ''}
+            ${l.address ? `<br /><a href="${mapsUrl(l.address)}" style="color:#4a7a2b">${esc(l.address)}</a>` : ''}
+            ${l.location && l.location !== l.address ? `<br /><span style="${MUTED}">${esc(l.location)}</span>` : ''}
           </td>
           <td style="padding:10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
             ${esc(l.phase)}
             ${l.notes ? `<br /><span style="${MUTED}">${esc(l.notes)}</span>` : ''}
+            ${l.crewNotes
+              .map(
+                (n) =>
+                  `<br /><span style="color:#1f2421">Note: ${esc(n)}</span>`
+              )
+              .join('')}
           </td>
         </tr>`
     )
@@ -177,8 +198,10 @@ export function buildScheduleEmail(
         <p>${hello}</p>
         <p>Here's your schedule for <strong>${span}</strong>:</p>
         ${scheduleTable(lines)}
-        <p style="${MUTED}">Dates can shift as jobs move — this is the plan as of
-        today. Check with your manager before making travel plans around it.</p>
+        <p style="${MUTED}">Start times and addresses are shown where they're set —
+        tap an address for directions. Dates can shift as jobs move: this is the
+        plan as of today, so check with your manager before making travel plans
+        around it.</p>
         ${SIGNOFF}
       </div>
     `,

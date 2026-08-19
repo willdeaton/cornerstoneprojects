@@ -8,17 +8,21 @@ import {
   DAY_LABELS,
   DAY_MASK_WEEKDAYS,
   computeSchedule,
+  eachDay,
+  fromDay,
   isSplitPattern,
+  isWorkingDay,
   maskDows,
   maskLabel,
   normalizeMask,
+  timeLabel,
   today,
   toggleDow,
   workedSegments,
   workingDaySpan,
 } from '@/lib/schedule-math';
-import { diffTask, needsReason, summarizeChanges } from '@/lib/schedule-diff';
-import type { DependsType, ScheduleTaskRow, TaskStatus } from '@/lib/types';
+import { diffTask, movesTimeline, needsReason, summarizeChanges } from '@/lib/schedule-diff';
+import type { DependsType, ScheduleTaskRow, TaskDayTime, TaskStatus } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
 import { saveTaskAction, deleteTaskAction } from '@/app/actions/schedule';
 
@@ -27,6 +31,8 @@ export interface ProjectOption {
   name: string;
   customer: string;
   due_date: string | null;
+  /** The date the job must be finished by, when it has one. */
+  hard_finish_date?: string | null;
 }
 export interface WorkerOption {
   id: number;
@@ -49,11 +55,14 @@ type Crew = Map<AssigneeKey, number | null>;
  * the real computed ones — this runs the same solver the timeline does, so a
  * phase that follows another shows where it actually lands before you save.
  *
- * Two things beyond plain dates:
+ * Beyond plain dates:
  *  · each person can be booked on only some weekdays (split days), so an
  *    employee can run this job Mon/Wed and be free elsewhere Tuesday;
- *  · once the job's schedule is published, saving requires a reason, and the
- *    exact wording that gets logged is previewed before you commit.
+ *  · the crew can be given a daily start time, with a different time on any
+ *    individual day (an early delivery, a late inspection);
+ *  · moving the dates always requires a reason, and once the job's schedule is
+ *    published so does moving people — the exact wording that gets logged is
+ *    previewed before you commit.
  */
 export function TaskModal({
   task,
@@ -63,6 +72,7 @@ export function TaskModal({
   subs,
   holidays,
   defaultProjectId,
+  initialProjectId,
   publishedVersions,
   onClose,
   onSaved,
@@ -77,13 +87,15 @@ export function TaskModal({
   holidays: string[];
   /** Pre-selects (and locks) the job when opened from a project page. */
   defaultProjectId?: number;
+  /** Pre-selects a job while still letting it be changed — used by the board. */
+  initialProjectId?: number;
   /** Published version per job id — jobs listed here need change reasons. */
   publishedVersions?: Record<number, number>;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [projectId, setProjectId] = useState<number>(
-    task?.project_id ?? defaultProjectId ?? projects[0]?.id ?? 0
+    task?.project_id ?? defaultProjectId ?? initialProjectId ?? projects[0]?.id ?? 0
   );
   const [name, setName] = useState(task?.name ?? '');
   const [startDate, setStartDate] = useState(task?.start_date ?? today());
@@ -94,6 +106,15 @@ export function TaskModal({
   );
   const [lag, setLag] = useState(String(task?.lag_days ?? 0));
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? 'not_started');
+  const [startTime, setStartTime] = useState(task?.start_time ?? '');
+  // Presence in the map is an override for that day; a null value is an
+  // override that says "no set time on this day".
+  const [dayTimes, setDayTimes] = useState<Map<string, string | null>>(
+    () => new Map((task?.day_times ?? []).map((d) => [d.day, d.start_time]))
+  );
+  const [showDayTimes, setShowDayTimes] = useState(
+    () => (task?.day_times ?? []).length > 0
+  );
   const [notes, setNotes] = useState(task?.notes ?? '');
   const [crew, setCrew] = useState<Crew>(
     () => new Map((task?.assignees ?? []).map((a) => [`${a.kind}:${a.ref_id}`, a.work_days]))
@@ -127,6 +148,8 @@ export function TaskModal({
     [crew]
   );
 
+  const draftStartTime = startTime.trim() === '' ? null : startTime.trim();
+
   // Run the solver over the job as it would be after this edit, so the preview
   // reflects the real chain rather than just the typed start date.
   const preview = useMemo(() => {
@@ -157,6 +180,27 @@ export function TaskModal({
     return windows.get(draftId) ?? null;
   }, [allTasks, projectId, task?.id, startDate, duration, lag, dependsOn, dependsType, calendar]);
 
+  // The phase's own working days, which is what a per-day time can be set on.
+  // Split-day patterns don't narrow this: a time belongs to the day of work, and
+  // whoever is on that day starts then.
+  const workingDays = useMemo(() => {
+    if (!preview) return [];
+    return eachDay(preview.start, preview.end).filter((d) => isWorkingDay(d, calendar));
+  }, [preview, calendar]);
+
+  /**
+   * The overrides worth saving: days that are still inside the phase's window.
+   * A phase that shrinks or moves drops the times for days it no longer covers,
+   * so a stale 6 AM never lingers on a day nobody works.
+   */
+  const draftDayTimes = useMemo<TaskDayTime[]>(() => {
+    const inWindow = new Set(workingDays);
+    return [...dayTimes.entries()]
+      .filter(([day]) => inWindow.has(day))
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([day, start_time]) => ({ day, start_time }));
+  }, [dayTimes, workingDays]);
+
   // The wording that gets logged, and whether a reason is required at all: an
   // edit that only marks progress doesn't need one, even on a published job.
   const changes = useMemo(() => {
@@ -179,6 +223,8 @@ export function TaskModal({
         depends_on_id: task.depends_on_id,
         depends_type: task.depends_type ?? 'finish_to_start',
         lag_days: task.lag_days,
+        start_time: task.start_time ?? null,
+        day_times: task.day_times ?? [],
         notes: task.notes,
         status: task.status,
         assignees: task.assignees ?? [],
@@ -190,6 +236,8 @@ export function TaskModal({
         depends_on_id: dependsOn,
         depends_type: dependsType,
         lag_days: Math.max(0, Math.round(Number(lag) || 0)),
+        start_time: draftStartTime,
+        day_times: draftDayTimes,
         notes: notes.trim() === '' ? null : notes.trim(),
         status,
         assignees: draftAssignees,
@@ -207,13 +255,19 @@ export function TaskModal({
     dependsOn,
     dependsType,
     lag,
+    draftStartTime,
+    draftDayTimes,
     notes,
     status,
     draftAssignees,
   ]);
 
-  const reasonRequired =
-    publishedVersion != null && (task ? !!changes && needsReason(changes) : true);
+  // Moving the dates always needs explaining; moving people needs it once the
+  // crew has the schedule. A new phase only needs it on a published job.
+  const reasonRequired = task
+    ? !!changes && needsReason(changes, publishedVersion != null)
+    : publishedVersion != null;
+  const timelineMoved = !!changes && movesTimeline(changes);
 
   function toggle(key: AssigneeKey) {
     setCrew((prev) => {
@@ -242,6 +296,20 @@ export function TaskModal({
     setCrew((prev) => new Map(prev).set(key, null));
   }
 
+  /** Give one day its own start time; an empty value means "no time that day". */
+  function setDayTime(day: string, value: string) {
+    setDayTimes((prev) => new Map(prev).set(day, value.trim() === '' ? null : value.trim()));
+  }
+
+  /** Drop a day's override so it follows the phase's daily start time again. */
+  function clearDayTime(day: string) {
+    setDayTimes((prev) => {
+      const next = new Map(prev);
+      next.delete(day);
+      return next;
+    });
+  }
+
   async function submit() {
     setError(null);
     setSaving(true);
@@ -255,6 +323,8 @@ export function TaskModal({
       depends_type: dependsType,
       lag_days: Math.max(0, Math.round(Number(lag) || 0)),
       status,
+      start_time: draftStartTime,
+      day_times: draftDayTimes,
       notes,
       assignees: draftAssignees,
       reason,
@@ -274,16 +344,19 @@ export function TaskModal({
       : `Delete "${task.name}"?`;
     if (!confirm(warning)) return;
 
-    // A published job needs a reason for the removal too.
+    // Dropping work out of a job moves its timeline, so the removal is explained
+    // whether or not the schedule has gone out.
     let why = reason.trim();
-    if (publishedVersion != null && !why) {
+    if (!why) {
       const typed = prompt(
-        `This job's schedule is published (v${publishedVersion}). Why is this phase being removed?`
+        publishedVersion != null
+          ? `This job's schedule is published (v${publishedVersion}). Why is this phase being removed?`
+          : 'Why is this phase being removed? The job keeps this with its change history.'
       );
       if (typed == null) return;
       why = typed.trim();
       if (!why) {
-        setError('A reason is required to change a published schedule.');
+        setError('A reason is required to remove a phase.');
         return;
       }
     }
@@ -297,8 +370,11 @@ export function TaskModal({
     }
   }
 
-  const dueDate = projects.find((p) => p.id === projectId)?.due_date ?? null;
+  const project = projects.find((p) => p.id === projectId);
+  const dueDate = project?.due_date ?? null;
+  const hardFinish = project?.hard_finish_date ?? null;
   const pastDue = preview && dueDate ? preview.end > dueDate : false;
+  const pastHardFinish = preview && hardFinish ? preview.end > hardFinish : false;
   // Working stretches of the phase itself — one per week, so the preview shows
   // the same weekend breaks the timeline does.
   const segments = preview ? workedSegments(preview.start, preview.end, calendar) : [];
@@ -307,14 +383,21 @@ export function TaskModal({
   return (
     <Modal open onClose={onClose} title={task ? 'Edit Phase' : 'Schedule Work'} wide>
       <div className="space-y-4">
-        {publishedVersion != null && (
+        {publishedVersion != null ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <p className="font-semibold">Published schedule (v{publishedVersion})</p>
             <p>
-              The crew has these dates. Any change to the dates, duration, links or crew needs a
-              reason, which is saved to this job&apos;s change history.
+              The crew has these dates. Any change to the dates, duration, links, start times or
+              crew needs a reason, which is saved to this job&apos;s change history.
             </p>
           </div>
+        ) : (
+          task && (
+            <p className="text-xs text-brand-gray">
+              Moving this phase&apos;s dates, duration or link needs a reason — it&apos;s kept in
+              this job&apos;s change history so you can look back on what moved and why.
+            </p>
+          )
         )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -446,13 +529,92 @@ export function TaskModal({
                   .join(', ')}
               </p>
             )}
-            {pastDue && (
+            {pastHardFinish && (
+              <p className="mt-1 font-semibold text-red-700">
+                Ends after this job&apos;s hard finish date of {shortDate(hardFinish)} — that date
+                can&apos;t move.
+              </p>
+            )}
+            {pastDue && !pastHardFinish && (
               <p className="mt-1 font-medium text-amber-700">
                 Ends after this job&apos;s due date of {shortDate(dueDate)}.
               </p>
             )}
           </div>
         )}
+
+        {/* Daily start times. The phase time covers every day; any single day
+            can be given its own, for the 6 AM delivery or the late inspection. */}
+        <div className="rounded-lg border border-black/10 p-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <label className="label">Daily Start Time</label>
+              <input
+                className="input w-40"
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-brand-gray">
+                {draftStartTime
+                  ? `The crew starts at ${timeLabel(draftStartTime)} each day of this phase.`
+                  : 'Leave empty and the crew works their normal hours.'}
+              </p>
+            </div>
+            {workingDays.length > 0 && (
+              <button
+                type="button"
+                className="text-sm font-medium text-brand-green-dark hover:underline"
+                onClick={() => setShowDayTimes((v) => !v)}
+              >
+                {showDayTimes ? 'Hide day-by-day times' : 'Set a different time on some days'}
+                {draftDayTimes.length > 0 && ` (${draftDayTimes.length})`}
+              </button>
+            )}
+          </div>
+
+          {showDayTimes && workingDays.length > 0 && (
+            <div className="mt-3 max-h-56 space-y-1 overflow-y-auto border-t border-black/5 pt-3">
+              {workingDays.map((day) => {
+                const overridden = dayTimes.has(day);
+                const value = overridden ? dayTimes.get(day) ?? '' : '';
+                return (
+                  <div key={day} className="flex items-center gap-2 text-sm">
+                    <span className="w-32 shrink-0 text-brand-ink">
+                      {fromDay(day).toLocaleDateString('en-US', {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                    <input
+                      className="input w-32"
+                      type="time"
+                      value={value}
+                      // A blank box on a day that already has an override means
+                      // "no set time that day", which is how one day opts out.
+                      onChange={(e) => setDayTime(day, e.target.value)}
+                    />
+                    {overridden ? (
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-brand-green-dark hover:underline"
+                        onClick={() => clearDayTime(day)}
+                        title="Follow the phase's daily start time again"
+                      >
+                        {value === '' ? 'no set time · use phase time' : 'use phase time'}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-brand-gray">
+                        {draftStartTime ? timeLabel(draftStartTime) : 'no set time'}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         <div>
           <label className="label">Who&apos;s On It</label>
@@ -524,10 +686,11 @@ export function TaskModal({
           </div>
         </div>
 
-        {publishedVersion != null && (
+        {(publishedVersion != null || (task && changes && changes.length > 0)) && (
           <div>
             <label className="label">
-              Reason For Change {reasonRequired ? '*' : <span className="text-brand-gray">(optional)</span>}
+              Reason For Change{' '}
+              {reasonRequired ? '*' : <span className="text-brand-gray">(optional)</span>}
             </label>
             <input
               className="input"
@@ -540,10 +703,15 @@ export function TaskModal({
                 Will be logged as: {summarizeChanges(changes)}
               </p>
             )}
+            {timelineMoved && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                This moves the timeline, so a reason is required.
+              </p>
+            )}
             {!reasonRequired && task && (
               <p className="mt-1 text-xs text-brand-gray">
                 {changes && changes.length > 0
-                  ? 'This edit only changes progress, so a reason is optional.'
+                  ? "The dates aren't moving, so a reason is optional — one you give is still kept in the history."
                   : 'Nothing has changed yet.'}
               </p>
             )}
@@ -574,7 +742,9 @@ export function TaskModal({
               disabled={saving || (reasonRequired && reason.trim() === '')}
               title={
                 reasonRequired && reason.trim() === ''
-                  ? 'A reason is required to change a published schedule'
+                  ? timelineMoved
+                    ? 'A reason is required when the dates move'
+                    : 'A reason is required to change a published schedule'
                   : undefined
               }
             >

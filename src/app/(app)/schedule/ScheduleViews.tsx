@@ -2,15 +2,15 @@
 
 import { useState } from 'react';
 import type { ScheduleTaskRow } from '@/lib/types';
-import { ScheduleBoard } from './ScheduleBoard';
+import { ScheduleBoard, type BoardProject } from './ScheduleBoard';
 import { CrewWeek } from './CrewWeek';
-import type { ProjectOption, SubOption, WorkerOption } from './TaskModal';
+import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
 type View = 'timeline' | 'crew';
 
 const VIEWS: { id: View; label: string; hint: string }[] = [
-  { id: 'timeline', label: 'Job Timeline', hint: 'Phases across every live job' },
+  { id: 'timeline', label: 'Job Timeline', hint: 'Every live job, expandable to its phases' },
   { id: 'crew', label: 'Crew Week', hint: 'What each employee is doing this week' },
 ];
 
@@ -26,14 +26,18 @@ export function ScheduleViews({
   subs,
   holidays,
   published,
+  changeCounts,
   canUnpublish,
 }: {
   tasks: ScheduleTaskRow[];
-  projects: ProjectOption[];
+  /** Every live job, so the timeline can list the unplanned ones too. */
+  projects: BoardProject[];
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
   published: Record<number, PublishedInfo>;
+  /** Logged schedule changes per job id. */
+  changeCounts: Record<number, number>;
   canUnpublish: boolean;
 }) {
   const [view, setView] = useState<View>('timeline');
@@ -63,6 +67,7 @@ export function ScheduleViews({
           subs={subs}
           holidays={holidays}
           published={published}
+          changeCounts={changeCounts}
           canUnpublish={canUnpublish}
         />
       ) : (

@@ -20,23 +20,47 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   per-job **time clock**.
 - **Schedule** — plan each job as phases with a duration in working days and
   optional links between them. Two views over the same data: **Job Timeline**
-  (phases per job, with double-bookings flagged) and **Crew Week** (one row per
-  employee, one column per day — what everyone is doing that week). Weekends and
-  non-working days never count toward a duration and are drawn as breaks, so
-  work carrying into the next week reads as separate stretches rather than
-  continuous weekend work.
+  (every live job, expandable to its phases, with double-bookings flagged) and
+  **Crew Week** (one row per employee, one column per day — what everyone is
+  doing that week). Weekends and non-working days never count toward a duration
+  and are drawn as breaks, so work carrying into the next week reads as separate
+  stretches rather than continuous weekend work.
+  - **Every job on the board** — jobs with nothing scheduled are listed too,
+    with their status, so it's obvious which ones haven't been planned yet.
+    Expand a job for its phases; collapsed, it still shows the stretch its work
+    covers.
+  - **Whole weeks from Monday** — the Week, 2-Week and 6-Week views always start
+    on a Monday and run to a Sunday, with each week's Monday held in a band
+    above its days, so the same weekday is always in the same column.
+  - **Change reasons** — moving a phase's dates, duration or link *always*
+    requires a typed reason, published or not. It's kept in the job's change
+    history with an auto-generated summary of what moved ("Start Mar 3 → Mar 5;
+    Duration 5 → 7 working days"), readable from the job or the timeline.
+    Marking a phase in progress or complete is progress, not a schedule change,
+    and needs no reason.
+  - **Publish** — publishing a job's schedule (explicitly, or by sending it out
+    from **Send Schedule**) marks the dates the crew has. After that, changes to
+    crew, start times and phase notes need a reason too.
+  - **Hard finish date** — a date a job *must* be done by, separate from the due
+    date it's aimed at. The schedule warns whenever the planned work runs past
+    it, and moving a date that was already promised is recorded with a reason.
+  - **Daily start times** — a phase can carry the time the crew starts each day,
+    with a different time on any individual day (a 6 AM delivery, a late
+    inspection). Start times show on the timeline, the crew week, everyone's own
+    schedule, and in the schedule email.
+  - **Site address & crew notes** — each job carries the full address crews drive
+    to (with a directions link) and a **Crew Notes** list — gate codes, parking,
+    who to ask for on site — written by managers and read by everyone booked on
+    the job.
   - **Split days** — each person on a phase can be booked on chosen weekdays, so
     an employee runs one job Mon/Wed and another Tuesday. Only days genuinely
     shared between two jobs count as a double-booking.
   - **Overlapping phases** — a phase can start a set number of working days
     after the previous phase *starts* (start-to-start), instead of waiting for
     it to finish, so a sub can work alongside the crew ahead of them.
-  - **Publish & change reasons** — publishing a job's schedule (explicitly, or
-    by sending it out from **Send Schedule**) marks the dates the crew has.
-    After that, any change to dates, durations, phase links or crew requires a
-    typed reason, kept with an auto-generated summary of what moved in the
-    job's change history. Marking a phase in progress or complete is progress,
-    not a schedule change, and needs no reason.
+  - **My Schedule** — workers get their own week: one card per day they're
+    booked, showing the start time, the job, the address, the phase notes and
+    the crew notes, with arrows to step through the weeks.
 - **Time Clock** — crew clock in/out of jobs, a live timer, weekly hours, "my
   recent time," and a live "on the clock now" panel.
 - **Users & Auth** — email/password login, sign out, and user management

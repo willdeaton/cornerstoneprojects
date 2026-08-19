@@ -33,7 +33,7 @@ import type {
   BackupSchedulePhase,
 } from './backup-types';
 import { hoursBetween } from './format';
-import { computeSchedule, maskLabel, workingDaySpan } from './schedule-math';
+import { computeSchedule, maskLabel, timeLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
@@ -135,9 +135,21 @@ export async function convertQuoteToProject(id: number): Promise<number | null> 
       return null;
     }
     const inserted = await client.query(
-      `INSERT INTO projects (quote_id, quote_number, customer, name, category, value, status)
-       VALUES ($1,$2,$3,$4,$5,$6,'not_started') RETURNING id`,
-      [id, quote.quote_number, quote.customer, quote.project_name ?? quote.customer, quote.category, quote.bid_value]
+      // The quote already knows where the work is, so the new job starts with an
+      // address the crew can be sent to: the job's own location if the quote
+      // named one, otherwise the customer's.
+      `INSERT INTO projects
+         (quote_id, quote_number, customer, name, category, value, status, site_address)
+       VALUES ($1,$2,$3,$4,$5,$6,'not_started',$7) RETURNING id`,
+      [
+        id,
+        quote.quote_number,
+        quote.customer,
+        quote.project_name ?? quote.customer,
+        quote.category,
+        quote.bid_value,
+        quote.project_location ?? quote.customer_address ?? null,
+      ]
     );
     const projectId = inserted.rows[0].id as number;
     await client.query("UPDATE quotes SET status = 'sold', updated_at = now() WHERE id = $1", [id]);
@@ -376,13 +388,19 @@ export async function createProject(p: {
   value: number;
   status?: ProjectStatus;
   location?: string | null;
+  /** Full site address the crew drives to. */
+  site_address?: string | null;
   start_date?: string | null;
   end_date?: string | null;
   due_date?: string | null;
+  /** A finish date that can't move, as opposed to the due-date target. */
+  hard_finish_date?: string | null;
 }): Promise<number> {
   const row = await one<{ id: number }>(
-    `INSERT INTO projects (customer, name, quote_number, category, value, status, location, start_date, end_date, due_date)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    `INSERT INTO projects
+       (customer, name, quote_number, category, value, status, location, site_address,
+        start_date, end_date, due_date, hard_finish_date)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
       p.customer,
       p.name,
@@ -391,9 +409,11 @@ export async function createProject(p: {
       p.value,
       p.status ?? 'not_started',
       p.location ?? null,
+      p.site_address ?? null,
       p.start_date ?? null,
       p.end_date ?? null,
       p.due_date ?? null,
+      p.hard_finish_date ?? null,
     ]
   );
   return row!.id;
@@ -407,9 +427,11 @@ export async function updateProject(
       | 'status'
       | 'progress'
       | 'due_date'
+      | 'hard_finish_date'
       | 'start_date'
       | 'end_date'
       | 'location'
+      | 'site_address'
       | 'value'
       | 'name'
       | 'category'
@@ -1600,6 +1622,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     depends_type: DependsType;
     lag_days: number;
     status: TaskStatus;
+    start_time: string | null;
     notes: string | null;
     position: number;
     crew: { name: string; work_days: number | null }[] | null;
@@ -1610,7 +1633,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     // pattern can be spelled out below.
     `SELECT t.id, t.project_id, p.name AS project_name, t.name,
             t.start_date, t.duration_days, t.depends_on_id, t.depends_type, t.lag_days,
-            t.status, t.notes, t.position,
+            t.status, t.start_time, t.notes, t.position,
             (SELECT json_agg(
                       json_build_object('name', COALESCE(u.name, s.name), 'work_days', sa.work_days)
                       ORDER BY COALESCE(u.name, s.name))
@@ -1643,6 +1666,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
       end_date: dates.end,
       working_days: workingDaySpan(dates.start, dates.end, calendar),
       status: r.status,
+      start_time: r.start_time ? timeLabel(r.start_time) : '',
       follows: (r.depends_on_id != null ? nameById.get(r.depends_on_id) : '') ?? '',
       crew: (r.crew ?? [])
         .map((c) => (c.work_days == null ? c.name : `${c.name} (${maskLabel(c.work_days)})`))
