@@ -83,7 +83,7 @@ export default async function SchedulePage() {
     <div>
       <PageHeader
         title="Schedule"
-        subtitle="Plan the work on the timeline, staff it a week at a time in the crew week, and send crews their dates"
+        subtitle="Plan the work on the timeline, staff it two weeks at a time in the crew week, and send crews their dates"
       />
       <ScheduleViews
         tasks={tasks}
