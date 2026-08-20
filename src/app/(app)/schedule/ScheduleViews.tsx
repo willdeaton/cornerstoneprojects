@@ -18,7 +18,7 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
   {
     id: 'crew',
     label: 'Crew Week',
-    hint: 'Staff that work: who is on which job each day, and when they start',
+    hint: 'Staff that work: two weeks at a time, who is on which job and phase each day, and when they start',
   },
 ];
 

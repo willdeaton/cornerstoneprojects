@@ -17,6 +17,7 @@ import {
   projectedEnd,
   rangesOverlap,
   today,
+  mondayLabel,
   weekAlignedRange,
   weekBands,
   weekStart,
@@ -847,11 +848,6 @@ function weekEdge(day: string): string {
 
 function clamp(day: string, min: string, max: string): string {
   return day < min ? min : day > max ? max : day;
-}
-
-/** "Aug 17" — the Monday label carried across a week band. */
-function mondayLabel(monday: string): string {
-  return fromDay(monday).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 /** A tappable directions link for an address typed by hand. */
