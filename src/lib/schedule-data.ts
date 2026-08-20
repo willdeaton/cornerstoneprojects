@@ -306,6 +306,59 @@ export async function addCrewDay(
   }
 }
 
+/**
+ * Book one person onto several days of a phase in one pass — what dropping a job
+ * card on somebody's name does, where "put them on this phase" means every day
+ * of it that's on screen.
+ *
+ * Same cap and same lock as `addCrewDay`, held across the whole run so a
+ * fortnight's worth of days can't slip past the budget one insert at a time.
+ * Days already booked for that person are skipped rather than failing the run,
+ * and once the phase is full the rest are left alone: the caller is told how
+ * many landed so it can say so.
+ */
+export async function addCrewDays(
+  taskId: number,
+  days: string[],
+  who: Omit<CrewDayInput, 'day'>,
+  capacity: number
+): Promise<{ booked: number; skipped: number; full: boolean }> {
+  const db = await getDb();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT id FROM schedule_tasks WHERE id = $1 FOR UPDATE', [taskId]);
+    const { rows } = await client.query<{ n: number }>(
+      'SELECT COUNT(*)::int AS n FROM schedule_crew_days WHERE task_id = $1',
+      [taskId]
+    );
+    let filled = rows[0]?.n ?? 0;
+    let booked = 0;
+    let skipped = 0;
+    for (const day of days) {
+      if (filled >= capacity) break;
+      const inserted = await client.query(
+        `INSERT INTO schedule_crew_days (task_id, day, user_id, subcontractor_id)
+         VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+        [taskId, day, who.kind === 'user' ? who.ref_id : null, who.kind === 'sub' ? who.ref_id : null]
+      );
+      if (inserted.rowCount) {
+        booked++;
+        filled++;
+      } else {
+        skipped++;
+      }
+    }
+    await client.query('COMMIT');
+    return { booked, skipped, full: filled >= capacity && booked + skipped < days.length };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** Take one person off one day of a phase. */
 export async function removeCrewDay(taskId: number, entry: CrewDayInput): Promise<void> {
   await q(

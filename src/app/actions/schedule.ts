@@ -21,6 +21,7 @@ import {
   unpublishSchedule,
   logScheduleChange,
   addCrewDay,
+  addCrewDays,
   removeCrewDay,
   pruneCrewDays,
   setTaskDayTimes,
@@ -544,6 +545,61 @@ export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionR
   }
 
   revalidateSchedule(task.project_id);
+  return { ok: true };
+}
+
+/** Booking one person across several days of a phase at once. */
+export interface CrewSpanFields {
+  task_id: number;
+  /** The days to book; anything outside the phase or non-working is dropped. */
+  days: string[];
+  kind: 'user' | 'sub';
+  ref_id: number;
+}
+
+/**
+ * Book one person onto every given day of a phase — what dropping a job card on
+ * somebody's name in the crew week means: "they're on this, for the days of it
+ * that are on screen."
+ *
+ * The phase's own rules still decide what lands: days outside its window or on a
+ * weekend are dropped before anything is written, and the crew-day budget stops
+ * the rest. A partial fill is a success, not an error — the message says how far
+ * it got so the manager can spread the remainder themselves.
+ */
+export async function assignCrewSpanAction(input: CrewSpanFields): Promise<ActionResult> {
+  await requireManager();
+  const task = await getScheduleTask(input.task_id);
+  if (!task) return { ok: false, error: 'That phase no longer exists.' };
+
+  const { windows, calendar } = await jobWindows(task.project_id);
+  const window = windows.get(task.id);
+  if (!window) return { ok: false, error: 'That phase has no dates to book against.' };
+
+  const days = [...new Set(input.days ?? [])]
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .filter((d) => d >= window.start && d <= window.end && isWorkingDay(d, calendar))
+    .sort();
+  if (days.length === 0) {
+    return {
+      ok: false,
+      error: `${task.name} runs ${shortDate(window.start)} – ${shortDate(window.end)} — none of those days are on it.`,
+    };
+  }
+
+  const budget = crewBudget(task, window, calendar);
+  const res = await addCrewDays(task.id, days, { kind: input.kind, ref_id: input.ref_id }, budget.capacity);
+  revalidateSchedule(task.project_id);
+
+  if (res.booked === 0 && res.full) {
+    return {
+      ok: false,
+      error: `${task.name} is fully staffed — ${budget.capacity} crew ${
+        budget.capacity === 1 ? 'day' : 'days'
+      } planned. Take someone off a day, or raise the crew it needs on the timeline.`,
+    };
+  }
+  if (res.booked === 0) return { ok: false, error: 'They were already on every one of those days.' };
   return { ok: true };
 }
 
