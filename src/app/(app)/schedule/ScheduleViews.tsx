@@ -81,13 +81,7 @@ export function ScheduleViews({
           canUnpublish={canUnpublish}
         />
       ) : (
-        <CrewWeek
-          tasks={tasks}
-          workers={workers}
-          subs={subs}
-          holidays={holidays}
-          published={published}
-        />
+        <CrewWeek tasks={tasks} workers={workers} holidays={holidays} published={published} />
       )}
     </div>
   );

@@ -370,6 +370,27 @@ export async function removeCrewDay(taskId: number, entry: CrewDayInput): Promis
 }
 
 /**
+ * Take one person off several days of a phase at once — a whole stretch of a
+ * job pulled off somebody in the crew week, or the days a card's editor
+ * un-ticked. An empty day list is a no-op rather than "every day".
+ */
+export async function removeCrewDays(
+  taskId: number,
+  days: string[],
+  who: Omit<CrewDayInput, 'day'>
+): Promise<number> {
+  if (days.length === 0) return 0;
+  const removed = await q<{ id: number }>(
+    `DELETE FROM schedule_crew_days
+      WHERE task_id = $1 AND day = ANY($2)
+        AND ${who.kind === 'user' ? 'user_id' : 'subcontractor_id'} = $3
+      RETURNING id`,
+    [taskId, days, who.ref_id]
+  );
+  return removed.length;
+}
+
+/**
  * Drop crew-day rows that no longer fall inside a phase's window — what a phase
  * that has been shortened or moved leaves behind. Called with the window the
  * solver just produced, so nobody stays booked on a day the phase isn't on.

@@ -23,6 +23,7 @@ import {
   addCrewDay,
   addCrewDays,
   removeCrewDay,
+  removeCrewDays,
   pruneCrewDays,
   setTaskDayTimes,
   createCrewNote,
@@ -612,6 +613,22 @@ export async function unassignCrewDayAction(input: CrewDayFields): Promise<Actio
   const task = await getScheduleTask(input.task_id);
   if (!task) return { ok: true };
   await removeCrewDay(task.id, { day: input.day, kind: input.kind, ref_id: input.ref_id });
+  revalidateSchedule(task.project_id);
+  return { ok: true };
+}
+
+/**
+ * Take one person off a run of days of a phase — the ✕ on a booking in the crew
+ * week, which pulls the whole stretch rather than making the manager click four
+ * days one at a time.
+ */
+export async function unassignCrewSpanAction(input: CrewSpanFields): Promise<ActionResult> {
+  await requireManager();
+  const task = await getScheduleTask(input.task_id);
+  if (!task) return { ok: true };
+  const days = [...new Set(input.days ?? [])].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+  if (days.length === 0) return { ok: true };
+  await removeCrewDays(task.id, days, { kind: input.kind, ref_id: input.ref_id });
   revalidateSchedule(task.project_id);
   return { ok: true };
 }

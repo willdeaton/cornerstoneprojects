@@ -41,14 +41,19 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     phase, so a phase that slips takes them with it and there's nothing to
     re-book. A subcontracted phase can still carry a headcount for the people we
     send alongside them — the supervisor — which the crew week books as usual.
-    Subs appear in the crew week (tick "Include subs") with their contracted days
-    shown dashed and un-clickable, and the same sub on two different jobs over
-    the same days is flagged as a double-booking exactly like an employee.
+    Subs have no rows in the crew week: they were engaged on the timeline and
+    their days follow the phase, so there is nothing to book. The phase's card
+    still says who covers it.
   - **Staffing a week** — pick a job card, then click the day cells of the
     people working it; the card counts its crew-days down as you go, and cells
-    stop offering to book once the phase is full. Click a booking to take
-    someone off that day. Drag a card onto a day to book that day, or onto
-    somebody's name to put them on every working day of the phase on screen.
+    stop offering to book once the phase is full. Drag a card onto a day to book
+    that day, or onto somebody's name to put them on every working day of the
+    phase on screen.
+  - **One bar per stretch** — consecutive days on the same job read as a single
+    bar across those columns rather than a chip repeated in each one; a gap, or a
+    day starting at a different time, ends the bar. Two jobs on one day stack the
+    row into two lanes. The **✕** on a bar takes that person off the whole
+    stretch (more than a day asks first).
   - **A job across several days at once** — with a card picked (or by grabbing a
     booking somebody already has), press and drag sideways along their row: every
     day the drag covers is booked in one pass, as far as the phase's budget goes.
@@ -68,7 +73,11 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     the crew starts, a different time on any individual day (a 6 AM delivery, a
     late inspection), the notes they read before turning up, and who is booked
     on each day. These live here rather than on the timeline because none of
-    them make sense without the days in front of you.
+    them make sense without the days in front of you. Clicking somebody's bar
+    opens the same card as *their* entry — the job's details (customer, phase,
+    dates, planned crew, location), plus the days they are on as tick-boxes over
+    the phase's whole range, so a stretch is pushed out, pulled back or split
+    right there. **Remove From Phase** takes them off it entirely.
   - **Every job on the board** — jobs with nothing scheduled are listed too,
     with their status, so it's obvious which ones haven't been planned yet.
     Expand a job for its phases; collapsed, it still shows the stretch its work

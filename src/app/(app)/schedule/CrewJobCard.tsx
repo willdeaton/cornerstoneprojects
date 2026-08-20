@@ -15,16 +15,39 @@ import {
 } from '@/lib/schedule-math';
 import { diffTask, needsReason, summarizeChanges } from '@/lib/schedule-diff';
 import type { ScheduleTaskRow, TaskDayTime } from '@/lib/types';
-import { saveCrewCardAction, unassignCrewDayAction } from '@/app/actions/schedule';
+import { TASK_STATUS_LABELS } from '@/lib/types';
+import {
+  assignCrewSpanAction,
+  saveCrewCardAction,
+  unassignCrewDayAction,
+  unassignCrewSpanAction,
+} from '@/app/actions/schedule';
+
+/** Whose booking is open, when the card was opened from somebody's row. */
+export interface CardPerson {
+  kind: 'user' | 'sub';
+  refId: number;
+  name: string;
+  /** Role for an employee, trade for a sub. */
+  detail: string | null;
+  /** True for the sub who holds the phase — their days follow its dates. */
+  contracted: boolean;
+}
 
 /**
- * One job's card, opened from the crew week.
+ * One job's card, opened from the crew week — from a phase's card in the work
+ * band, or by clicking somebody's booking in the grid.
  *
- * This is the crew-facing half of a phase: what time they start, which single
- * days start at a different time, and what they need to know before they turn
- * up. All of it belongs here rather than on the timeline because none of it
- * makes sense without the days in front of you — a 6 AM delivery is a fact
- * about a Tuesday, not about a bar on a Gantt chart.
+ * This is the crew-facing half of a phase: the job it belongs to, what time
+ * they start, which single days start at a different time, and what they need to
+ * know before they turn up. All of it belongs here rather than on the timeline
+ * because none of it makes sense without the days in front of you — a 6 AM
+ * delivery is a fact about a Tuesday, not about a bar on a Gantt chart.
+ *
+ * Opened from a person's booking it is that person's entry: the job's details,
+ * the days THEY are on, tickable one by one so a stretch can be stretched or
+ * trimmed here rather than back out on the grid, and a way to take them off the
+ * phase altogether.
  *
  * Who is booked shows here too, day by day, so a card is one place to read
  * "this is the job, this is the crew, this is when they start". On a
@@ -37,6 +60,7 @@ export function CrewJobCard({
   window,
   holidays,
   publishedVersion,
+  person,
   onClose,
   onSaved,
 }: {
@@ -46,6 +70,8 @@ export function CrewJobCard({
   holidays: string[];
   /** The job's published version, when its schedule has gone out. */
   publishedVersion?: number | null;
+  /** Set when the card was opened from one person's booking on the grid. */
+  person?: CardPerson;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -60,6 +86,20 @@ export function CrewJobCard({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+
+  /** The days this person is on the phase, as the editor has them now. */
+  const originalDays = useMemo(
+    () =>
+      new Set(
+        person
+          ? (task.crew_days ?? [])
+              .filter((c) => c.kind === person.kind && c.ref_id === person.refId)
+              .map((c) => c.day)
+          : []
+      ),
+    [task, person]
+  );
+  const [myDays, setMyDays] = useState<Set<string>>(originalDays);
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
 
@@ -141,26 +181,153 @@ export function CrewJobCard({
     else setError(res.error ?? 'Could not take them off that day.');
   }
 
+  /** Tick or untick one of this person's days on the phase. */
+  function toggleMyDay(day: string) {
+    setMyDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(day)) next.delete(day);
+      else next.add(day);
+      return next;
+    });
+  }
+
+  // What ticking and unticking days would actually change.
+  const addedDays = useMemo(
+    () => [...myDays].filter((d) => !originalDays.has(d)).sort(),
+    [myDays, originalDays]
+  );
+  const removedDays = useMemo(
+    () => [...originalDays].filter((d) => !myDays.has(d)).sort(),
+    [myDays, originalDays]
+  );
+  const daysChanged = addedDays.length > 0 || removedDays.length > 0;
+
   async function submit() {
     setError(null);
     setSaving(true);
-    const res = await saveCrewCardAction({
+
+    // The phase's own fields first — they're the half that can need a reason.
+    if (changes.length > 0 || reason.trim() !== '') {
+      const res = await saveCrewCardAction({
+        task_id: task.id,
+        start_time: draftStartTime,
+        day_times: draftDayTimes,
+        notes,
+        reason,
+      });
+      if (!res.ok) {
+        setError(res.error ?? 'Could not save.');
+        setSaving(false);
+        return;
+      }
+    }
+
+    // Then this person's days. Days come off before others go on, so trimming
+    // one end of a stretch frees the budget the other end needs.
+    if (person && !person.contracted && daysChanged) {
+      const who = { task_id: task.id, kind: person.kind, ref_id: person.refId };
+      if (removedDays.length > 0) {
+        const res = await unassignCrewSpanAction({ ...who, days: removedDays });
+        if (!res.ok) {
+          setError(res.error ?? 'Could not take them off those days.');
+          setSaving(false);
+          return;
+        }
+      }
+      if (addedDays.length > 0) {
+        const res = await assignCrewSpanAction({ ...who, days: addedDays });
+        if (!res.ok) {
+          setError(res.error ?? 'Could not book those days.');
+          setSaving(false);
+          return;
+        }
+      }
+    }
+
+    onSaved();
+  }
+
+  /** Take this person off the phase altogether. */
+  async function removeFromPhase() {
+    if (!person || person.contracted) return;
+    const days = [...originalDays].sort();
+    if (days.length === 0) {
+      onClose();
+      return;
+    }
+    if (
+      !confirm(
+        `Take ${person.name} off ${task.name}? That drops ${days.length} ${
+          days.length === 1 ? 'day' : 'days'
+        } of theirs on this phase.`
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    const res = await unassignCrewSpanAction({
       task_id: task.id,
-      start_time: draftStartTime,
-      day_times: draftDayTimes,
-      notes,
-      reason,
+      days,
+      kind: person.kind,
+      ref_id: person.refId,
     });
     if (res.ok) onSaved();
     else {
-      setError(res.error ?? 'Could not save.');
+      setError(res.error ?? 'Could not take them off this phase.');
       setSaving(false);
     }
   }
 
   return (
-    <Modal open onClose={onClose} title={`${task.name} — ${task.project_name}`} wide>
+    <Modal
+      open
+      onClose={onClose}
+      title={
+        person
+          ? `${person.name} — ${task.project_name}`
+          : `${task.name} — ${task.project_name}`
+      }
+      wide
+    >
       <div className="space-y-4">
+        {/* The job itself, so a booking can be read without leaving it: what the
+            work is, where, and what the phase was planned as. */}
+        <div className="rounded-lg border border-black/10 bg-black/[.02] px-4 py-3 text-sm">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+            Job details
+          </p>
+          <dl className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
+            <Detail label="Job" value={task.project_name} />
+            <Detail label="Customer" value={task.customer} />
+            <Detail label="Phase" value={task.name} />
+            <Detail label="Status" value={TASK_STATUS_LABELS[task.status]} />
+            <Detail
+              label="Runs"
+              value={window ? `${shortDate(window.start)} → ${shortDate(window.end)}` : 'No dates yet'}
+            />
+            <Detail
+              label="Planned crew"
+              value={
+                budget.needed > 0
+                  ? `${budget.needed} a day × ${budget.days} ${budget.days === 1 ? 'day' : 'days'}`
+                  : 'None of ours'
+              }
+            />
+            {task.location && <Detail label="Location" value={task.location} />}
+            {task.subcontractor_name && (
+              <Detail label="Subcontractor" value={task.subcontractor_name} />
+            )}
+            {person && (
+              <Detail
+                label="Assigned"
+                value={`${person.name}${person.detail ? ` — ${person.detail}` : ''}${
+                  person.kind === 'sub' ? ' · sub' : ''
+                }`}
+              />
+            )}
+          </dl>
+        </div>
+
         <div className="rounded-lg border border-black/10 bg-black/[.02] px-4 py-3 text-sm">
           <p className="font-semibold text-brand-ink">
             {window ? `${shortDate(window.start)} → ${shortDate(window.end)}` : 'No dates yet'}
@@ -209,6 +376,73 @@ export function CrewJobCard({
               The crew already has these details. Changing a start time or the notes needs a
               reason, kept in this job&apos;s change history.
             </p>
+          </div>
+        )}
+
+        {/* This person's days on the phase. Every day of its window is here, so
+            a stretch can be pushed out, pulled back, or split without going
+            back to the grid — including a weekend, which is an extra day of
+            work rather than a slice of the planned ones. */}
+        {person && window && (
+          <div className="rounded-lg border border-black/10 p-3">
+            <label className="label">
+              Days Worked{person.contracted ? '' : ' (tick the days they are on)'}
+            </label>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {eachDay(window.start, window.end).map((day) => {
+                const on = person.contracted ? isWorkingDay(day, calendar) : myDays.has(day);
+                const off = !isWorkingDay(day, calendar);
+                const d = fromDay(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    disabled={person.contracted || saving}
+                    onClick={() => toggleMyDay(day)}
+                    title={
+                      person.contracted
+                        ? `${person.name} holds this phase — their days follow its dates`
+                        : `${on ? 'Take them off' : 'Put them on'} ${shortDate(day)}${
+                            off ? ' (a non-working day)' : ''
+                          }`
+                    }
+                    className={`w-[62px] rounded-lg border px-1 py-1.5 text-center text-[11px] leading-tight transition-colors disabled:cursor-default ${
+                      on
+                        ? 'border-brand-green bg-brand-green/20 font-semibold text-brand-ink'
+                        : 'border-black/10 text-brand-gray hover:bg-black/5'
+                    } ${off ? 'italic' : ''}`}
+                  >
+                    <span className="block">{d.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                    <span className="block">
+                      {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs text-brand-gray">
+              {person.contracted
+                ? `${person.name} holds this phase, so they're on site every working day of it — the dates move on the Job Timeline.`
+                : `${myDays.size} ${myDays.size === 1 ? 'day' : 'days'} for ${person.name}` +
+                  (daysChanged
+                    ? ` · ${[
+                        addedDays.length > 0 ? `+${addedDays.length}` : null,
+                        removedDays.length > 0 ? `−${removedDays.length}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' ')} on save`
+                    : '') +
+                  ` · ${budget.remaining} crew ${
+                    budget.remaining === 1 ? 'day' : 'days'
+                  } left on the phase`}
+            </p>
+            {!person.contracted && addedDays.length > budget.remaining && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                That&apos;s more days than the phase has budget for — the first{' '}
+                {budget.remaining} will land and the rest won&apos;t. Raise the crew it needs on the
+                timeline, or take somebody off another day.
+              </p>
+            )}
           </div>
         )}
 
@@ -337,7 +571,20 @@ export function CrewJobCard({
 
         {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {person && !person.contracted ? (
+            <button
+              className="rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+              onClick={removeFromPhase}
+              disabled={saving}
+              title={`Take ${person.name} off every day of this phase`}
+            >
+              Remove From Phase
+            </button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
           <button className="btn-secondary" onClick={onClose} disabled={saving}>
             Cancel
           </button>
@@ -353,9 +600,22 @@ export function CrewJobCard({
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
+          </div>
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** One labelled fact about the job, as the details grid lists it. */
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-brand-gray">{label}</dt>
+      <dd className="truncate font-medium text-brand-ink" title={value}>
+        {value}
+      </dd>
+    </div>
   );
 }
 
