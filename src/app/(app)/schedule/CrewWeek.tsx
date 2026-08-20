@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useMemo, useState, useTransition, type DragEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { shortDate } from '@/lib/format';
 import {
@@ -27,7 +27,11 @@ import {
   type WeekBand,
 } from '@/lib/schedule-math';
 import type { ScheduleTaskRow } from '@/lib/types';
-import { assignCrewDayAction, unassignCrewDayAction } from '@/app/actions/schedule';
+import {
+  assignCrewDayAction,
+  assignCrewSpanAction,
+  unassignCrewDayAction,
+} from '@/app/actions/schedule';
 import { CrewJobCard } from './CrewJobCard';
 import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
@@ -46,27 +50,49 @@ const SPANS = [
 
 const DEFAULT_WEEKS = 2;
 
+/** What a card being dragged carries. Read on drop; the state drives the hover. */
+const DRAG_TYPE = 'application/x-cornerstone-phase';
+
+/** A phase card, as both the rail and the grid need it. */
+interface PhaseCard {
+  task: ScheduleTaskRow;
+  window: ComputedWindow;
+  budget: ReturnType<typeof crewBudget>;
+  byDay: Map<string, { kind: 'user' | 'sub'; ref_id: number }[]>;
+  /** The phase's working days that are on screen — what a card can be dropped on. */
+  days: string[];
+}
+
+interface Person {
+  key: string;
+  kind: 'user' | 'sub';
+  refId: number;
+  name: string;
+  detail: string;
+  internal: boolean;
+}
+
 /**
- * The weeks the crew is actually staffed in — a fortnight at a time.
+ * The weeks the crew is actually staffed in — a fortnight at a time, with the
+ * work to be staffed sitting beside it as cards.
  *
- * The timeline says a phase needs three people for four days. This is where
- * those twelve crew-days get spent: pick a job card, then click the day cells of
- * the people who'll work it. The budget is a total rather than a per-day quota,
- * so four people Monday and one Friday is a legitimate way to cover a 2-crew,
- * 5-day phase — which is how a week usually falls. A day carrying more than the
- * phase asked for is flagged, never blocked.
- *
- * Two weeks show side by side so work that runs over a weekend, or a job whose
- * next phase starts the following Monday, can be staffed without paging. Every
- * job and phase with work in view gets its own card — two phases of the same job
- * are two cards, because they're two different asks with two different budgets.
- * Clicking a card opens it: start times day by day, and the notes the crew reads
- * before they turn up.
+ * Every phase of every job with work on screen gets its own small card in the
+ * rail: two phases of the same job are two cards, because they're two different
+ * asks with two different budgets. Drag a card onto somebody's day to book them
+ * for that day, or onto their name to put them on every day of it that's on
+ * screen. Clicking a card still picks it for click-to-book, which is what
+ * touchscreens and keyboards get.
  *
  * A subcontracted phase is read-only here. The sub was engaged on the timeline,
- * so they're on site every working day of the phase and their days follow its
- * dates — there's no budget to spend and nothing to click away. Only the crew we
- * send alongside them, if any, is booked here.
+ * so they're on site every working day of it and their days follow its dates —
+ * there's no budget to spend, so its card can't be dragged or picked. Only the
+ * crew we send alongside them, if any, is booked here.
+ *
+ * The timeline says a phase needs three people for four days; this is where
+ * those twelve crew-days get spent. The budget is a total rather than a per-day
+ * quota, so four people Monday and one Friday is a legitimate way to cover a
+ * 2-crew, 5-day phase — which is how a week usually falls. A day carrying more
+ * than the phase asked for is flagged, never blocked.
  */
 export function CrewWeek({
   tasks,
@@ -88,10 +114,16 @@ export function CrewWeek({
   const [anchor, setAnchor] = useState<string>(() => weekStart(today()));
   const [showIdle, setShowIdle] = useState(true);
   const [includeSubs, setIncludeSubs] = useState(false);
-  /** Narrows the card list to phases still missing crew. */
+  /** Narrows the rail to phases still missing crew. */
   const [onlyShort, setOnlyShort] = useState(false);
-  /** The phase being staffed — clicking a day cell books it. */
+  /** Free-text filter over the rail — job, phase or customer. */
+  const [search, setSearch] = useState('');
+  /** The phase picked by click, for booking without a mouse drag. */
   const [picked, setPicked] = useState<number | null>(null);
+  /** The phase currently being dragged. */
+  const [dragging, setDragging] = useState<number | null>(null);
+  /** The cell or name the drag is over: `person|day`, or `person|row`. */
+  const [over, setOver] = useState<string | null>(null);
   /** The phase whose card is open. */
   const [opened, setOpened] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +143,7 @@ export function CrewWeek({
   const rangeTo = range.end;
 
   /** The phases with work in view — one card per job and phase, in date order. */
-  const cards = useMemo(() => {
+  const cards = useMemo<PhaseCard[]>(() => {
     return tasks
       .map((task) => ({ task, window: windows.get(task.id) }))
       .filter(
@@ -123,7 +155,6 @@ export function CrewWeek({
         window,
         budget: crewBudget(task, window, calendar),
         byDay: crewByDay(task),
-        // The days of this phase that fall in the range on screen.
         days: rangeDays.filter(
           (d) => d >= window.start && d <= window.end && isWorkingDay(d, calendar)
         ),
@@ -139,7 +170,9 @@ export function CrewWeek({
   }, [tasks, windows, calendar, rangeDays, rangeFrom, rangeTo]);
 
   const cardByTask = useMemo(() => new Map(cards.map((c) => [c.task.id, c])), [cards]);
-  const pickedCard = picked != null ? cardByTask.get(picked) : undefined;
+  // Dragging takes over from clicking, so the grid highlights whichever phase
+  // the manager is actually working with.
+  const activeCard = (dragging ?? picked) != null ? cardByTask.get((dragging ?? picked)!) : undefined;
   const openedCard = opened != null ? cardByTask.get(opened) : undefined;
 
   /**
@@ -147,8 +180,8 @@ export function CrewWeek({
    *
    * `contracted` marks a day that comes from the phase being subcontracted
    * rather than from a booking: the sub is on site because they hold the work,
-   * so that day can't be clicked away here — it follows the phase's dates and
-   * changes on the timeline.
+   * so that day can't be dropped on or clicked away here — it follows the
+   * phase's dates and changes on the timeline.
    */
   const byPerson = useMemo(() => {
     const out = new Map<string, Map<string, DayEntry[]>>();
@@ -198,16 +231,16 @@ export function CrewWeek({
       rangeDays.filter((d) => {
         if (!isWeekend(d)) return true;
         if ([...byPerson.values()].some((days) => (days.get(d)?.length ?? 0) > 0)) return true;
-        return pickedCard?.days.includes(d) ?? false;
+        return activeCard?.days.includes(d) ?? false;
       }),
-    [rangeDays, byPerson, pickedCard]
+    [rangeDays, byPerson, activeCard]
   );
 
   /** One band per week over the columns, so each week is labelled above its days. */
   const bands = useMemo(() => weekBands(columns), [columns]);
 
   const people = useMemo(() => {
-    const rows = [
+    const rows: Person[] = [
       ...workers.map((w) => ({
         key: `user:${w.id}`,
         kind: 'user' as const,
@@ -244,40 +277,104 @@ export function CrewWeek({
       );
   }, [workers, subs, includeSubs, byPerson, columns, showIdle]);
 
-  // Ten or fourteen columns need to be narrower than seven, but never so narrow
-  // that a job and phase can't be read off a chip — so the grid scrolls instead.
-  const dayWidth = columns.length > 7 ? 116 : 130;
-  const gridTemplate = `minmax(150px, 200px) repeat(${columns.length}, minmax(${dayWidth}px, 1fr))`;
-  const gridMinWidth = 200 + columns.length * dayWidth;
+  // Day columns share whatever width is left rather than claiming a fixed one,
+  // so a whole fortnight fits beside the rail instead of scrolling out of sight.
+  // Chips truncate and carry the full job on hover; the Week view is where a
+  // narrow screen goes for detail.
+  const gridTemplate = `minmax(112px, 150px) repeat(${columns.length}, minmax(0, 1fr))`;
+  const gridMinWidth = columns.length > 7 ? 880 : 660;
   const bookedPeople = people.filter((p) => p.bookedCount > 0).length;
-  const visibleCards = onlyShort ? cards.filter((c) => c.budget.remaining > 0) : cards;
   const understaffed = cards.filter((c) => c.budget.remaining > 0).length;
+  const needle = search.trim().toLowerCase();
+  const railCards = cards
+    .filter((c) => !onlyShort || c.budget.remaining > 0)
+    .filter(
+      (c) =>
+        needle === '' ||
+        `${c.task.project_name} ${c.task.name} ${c.task.customer}`.toLowerCase().includes(needle)
+    );
   const heading = weeks === 1 ? weekLabel(rangeFrom) : rangeLabel(rangeFrom, rangeTo);
 
   function refresh() {
     startTransition(() => router.refresh());
   }
 
-  /** Book the picked phase onto one person's day, or take them back off it. */
-  function toggleCell(person: { kind: 'user' | 'sub'; refId: number }, day: string) {
-    if (!pickedCard) return;
-    setError(null);
-    const already = (pickedCard.byDay.get(day) ?? []).some(
+  /** Is this person already on this phase that day? */
+  function isBooked(card: PhaseCard, day: string, person: Person): boolean {
+    return (card.byDay.get(day) ?? []).some(
       (c) => c.kind === person.kind && c.ref_id === person.refId
     );
+  }
+
+  /** A phase with crew of ours to book — a subcontracted one may have none. */
+  function isStaffable(card: PhaseCard): boolean {
+    return card.budget.capacity > 0;
+  }
+
+  /**
+   * A day this phase can take crew on — on the phase, not already full, and not
+   * the sub who holds the phase: their days come with the contract, so there's
+   * nothing here to give or take.
+   */
+  function canTake(card: PhaseCard, day: string, person: Person): boolean {
+    if (!isStaffable(card)) return false;
+    if (person.kind === 'sub' && card.task.subcontractor_id === person.refId) return false;
+    return card.days.includes(day) && (isBooked(card, day, person) || !card.budget.full);
+  }
+
+  /** Book the picked phase onto one person's day, or take them back off it. */
+  function toggleCell(person: Person, day: string) {
+    if (!activeCard) return;
+    setError(null);
+    const already = isBooked(activeCard, day, person);
     startTransition(async () => {
-      const args = { task_id: pickedCard.task.id, day, kind: person.kind, ref_id: person.refId };
+      const args = { task_id: activeCard.task.id, day, kind: person.kind, ref_id: person.refId };
       const res = already ? await unassignCrewDayAction(args) : await assignCrewDayAction(args);
       if (res.ok) router.refresh();
       else setError(res.error ?? 'Could not change that booking.');
     });
   }
 
-  async function removeFrom(
-    taskId: number,
-    day: string,
-    person: { kind: 'user' | 'sub'; refId: number }
-  ) {
+  /** A card dropped on one day cell books that one day. */
+  function dropOnDay(card: PhaseCard, person: Person, day: string) {
+    setError(null);
+    if (isBooked(card, day, person)) return; // Dropping where they already are is a no-op.
+    startTransition(async () => {
+      const res = await assignCrewDayAction({
+        task_id: card.task.id,
+        day,
+        kind: person.kind,
+        ref_id: person.refId,
+      });
+      if (res.ok) router.refresh();
+      else setError(res.error ?? 'Could not book that day.');
+    });
+  }
+
+  /**
+   * A card dropped on somebody's name puts them on the whole phase — every day
+   * of it that's on screen, as far as the budget goes.
+   */
+  function dropOnPerson(card: PhaseCard, person: Person) {
+    setError(null);
+    const days = card.days.filter((d) => !isBooked(card, d, person));
+    if (days.length === 0) {
+      setError(`${person.name} is already on every day of ${card.task.name} in view.`);
+      return;
+    }
+    startTransition(async () => {
+      const res = await assignCrewSpanAction({
+        task_id: card.task.id,
+        days,
+        kind: person.kind,
+        ref_id: person.refId,
+      });
+      if (res.ok) router.refresh();
+      else setError(res.error ?? 'Could not book those days.');
+    });
+  }
+
+  async function removeFrom(taskId: number, day: string, person: Person) {
     setError(null);
     startTransition(async () => {
       const res = await unassignCrewDayAction({
@@ -291,8 +388,30 @@ export function CrewWeek({
     });
   }
 
+  function startDrag(e: DragEvent<HTMLDivElement>, card: PhaseCard) {
+    // Firefox only starts a drag once some data is set, so both a typed payload
+    // and a plain-text fallback go on.
+    e.dataTransfer.setData(DRAG_TYPE, String(card.task.id));
+    e.dataTransfer.setData('text/plain', `${card.task.project_name} — ${card.task.name}`);
+    e.dataTransfer.effectAllowed = 'copy';
+    setDragging(card.task.id);
+    setPicked(card.task.id);
+  }
+
+  function endDrag() {
+    setDragging(null);
+    setOver(null);
+  }
+
+  /** Accept a drop only where the dragged phase could actually be booked. */
+  function allowDrop(e: DragEvent, key: string) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (over !== key) setOver(key);
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex overflow-hidden rounded-lg border border-black/10">
           <button
@@ -368,330 +487,301 @@ export function CrewWeek({
         </p>
       )}
 
-      {/* Job cards: one per job and phase with work in view, and the budget left
-          on each. Two phases of the same job are two cards on purpose. */}
-      {cards.length === 0 ? (
-        <div className="card p-6 text-center">
-          <p className="font-semibold text-brand-ink">No jobs run in these weeks</p>
-          <p className="mt-1 text-sm text-brand-gray">
-            Plan work on the Job Timeline — how long it runs and how many people it needs — and its
-            card will appear here to staff.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+        {/* The work to be staffed: one small card per job phase, dragged onto the
+            grid. Kept narrow and dense so a fortnight of work fits beside it. */}
+        <aside className="card w-full shrink-0 p-2 lg:sticky lg:top-2 lg:w-[268px]">
+          <div className="flex items-baseline justify-between gap-2 px-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
-              {visibleCards.length} {visibleCards.length === 1 ? 'job phase' : 'job phases'} in view
+              Work to staff
             </p>
-            {understaffed > 0 && (
-              <label className="flex items-center gap-2 text-xs text-brand-ink">
-                <input
-                  type="checkbox"
-                  checked={onlyShort}
-                  onChange={(e) => setOnlyShort(e.target.checked)}
-                />
-                Only phases still needing crew
-              </label>
-            )}
+            <span className="text-xs font-semibold text-brand-ink">{railCards.length}</span>
           </div>
+          <input
+            className="input mt-1.5 h-8 py-1 text-xs"
+            placeholder="Search job, phase, customer…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <label className="mt-1.5 flex items-center gap-1.5 px-1 text-[11px] text-brand-ink">
+            <input
+              type="checkbox"
+              checked={onlyShort}
+              onChange={(e) => setOnlyShort(e.target.checked)}
+            />
+            Only phases still needing crew
+          </label>
 
-          {visibleCards.length === 0 ? (
-            <div className="card p-4 text-center text-sm text-brand-gray">
-              Every phase in view is fully staffed.
-            </div>
+          {cards.length === 0 ? (
+            <p className="px-1 py-6 text-center text-xs text-brand-gray">
+              Nothing runs in these weeks. Plan work on the Job Timeline and its card appears here.
+            </p>
+          ) : railCards.length === 0 ? (
+            <p className="px-1 py-6 text-center text-xs text-brand-gray">
+              No phase matches. Clear the search, or untick the filter.
+            </p>
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {visibleCards.map((c) => {
-                const active = picked === c.task.id;
-                // A phase a sub carries outright has nothing of ours to staff,
-                // so its card reports who's on it rather than a budget to fill.
-                const subName = c.task.subcontractor_name;
-                const staffable = c.budget.capacity > 0;
-                return (
-                  <div
-                    key={c.task.id}
-                    className={`card p-3 transition-shadow ${
-                      active ? 'ring-2 ring-brand-green' : 'hover:shadow-md'
-                    }`}
-                  >
-                    <button
-                      onClick={() => setPicked(active ? null : c.task.id)}
-                      className="block w-full text-left"
-                      aria-pressed={active}
-                      disabled={!staffable}
-                      title={
-                        !staffable
-                          ? `${subName ?? 'This phase'} covers this phase — nothing of ours to book`
-                          : active
-                            ? 'Stop booking this phase'
-                            : 'Book crew onto this phase'
-                      }
-                    >
-                      <p className="truncate text-sm font-semibold text-brand-ink">
-                        {c.task.project_name}
-                      </p>
-                      <p className="mt-0.5 flex items-center gap-1.5">
-                        <span className="max-w-full truncate rounded bg-brand-ink/[.06] px-1.5 py-0.5 text-[11px] font-semibold text-brand-ink">
-                          {c.task.name}
-                        </span>
-                      </p>
-                      <p className="mt-1 truncate text-xs text-brand-gray">{c.task.customer}</p>
-                      <p className="mt-1 text-xs text-brand-gray">
-                        {shortDate(c.window.start)} – {shortDate(c.window.end)}
-                        {c.task.start_time && ` · starts ${timeLabel(c.task.start_time)}`}
-                      </p>
-                      {subName && (
-                        <p className="mt-1 truncate text-xs font-medium text-brand-ink">
-                          Subcontracted to {subName}
-                        </p>
-                      )}
-                      {staffable ? (
-                        <>
-                          <BudgetBar filled={c.budget.filled} capacity={c.budget.capacity} />
-                          <p
-                            className={`mt-1 text-xs font-medium ${
-                              c.budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
-                            }`}
-                          >
-                            {c.budget.filled} / {c.budget.capacity} crew days
-                            {c.budget.remaining === 0
-                              ? ' · fully staffed'
-                              : ` · ${c.budget.remaining} to fill`}
-                          </p>
-                          <p className="text-[11px] text-brand-gray">
-                            {subName ? 'plus ' : 'needs '}
-                            {c.budget.needed} of ours a day · {c.budget.days} working{' '}
-                            {c.budget.days === 1 ? 'day' : 'days'}
-                          </p>
-                        </>
-                      ) : (
-                        <p className="mt-1.5 text-[11px] text-brand-gray">
-                          On site all {c.budget.days} working{' '}
-                          {c.budget.days === 1 ? 'day' : 'days'} · none of our crew needed
-                        </p>
-                      )}
-                      {bands.length > 1 && (
-                        <WeekSplit card={c} bands={bands} columns={columns} staffable={staffable} />
-                      )}
-                    </button>
-                    <div className="mt-2 flex items-center justify-between gap-2 border-t border-black/5 pt-2">
-                      <span
-                        className={`text-[11px] font-medium ${
-                          c.budget.full ? 'text-brand-gray' : 'text-brand-green-dark'
-                        }`}
-                      >
-                        {!active || !staffable
-                          ? ''
-                          : c.budget.full
-                            ? 'Fully staffed — click a booking to free a day'
-                            : 'Click a day cell below to book'}
-                      </span>
-                      <button
-                        className="text-xs font-medium text-brand-green-dark hover:underline"
-                        onClick={() => setOpened(c.task.id)}
-                      >
-                        Start times &amp; notes
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="mt-2 max-h-[62vh] space-y-1.5 overflow-y-auto pr-0.5">
+              {railCards.map((c) => (
+                <PhaseTile
+                  key={c.task.id}
+                  card={c}
+                  picked={picked === c.task.id}
+                  dragging={dragging === c.task.id}
+                  bands={bands}
+                  columns={columns}
+                  onPick={() => setPicked(picked === c.task.id ? null : c.task.id)}
+                  onOpen={() => setOpened(c.task.id)}
+                  onDragStart={(e) => startDrag(e, c)}
+                  onDragEnd={endDrag}
+                />
+              ))}
             </div>
           )}
-        </div>
-      )}
-
-      {people.length === 0 ? (
-        <div className="card p-10 text-center">
-          <p className="font-semibold text-brand-ink">Nobody to show</p>
-          <p className="mt-1 text-sm text-brand-gray">
-            Nobody is booked for {heading}. Tick &ldquo;Show everyone&rdquo; to see the whole crew.
+          <p className="mt-2 border-t border-black/5 px-1 pt-1.5 text-[10px] leading-snug text-brand-gray">
+            Drag a card onto a day to book it, or onto a name for every day of it on screen. No
+            mouse? Tap a card, then tap the day cells.
           </p>
-        </div>
-      ) : (
-        <div className={`card overflow-hidden ${pending ? 'opacity-70' : ''}`}>
-          <div className="overflow-x-auto">
-            <div style={{ minWidth: `${gridMinWidth}px` }}>
-              {/* Week band: each week's Monday, held across that week's columns. */}
-              <div
-                className="grid border-b border-black/10 bg-black/[.04]"
-                style={{ gridTemplateColumns: gridTemplate }}
-              >
-                <div className="sticky left-0 z-20 bg-[#f4f4f4] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-brand-gray">
-                  Crew
-                </div>
-                {bands.map((b) => (
-                  <div
-                    key={b.monday}
-                    style={{ gridColumn: `${b.startIdx + 2} / ${b.startIdx + b.span + 2}` }}
-                    className={`border-l border-black/10 px-2 py-1.5 text-xs font-semibold ${
-                      b.monday === weekStart(now) ? 'text-brand-green-dark' : 'text-brand-gray'
-                    }`}
-                    title={`Week of ${shortDate(b.monday)}`}
-                  >
-                    Week of {mondayLabel(b.monday)}
-                  </div>
-                ))}
-              </div>
+        </aside>
 
-              {/* Day header */}
-              <div
-                className="grid border-b border-black/10 bg-black/[.02]"
-                style={{ gridTemplateColumns: gridTemplate }}
-              >
-                <div className="sticky left-0 z-20 bg-[#fafafa] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-brand-gray">
-                  Employee
-                </div>
-                {columns.map((d) => {
-                  const off = !isWorkingDay(d, calendar);
-                  return (
-                    <div
-                      key={d}
-                      className={`px-2 py-2 text-xs font-semibold ${weekEdge(d)} ${
-                        d === now
-                          ? 'text-brand-green-dark'
-                          : off
-                            ? 'text-brand-gray/60'
-                            : 'text-brand-gray'
-                      }`}
-                    >
-                      {DAY_LABELS[fromDay(d).getDay()]} {fromDay(d).getDate()}
-                      {off && <span className="ml-1 font-normal">(off)</span>}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {people.map((p) => (
+        {people.length === 0 ? (
+          <div className="card flex-1 p-10 text-center">
+            <p className="font-semibold text-brand-ink">Nobody to show</p>
+            <p className="mt-1 text-sm text-brand-gray">
+              Nobody is booked for {heading}. Tick &ldquo;Show everyone&rdquo; to see the whole crew.
+            </p>
+          </div>
+        ) : (
+          <div className={`card min-w-0 flex-1 overflow-hidden ${pending ? 'opacity-70' : ''}`}>
+            <div className="overflow-x-auto">
+              <div style={{ minWidth: `${gridMinWidth}px` }}>
+                {/* Week band: each week's Monday, held across that week's columns. */}
                 <div
-                  key={p.key}
-                  className="grid border-b border-black/5 last:border-0"
+                  className="grid border-b border-black/10 bg-black/[.04]"
                   style={{ gridTemplateColumns: gridTemplate }}
                 >
-                  <div className="sticky left-0 z-20 bg-white px-4 py-2">
-                    <p className="truncate text-sm font-medium text-brand-ink">
-                      {p.name}
-                      {!p.internal && <span className="text-brand-gray"> · sub</span>}
-                    </p>
-                    <p className="truncate text-xs text-brand-gray">{p.detail}</p>
-                    <p
-                      className={`text-xs font-medium ${
-                        p.clashes.length > 0
-                          ? 'text-red-700'
-                          : p.bookedCount === 0
-                            ? 'text-brand-gray/70'
-                            : 'text-brand-gray'
-                      }`}
-                    >
-                      {p.bookedCount === 0
-                        ? 'Not booked'
-                        : `${p.bookedCount} ${p.bookedCount === 1 ? 'day' : 'days'}`}
-                      {p.clashes.length > 0 && ' · double-booked'}
-                    </p>
+                  <div className="sticky left-0 z-20 bg-[#f4f4f4] px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
+                    Crew
                   </div>
+                  {bands.map((b) => (
+                    <div
+                      key={b.monday}
+                      style={{ gridColumn: `${b.startIdx + 2} / ${b.startIdx + b.span + 2}` }}
+                      className={`border-l border-black/10 px-2 py-1 text-[11px] font-semibold ${
+                        b.monday === weekStart(now) ? 'text-brand-green-dark' : 'text-brand-gray'
+                      }`}
+                      title={`Week of ${shortDate(b.monday)}`}
+                    >
+                      Week of {mondayLabel(b.monday)}
+                    </div>
+                  ))}
+                </div>
 
+                {/* Day header */}
+                <div
+                  className="grid border-b border-black/10 bg-black/[.02]"
+                  style={{ gridTemplateColumns: gridTemplate }}
+                >
+                  <div className="sticky left-0 z-20 bg-[#fafafa] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
+                    Employee
+                  </div>
                   {columns.map((d) => {
-                    const items = p.days.get(d) ?? [];
                     const off = !isWorkingDay(d, calendar);
-                    const clash = new Set(items.map((b) => b.task.project_id)).size > 1;
-                    // A cell can take the picked phase when that phase runs that
-                    // day and still has budget — or when it's already booked
-                    // there, so clicking again takes them off.
-                    const on =
-                      !!pickedCard &&
-                      (pickedCard.byDay.get(d) ?? []).some(
-                        (c) => c.kind === p.kind && c.ref_id === p.refId
-                      );
-                    // The sub carrying a phase is on it by contract, not by
-                    // booking — there's no day here to give or take.
-                    const contractedHere =
-                      !!pickedCard &&
-                      p.kind === 'sub' &&
-                      pickedCard.task.subcontractor_id === p.refId;
-                    const bookable =
-                      !!pickedCard &&
-                      !contractedHere &&
-                      pickedCard.days.includes(d) &&
-                      (on || !pickedCard.budget.full);
                     return (
                       <div
                         key={d}
-                        className={`min-h-[64px] space-y-1 p-1.5 ${weekEdge(d)} ${
-                          d === now ? 'bg-brand-green/5' : off ? 'bg-black/[.04]' : ''
-                        } ${clash ? 'bg-red-50' : ''} ${
-                          bookable ? 'cursor-pointer ring-1 ring-inset ring-brand-green/40 hover:bg-brand-green/10' : ''
+                        className={`px-2 py-1.5 text-[11px] font-semibold ${weekEdge(d)} ${
+                          d === now
+                            ? 'text-brand-green-dark'
+                            : off
+                              ? 'text-brand-gray/60'
+                              : 'text-brand-gray'
                         }`}
-                        onClick={bookable ? () => toggleCell(p, d) : undefined}
-                        title={
-                          contractedHere
-                            ? `${p.name} has this phase — their days follow it, change it on the timeline`
-                            : bookable
-                              ? on
-                                ? `Take ${p.name} off ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
-                                : `Book ${p.name} on ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
-                              : undefined
-                        }
                       >
-                        {items.map((b) => (
-                          <button
-                            key={b.task.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!b.contracted) removeFrom(b.task.id, d, p);
-                            }}
-                            disabled={b.contracted}
-                            title={`${b.task.project_name} — ${b.task.name}${
-                              b.startTime ? `\nStarts ${timeLabel(b.startTime)}` : ''
-                            }\n${
-                              b.contracted
-                                ? 'Subcontracted for this phase — their days follow its dates'
-                                : `Click to take ${p.name} off this day`
-                            }`}
-                            className={`block w-full rounded px-1.5 py-1 text-left text-[11px] leading-tight ${
-                              b.contracted ? CONTRACTED_CHIP : STATUS_CHIP[b.task.status]
-                            }`}
-                          >
-                            {b.startTime && (
-                              <span className="block truncate font-bold">
-                                {timeLabel(b.startTime)}
-                              </span>
-                            )}
-                            <span className="block truncate font-semibold">
-                              {b.task.project_name}
-                            </span>
-                            <span className="block truncate opacity-90">{b.task.name}</span>
-                          </button>
-                        ))}
-                        {bookable && !on && items.length === 0 && (
-                          <span className="block text-center text-[11px] font-medium text-brand-green-dark">
-                            + book
-                          </span>
-                        )}
+                        {DAY_LABELS[fromDay(d).getDay()]} {fromDay(d).getDate()}
+                        {off && <span className="ml-1 font-normal">(off)</span>}
                       </div>
                     );
                   })}
                 </div>
-              ))}
+
+                {people.map((p) => {
+                  const rowKey = `${p.key}|row`;
+                  // Dropping on a name means "put them on this phase" — only
+                  // offered while a phase with room is actually being dragged.
+                  const rowTakes =
+                    !!activeCard &&
+                    !!dragging &&
+                    activeCard.days.some((d) => canTake(activeCard, d, p));
+                  return (
+                    <div
+                      key={p.key}
+                      className="grid border-b border-black/5 last:border-0"
+                      style={{ gridTemplateColumns: gridTemplate }}
+                    >
+                      <div
+                        className={`sticky left-0 z-20 bg-white px-3 py-1.5 ${
+                          rowTakes ? 'cursor-copy ring-1 ring-inset ring-brand-green/50' : ''
+                        } ${over === rowKey && rowTakes ? 'bg-brand-green/15' : ''}`}
+                        onDragOver={rowTakes ? (e) => allowDrop(e, rowKey) : undefined}
+                        onDragLeave={rowTakes ? () => setOver(null) : undefined}
+                        onDrop={
+                          rowTakes
+                            ? (e) => {
+                                e.preventDefault();
+                                dropOnPerson(activeCard!, p);
+                                endDrag();
+                              }
+                            : undefined
+                        }
+                        title={
+                          rowTakes
+                            ? `Put ${p.name} on ${activeCard!.task.name} for every day of it on screen`
+                            : undefined
+                        }
+                      >
+                        <p className="flex items-baseline justify-between gap-1">
+                          <span className="truncate text-[13px] font-medium text-brand-ink">
+                            {p.name}
+                          </span>
+                          <span
+                            className={`shrink-0 text-[11px] font-semibold ${
+                              p.clashes.length > 0
+                                ? 'text-red-700'
+                                : p.bookedCount === 0
+                                  ? 'text-brand-gray/60'
+                                  : 'text-brand-gray'
+                            }`}
+                          >
+                            {p.bookedCount === 0 ? '—' : `${p.bookedCount}d`}
+                          </span>
+                        </p>
+                        <p className="truncate text-[10px] uppercase tracking-wide text-brand-gray">
+                          {p.internal ? p.detail : `${p.detail} · sub`}
+                          {p.clashes.length > 0 && (
+                            <span className="text-red-700"> · double-booked</span>
+                          )}
+                        </p>
+                      </div>
+
+                      {columns.map((d) => {
+                        const items = p.days.get(d) ?? [];
+                        const off = !isWorkingDay(d, calendar);
+                        const clash = new Set(items.map((b) => b.task.project_id)).size > 1;
+                        const cellKey = `${p.key}|${d}`;
+                        const on = !!activeCard && isBooked(activeCard, d, p);
+                        // A cell takes the active phase when that phase runs that
+                        // day and still has budget — or when it's already booked
+                        // there, so clicking again takes them off.
+                        const takes = !!activeCard && canTake(activeCard, d, p);
+                        const dropping = !!dragging && takes && !on;
+                        // The sub carrying a phase is on it by contract, not by
+                        // booking — there's no day here to give or take.
+                        const contractedHere =
+                          !!activeCard &&
+                          p.kind === 'sub' &&
+                          activeCard.task.subcontractor_id === p.refId;
+                        return (
+                          <div
+                            key={d}
+                            className={`min-h-[42px] space-y-0.5 p-1 ${weekEdge(d)} ${
+                              d === now ? 'bg-brand-green/5' : off ? 'bg-black/[.04]' : ''
+                            } ${clash ? 'bg-red-50' : ''} ${
+                              takes && !dragging
+                                ? 'cursor-pointer ring-1 ring-inset ring-brand-green/40 hover:bg-brand-green/10'
+                                : ''
+                            } ${dropping ? 'cursor-copy ring-1 ring-inset ring-brand-green/60' : ''} ${
+                              over === cellKey && dropping ? 'bg-brand-green/20' : ''
+                            }`}
+                            onClick={takes && !dragging ? () => toggleCell(p, d) : undefined}
+                            onDragOver={dropping ? (e) => allowDrop(e, cellKey) : undefined}
+                            onDragLeave={dropping ? () => setOver(null) : undefined}
+                            onDrop={
+                              dropping
+                                ? (e) => {
+                                    e.preventDefault();
+                                    dropOnDay(activeCard!, p, d);
+                                    endDrag();
+                                  }
+                                : undefined
+                            }
+                            title={
+                              contractedHere
+                                ? `${p.name} has this phase — their days follow it, change it on the timeline`
+                                : takes
+                                  ? on
+                                    ? `Take ${p.name} off ${activeCard!.task.name}`
+                                    : `Book ${p.name} on ${activeCard!.task.project_name} — ${activeCard!.task.name}`
+                                  : undefined
+                            }
+                          >
+                            {items.map((b) => (
+                              <button
+                                key={b.task.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!b.contracted) removeFrom(b.task.id, d, p);
+                                }}
+                                disabled={b.contracted}
+                                title={`${b.task.project_name} — ${b.task.name}${
+                                  b.startTime ? `\nStarts ${timeLabel(b.startTime)}` : ''
+                                }\n${
+                                  b.contracted
+                                    ? 'Subcontracted for this phase — their days follow its dates'
+                                    : `Click to take ${p.name} off this day`
+                                }`}
+                                className={`block w-full rounded border-l-[3px] px-1 py-0.5 text-left text-[10px] leading-tight ${
+                                  b.contracted ? CONTRACTED_CHIP : STATUS_CHIP[b.task.status]
+                                }`}
+                                style={{ borderLeftColor: jobTint(b.task.project_id) }}
+                              >
+                                {/* Three short lines rather than two crowded
+                                    ones: at a fortnight's column width, a start
+                                    time sharing a line with the job or the phase
+                                    truncates the other one away entirely. */}
+                                {b.startTime && (
+                                  <span className="block truncate text-[9px] font-bold leading-tight text-brand-green-dark">
+                                    {timeLabel(b.startTime)}
+                                  </span>
+                                )}
+                                <span className="block truncate font-semibold">
+                                  {b.task.project_name}
+                                </span>
+                                <span className="block truncate opacity-90">{b.task.name}</span>
+                              </button>
+                            ))}
+                            {takes && !on && items.length === 0 && (
+                              <span className="block pt-1 text-center text-[10px] font-medium text-brand-green-dark">
+                                {dragging ? 'drop' : '+ book'}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Days carrying more people than the phase asked for. Allowed on purpose
           — the budget is a total — but worth seeing before the weeks go out. */}
       <HeavyDays cards={cards} />
 
       <p className="text-xs text-brand-gray">
-        Pick a job card — one per job and phase — then click the day cells of the people working it.
-        The card&apos;s crew days count down as you go, and you can&apos;t book past what the
-        timeline planned.{' '}
-        {weeks > 1 &&
-          'Both weeks book from the same card, so a phase running over a weekend is staffed in one pass. '}
+        Every phase of every job in view is a card in the rail. Drag one onto somebody&apos;s day to
+        book that day, or onto their name to put them on every day of it that&apos;s on screen — the
+        card&apos;s crew days count down as you go, and you can&apos;t book past what the timeline
+        planned.{' '}
+        {weeks > 1 && 'Both weeks take drops from the same card, so a phase running over a weekend is staffed in one pass. '}
         Click a booking to take someone off that day. A day shaded red is one where somebody is on
-        two different jobs. A subcontracted phase shows its sub on every day it runs, dashed and
-        not clickable — they were engaged on the timeline, so their days follow its dates. Open a
-        card to set start times day by day and write what the crew needs to know.
+        two different jobs. A subcontracted phase shows its sub on every day it runs, dashed and not
+        clickable — they were engaged on the timeline, so their days follow its dates and its card
+        can&apos;t be dragged. Open a card&apos;s ⋯ to set start times day by day and write what the
+        crew needs to know.
       </p>
 
       {openedCard && (
@@ -706,6 +796,129 @@ export function CrewWeek({
             refresh();
           }}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One job phase as a card small enough that a fortnight's worth of them sit
+ * beside the grid: the job, the phase, when it runs, and — in the size that
+ * matters most — how many crew days are still to fill.
+ */
+function PhaseTile({
+  card,
+  picked,
+  dragging,
+  bands,
+  columns,
+  onPick,
+  onOpen,
+  onDragStart,
+  onDragEnd,
+}: {
+  card: PhaseCard;
+  picked: boolean;
+  dragging: boolean;
+  bands: WeekBand[];
+  columns: string[];
+  onPick: () => void;
+  onOpen: () => void;
+  onDragStart: (e: DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+}) {
+  const { task, window, budget } = card;
+  // A phase a sub covers outright asks for none of our crew: nothing to drag
+  // onto anybody, so the card reports who's on it instead.
+  const staffable = budget.capacity > 0;
+  const subName = task.subcontractor_name;
+  return (
+    <div
+      draggable={staffable}
+      onDragStart={staffable ? onDragStart : undefined}
+      onDragEnd={staffable ? onDragEnd : undefined}
+      onClick={staffable ? onPick : undefined}
+      role={staffable ? 'button' : undefined}
+      tabIndex={staffable ? 0 : undefined}
+      aria-pressed={staffable ? picked : undefined}
+      onKeyDown={
+        staffable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onPick();
+              }
+            }
+          : undefined
+      }
+      title={`${task.project_name} — ${task.name}\n${task.customer}\n${shortDate(window.start)} – ${shortDate(
+        window.end
+      )}\n${
+        staffable
+          ? `${budget.filled} of ${budget.capacity} crew days booked\nDrag onto a day, or onto a name for the whole phase`
+          : `${subName ?? 'A subcontractor'} covers this phase — nothing of ours to book`
+      }`}
+      className={`rounded-md border border-l-[3px] bg-white p-1.5 text-left transition-shadow ${
+        staffable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default border-dashed'
+      } ${picked ? 'border-brand-green ring-1 ring-brand-green' : 'border-black/10 hover:shadow-sm'} ${
+        dragging ? 'opacity-50' : ''
+      } ${staffable && budget.full ? 'bg-brand-green/[.04]' : ''}`}
+      style={{ borderLeftColor: picked ? undefined : jobTint(task.project_id) }}
+    >
+      <div className="flex items-start justify-between gap-1">
+        <p className="min-w-0 flex-1 truncate text-[11px] font-semibold leading-tight text-brand-ink">
+          {task.project_name}
+        </p>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          title="Start times &amp; notes"
+          aria-label={`Start times and notes for ${task.name}`}
+          className="-mt-0.5 shrink-0 rounded px-1 text-[11px] leading-none text-brand-gray hover:bg-black/5 hover:text-brand-ink"
+        >
+          ⋯
+        </button>
+      </div>
+      <p className="truncate text-[10px] leading-tight text-brand-gray">{task.name}</p>
+      {subName && (
+        <p className="truncate text-[10px] font-medium leading-tight text-brand-ink">
+          Sub: {subName}
+        </p>
+      )}
+      <div className="mt-1 flex items-end justify-between gap-1">
+        <div className="min-w-0">
+          <p className="truncate text-[10px] leading-tight text-brand-gray">
+            {mondayLabel(window.start)} – {mondayLabel(window.end)}
+            {task.start_time && ` · ${timeLabel(task.start_time)}`}
+          </p>
+          <p className="truncate text-[10px] leading-tight text-brand-gray/80">
+            {staffable
+              ? `${subName ? 'plus ' : ''}${budget.needed}/day · ${budget.days} ${
+                  budget.days === 1 ? 'day' : 'days'
+                }`
+              : `on site all ${budget.days} ${budget.days === 1 ? 'day' : 'days'}`}
+          </p>
+        </div>
+        {staffable && (
+          <div className="shrink-0 text-right">
+            <p
+              className={`text-[13px] font-bold leading-none ${
+                budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
+              }`}
+            >
+              {budget.remaining === 0 ? budget.capacity : budget.remaining}
+            </p>
+            <p className="text-[9px] font-semibold uppercase tracking-wide text-brand-gray">
+              {budget.remaining === 0 ? 'staffed' : 'to fill'}
+            </p>
+          </div>
+        )}
+      </div>
+      {staffable && <BudgetBar filled={budget.filled} capacity={budget.capacity} />}
+      {bands.length > 1 && (
+        <WeekSplit card={card} bands={bands} columns={columns} staffable={staffable} />
       )}
     </div>
   );
@@ -727,14 +940,14 @@ function WeekSplit({
   columns,
   staffable = true,
 }: {
-  card: { window: ComputedWindow; byDay: Map<string, unknown[]>; days: string[] };
+  card: { byDay: Map<string, unknown[]>; days: string[] };
   bands: WeekBand[];
   columns: string[];
   /** False on a subcontracted phase needing none of our crew — nothing to book. */
   staffable?: boolean;
 }) {
   return (
-    <span className="mt-1.5 flex flex-wrap gap-1">
+    <div className="mt-1 flex flex-wrap gap-1">
       {bands.map((b) => {
         const weekDays = columns.slice(b.startIdx, b.startIdx + b.span);
         const runs = weekDays.filter((d) => card.days.includes(d)).length;
@@ -742,21 +955,17 @@ function WeekSplit({
         return (
           <span
             key={b.monday}
-            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            className={`rounded px-1 py-0.5 text-[9px] font-medium ${
               runs === 0 ? 'bg-black/[.04] text-brand-gray/70' : 'bg-black/[.05] text-brand-gray'
             }`}
             title={`Week of ${shortDate(b.monday)}`}
           >
             {mondayLabel(b.monday)}:{' '}
-            {runs === 0
-              ? 'no work'
-              : staffable
-                ? `${runs} ${runs === 1 ? 'day' : 'days'} · ${booked} booked`
-                : `${runs} ${runs === 1 ? 'day' : 'days'} on site`}
+            {runs === 0 ? 'none' : staffable ? `${runs}d · ${booked} booked` : `${runs}d on site`}
           </span>
         );
       })}
-    </span>
+    </div>
   );
 }
 
@@ -764,7 +973,7 @@ function WeekSplit({
 function BudgetBar({ filled, capacity }: { filled: number; capacity: number }) {
   const pct = capacity === 0 ? 0 : Math.min(100, (filled / capacity) * 100);
   return (
-    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/10">
+    <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-black/10">
       <div
         className={`h-full rounded-full ${filled >= capacity ? 'bg-brand-green' : 'bg-status-progress'}`}
         style={{ width: `${pct}%` }}
@@ -811,6 +1020,18 @@ function HeavyDays({
       </ul>
     </div>
   );
+}
+
+/**
+ * A stable colour per job, keyed off its id — the stripe down the left of every
+ * card and every booking. At a fortnight's column width a job name truncates to
+ * a few characters, so the colour is what actually says "these two bookings are
+ * the same job" across ten columns and six people. Status stays the fill.
+ */
+const JOB_TINTS = ['#1f6feb', '#2f7d32', '#b45309', '#7c3aed', '#0f766e', '#be123c'] as const;
+
+function jobTint(projectId: number): string {
+  return JOB_TINTS[Math.abs(projectId) % JOB_TINTS.length];
 }
 
 /** A sub's day that comes from holding the phase, not from being booked on it. */
