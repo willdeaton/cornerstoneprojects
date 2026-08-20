@@ -18,6 +18,37 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   Completed), progress, value, hours logged, and due dates.
 - **Project detail** — editable status & progress, **job notes**, and a
   per-job **time clock**.
+- **Billing** — the desk between "the work is finished" and "the money is in".
+  Marking a job **Completed** stamps its completion and puts it on the billing
+  queue; from there it moves itself along as the invoices on the job are ticked
+  **Billed** and **Paid**.
+  - **The stage is derived, never stored** — it falls out of the job's status
+    and its invoice rows, so there is no second thing to keep in step. Tick an
+    invoice Paid on the project and the job leaves the outstanding queue by
+    itself. The stages are **Ready to Bill** (finished, nothing sent) →
+    **Invoiced** (out, money still owed) → **Paid**, plus **On Hold** and
+    **Closed**.
+  - **Aging** — a job is aged from when it was *completed*, not from the end
+    date somebody typed for the work. Billing that hasn't gone out is chased in
+    days (7 to watch, 14 is late); an invoice that's out is measured against
+    normal net-30 terms (30 / 45). Late jobs ring their badge and are counted
+    under **Needs Chasing**.
+  - **Contract vs. invoiced** — the queue calls out a job billed short of its
+    contract value, one billed *over* it (worth checking for a change order),
+    and money sitting on an invoice that was raised but never sent.
+  - **On Hold** — a job that shouldn't be chased (retainage, a dispute, a
+    customer waiting on paperwork) is parked with a reason, and stops being
+    counted late. The reason is required — the point of a hold is that the next
+    person through the queue knows why nobody is on it.
+  - **Close Out** — signing a job off the billing desk is a deliberate act, not
+    something the invoices imply: a fully paid job still wants a final look, and
+    a no-charge job closes with nothing raised at all. Closing is allowed with a
+    balance outstanding (a write-off has to be able to leave the queue) and the
+    page says so rather than blocking it.
+  - Admins and managers only — what every customer owes is not a worker's view,
+    which is the same line Settings draws. Nothing is edited on the Billing page
+    itself: it's a queue that points at the job to work on next, and the
+    invoices are edited on the job.
 - **Schedule** — scheduling is two steps, in two views over the same data.
   **Job Timeline** plans the *work*: each job is a set of phases carrying a
   duration in working days, who does it — our own crew as a headcount, or a

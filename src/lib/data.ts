@@ -32,6 +32,7 @@ import type {
   BackupTimeEntry,
   BackupSchedulePhase,
 } from './backup-types';
+import type { InvoiceTally } from './billing';
 import { hoursBetween } from './format';
 import { computeSchedule, timeLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
@@ -445,7 +446,185 @@ export async function updateProject(
   if (entries.length === 0) return;
   const set = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
   const values = entries.map(([, v]) => v);
-  await q(`UPDATE projects SET ${set}, updated_at = now() WHERE id = $${entries.length + 1}`, [...values, id]);
+  // A job's completion stamp follows its status wherever the status is set, so
+  // it lives here rather than in one caller: completing a job stamps it (and
+  // re-completing an already-complete job keeps the original date), reopening
+  // one clears it. It's what the billing queue ages against, so it has to be
+  // the moment the job arrived on the desk and nothing looser.
+  const stamp = fields.status
+    ? `, completed_at = ${
+        fields.status === 'completed' ? 'COALESCE(completed_at, now())' : 'NULL'
+      }`
+    : '';
+  await q(
+    `UPDATE projects SET ${set}${stamp}, updated_at = now() WHERE id = $${entries.length + 1}`,
+    [...values, id]
+  );
+}
+
+/* -------------------------------------------------------- Billing workflow */
+
+/**
+ * Park or release a job's billing. A hold carries a reason — the point of it
+ * is that the next person to look at the queue knows why nobody is chasing
+ * this one — and releasing clears the reason with it.
+ */
+export async function setProjectBillingHold(
+  id: number,
+  hold: boolean,
+  reason: string | null
+): Promise<void> {
+  await q(
+    `UPDATE projects
+        SET billing_hold = $1, billing_hold_reason = $2, updated_at = now()
+      WHERE id = $3`,
+    [hold, hold ? reason : null, id]
+  );
+}
+
+/**
+ * Sign a job off the billing desk, or put it back on. Closing records who did
+ * it and when; reopening clears both, so a reopened job re-derives its stage
+ * from its invoices exactly as if it had never been closed.
+ */
+export async function setProjectBillingClosed(
+  id: number,
+  closed: boolean,
+  userId: number | null
+): Promise<void> {
+  await q(
+    `UPDATE projects
+        SET billing_closed_at = CASE WHEN $1::boolean THEN now() ELSE NULL END,
+            billing_closed_by = CASE WHEN $1::boolean THEN $2 ELSE NULL END,
+            updated_at = now()
+      WHERE id = $3`,
+    [closed, userId, id]
+  );
+}
+
+/**
+ * Invoice totals for a set of jobs, in one grouped query — for lists that show
+ * where a job stands on billing without wanting its individual invoices.
+ * Jobs with no invoices are simply absent from the map.
+ */
+export async function listInvoiceTallies(
+  projectIds: number[]
+): Promise<Map<number, InvoiceTally>> {
+  if (projectIds.length === 0) return new Map();
+  const rows = await q<{
+    project_id: number;
+    inv_count: string;
+    billed_count: string;
+    paid_count: string;
+    invoiced_total: string;
+    billed_total: string;
+    paid_total: string;
+  }>(
+    `SELECT project_id,
+            COUNT(*)                                             AS inv_count,
+            COUNT(*) FILTER (WHERE billed OR paid)               AS billed_count,
+            COUNT(*) FILTER (WHERE paid)                         AS paid_count,
+            SUM(amount)                                          AS invoiced_total,
+            SUM(CASE WHEN billed OR paid THEN amount ELSE 0 END) AS billed_total,
+            SUM(CASE WHEN paid THEN amount ELSE 0 END)           AS paid_total
+       FROM project_invoices
+      WHERE project_id = ANY($1::int[])
+      GROUP BY project_id`,
+    [projectIds]
+  );
+  return new Map(
+    rows.map((r) => [
+      r.project_id,
+      {
+        count: Number(r.inv_count),
+        billedCount: Number(r.billed_count),
+        paidCount: Number(r.paid_count),
+        invoiced: Number(r.invoiced_total),
+        billed: Number(r.billed_total),
+        paid: Number(r.paid_total),
+      },
+    ])
+  );
+}
+
+/** A project with its invoice rows already reduced to the billing numbers. */
+export interface BillingProjectRow {
+  project: Project;
+  tally: InvoiceTally;
+  /** Hours logged on the job — the labour behind the invoice. */
+  hours: number;
+  /** Who closed the job out, when somebody has. */
+  closed_by_name: string | null;
+}
+
+/**
+ * Every job the billing desk could care about, with its invoice totals rolled
+ * up in the same query. Jobs that are neither complete nor invoiced are left
+ * out here rather than filtered in the page: an unfinished job with nothing
+ * raised against it is the project manager's problem, not the biller's.
+ *
+ * Ordered oldest-completion-first, because that's the order the work wants
+ * doing — the job that has been sitting longest is the one to bill next.
+ */
+export async function listBillingProjects(): Promise<BillingProjectRow[]> {
+  const rows = await q<
+    Project & {
+      inv_count: string;
+      billed_count: string;
+      paid_count: string;
+      invoiced_total: string;
+      billed_total: string;
+      paid_total: string;
+      hours: string;
+      closed_by_name: string | null;
+    }
+  >(
+    `SELECT p.*,
+            COALESCE(i.inv_count, 0)      AS inv_count,
+            COALESCE(i.billed_count, 0)   AS billed_count,
+            COALESCE(i.paid_count, 0)     AS paid_count,
+            COALESCE(i.invoiced_total, 0) AS invoiced_total,
+            COALESCE(i.billed_total, 0)   AS billed_total,
+            COALESCE(i.paid_total, 0)     AS paid_total,
+            COALESCE(t.hours, 0)          AS hours,
+            u.name                        AS closed_by_name
+       FROM projects p
+       LEFT JOIN (
+         SELECT project_id,
+                COUNT(*)                                            AS inv_count,
+                COUNT(*) FILTER (WHERE billed OR paid)              AS billed_count,
+                COUNT(*) FILTER (WHERE paid)                        AS paid_count,
+                SUM(amount)                                         AS invoiced_total,
+                SUM(CASE WHEN billed OR paid THEN amount ELSE 0 END) AS billed_total,
+                SUM(CASE WHEN paid THEN amount ELSE 0 END)          AS paid_total
+           FROM project_invoices
+          GROUP BY project_id
+       ) i ON i.project_id = p.id
+       LEFT JOIN (
+         SELECT project_id,
+                SUM(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600) AS hours
+           FROM time_entries
+          WHERE clock_out IS NOT NULL
+          GROUP BY project_id
+       ) t ON t.project_id = p.id
+       LEFT JOIN users u ON u.id = p.billing_closed_by
+      WHERE p.status = 'completed' OR i.inv_count > 0
+      ORDER BY p.completed_at NULLS LAST, p.id`
+  );
+
+  return rows.map((r) => ({
+    project: r as Project,
+    tally: {
+      count: Number(r.inv_count),
+      billedCount: Number(r.billed_count),
+      paidCount: Number(r.paid_count),
+      invoiced: Number(r.invoiced_total),
+      billed: Number(r.billed_total),
+      paid: Number(r.paid_total),
+    },
+    hours: Number(r.hours),
+    closed_by_name: r.closed_by_name,
+  }));
 }
 
 export async function deleteProject(id: number): Promise<void> {
@@ -1866,6 +2045,12 @@ export async function countAdmins(): Promise<number> {
   return (await one<{ n: number }>(
     "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1"
   ))!.n;
+}
+
+/** A user's display name, for showing who did something. */
+export async function getUserName(id: number): Promise<string | null> {
+  const row = await one<{ name: string }>('SELECT name FROM users WHERE id = $1', [id]);
+  return row?.name ?? null;
 }
 
 export async function getUserRole(id: number): Promise<string | undefined> {

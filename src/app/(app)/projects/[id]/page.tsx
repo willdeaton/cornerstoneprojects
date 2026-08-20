@@ -8,7 +8,9 @@ import {
   projectHours,
   listProjectFiles,
   listProjectInvoices,
+  getUserName,
 } from '@/lib/data';
+import { billingSummary, tallyInvoices } from '@/lib/billing';
 import {
   listScheduleTasks,
   listHolidays,
@@ -26,6 +28,7 @@ import { ProjectTime } from './ProjectTime';
 import { ProjectHeaderActions } from './ProjectHeaderActions';
 import { ProjectFiles } from './ProjectFiles';
 import { InvoiceSection } from './InvoiceSection';
+import { BillingSection } from './BillingSection';
 import { ScheduleSection } from './ScheduleSection';
 import { CrewNotesSection } from './CrewNotesSection';
 
@@ -46,6 +49,15 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
   const invoices = await listProjectInvoices(id);
+  // Where the job stands on the billing desk — derived from the invoice rows
+  // above, so the card can never disagree with the ledger under it.
+  const billing = billingSummary(project, tallyInvoices(invoices));
+  const closedByName = project.billing_closed_by
+    ? await getUserName(project.billing_closed_by)
+    : null;
+  // Billing is an admin/manager view: the A/R on every job isn't a worker's
+  // business, which is the same line Settings draws.
+  const canBill = user.role === 'admin' || user.role === 'manager';
   const [scheduleTasks, holidays, subs, publication, scheduleChanges, crewNotes] =
     await Promise.all([
       listScheduleTasks({ projectId: id }),
@@ -186,6 +198,16 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
           />
 
           <CrewNotesSection projectId={project.id} notes={crewNotes} />
+
+          {canBill && (
+            <BillingSection
+              projectId={project.id}
+              summary={billing}
+              holdReason={project.billing_hold_reason}
+              closedAt={project.billing_closed_at}
+              closedByName={closedByName}
+            />
+          )}
 
           <InvoiceSection project={project} invoices={invoices} />
 
