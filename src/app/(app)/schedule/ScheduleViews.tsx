@@ -62,7 +62,7 @@ export function ScheduleViews({
             onClick={() => setView(v.id)}
             title={v.hint}
             className={`px-4 py-2 text-sm font-medium transition-colors ${
-              view === v.id ? 'bg-brand-green text-white' : 'text-brand-gray hover:bg-black/5'
+              view === v.id ? 'bg-brand-green font-semibold text-brand-ink' : 'text-brand-gray hover:bg-black/5'
             }`}
           >
             {v.label}

@@ -39,7 +39,7 @@ function weekLabel(iso: string): string {
 function CurrencyTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs shadow-card">
+    <div className="tnum rounded-xl border border-surface-line bg-white px-3 py-2 text-xs shadow-pop">
       {label && <p className="font-semibold text-brand-ink">{label}</p>}
       <p className="text-brand-gray">
         {payload[0].name ? `${payload[0].name}: ` : ''}
@@ -53,7 +53,7 @@ function WeekTooltip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const p = payload[0].payload as WeekBucket;
   return (
-    <div className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs shadow-card">
+    <div className="tnum rounded-xl border border-surface-line bg-white px-3 py-2 text-xs shadow-pop">
       <p className="font-semibold text-brand-ink">Week of {weekLabel(p.week_start)}</p>
       <p className="text-brand-gray">
         <span className="font-semibold text-brand-ink">{money(p.value)}</span> ·{' '}
@@ -84,21 +84,21 @@ function Drilldown({
 function QuoteList({ quotes }: { quotes: QuoteLite[] }) {
   if (!quotes.length) return <p className="py-4 text-center text-sm text-brand-gray">No quotes.</p>;
   return (
-    <ul className="divide-y divide-black/5">
+    <ul className="divide-y divide-surface-line">
       {quotes.map((q) => (
         <li key={q.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
           <div className="min-w-0">
             <p className="truncate font-medium text-brand-ink">
-              {q.quote_number ? <span className="mr-2 font-mono text-xs text-brand-gray">{q.quote_number}</span> : null}
+              {q.quote_number ? <span className="tnum mr-2 text-xs text-brand-gray">{q.quote_number}</span> : null}
               {q.customer}
             </p>
             {q.project_name && <p className="truncate text-xs text-brand-gray">{q.project_name}</p>}
           </div>
-          <span className="shrink-0 font-semibold text-brand-ink">{money(q.bid_value)}</span>
+          <span className="tnum shrink-0 font-semibold text-brand-ink">{money(q.bid_value)}</span>
         </li>
       ))}
       <li className="pt-3 text-right">
-        <Link href="/quotes" className="text-xs font-semibold text-brand-green-dark hover:underline">
+        <Link href="/quotes" className="text-xs font-semibold text-brand-green-dark transition-colors duration-150 hover:text-brand-ink">
           Go to Quotes →
         </Link>
       </li>
@@ -109,14 +109,14 @@ function QuoteList({ quotes }: { quotes: QuoteLite[] }) {
 function ProjectList({ projects }: { projects: ProjectLite[] }) {
   if (!projects.length) return <p className="py-4 text-center text-sm text-brand-gray">No projects.</p>;
   return (
-    <ul className="divide-y divide-black/5">
+    <ul className="divide-y divide-surface-line">
       {projects.map((p) => (
         <li key={p.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
           <Link href={`/projects/${p.id}`} className="min-w-0 hover:underline">
             <p className="truncate font-medium text-brand-ink">{p.name}</p>
             <p className="truncate text-xs text-brand-gray">{p.customer}</p>
           </Link>
-          <span className="shrink-0 font-semibold text-brand-ink">{money(p.value)}</span>
+          <span className="tnum shrink-0 font-semibold text-brand-ink">{money(p.value)}</span>
         </li>
       ))}
     </ul>
@@ -143,7 +143,7 @@ export function QuotesByWeek({ data }: { data: WeekBucket[] }) {
               tickLine={false}
               width={44}
             />
-            <Tooltip content={<WeekTooltip />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
+            <Tooltip content={<WeekTooltip />} cursor={{ fill: 'rgba(31,36,33,0.03)' }} />
             <Bar
               dataKey="value"
               radius={[6, 6, 0, 0]}
@@ -155,8 +155,10 @@ export function QuotesByWeek({ data }: { data: WeekBucket[] }) {
               <LabelList
                 dataKey="value"
                 position="top"
-                formatter={(v: number) => moneyCompact(v)}
-                style={{ fontSize: 12, fontWeight: 700, fill: INK }}
+                // Empty weeks get no label — a row of "$0"s is noise, and the
+                // gap already says there was nothing that week.
+                formatter={(v: number) => (v > 0 ? moneyCompact(v) : '')}
+                style={{ fontSize: 11, fontWeight: 600, fill: GRAY }}
               />
             </Bar>
           </BarChart>
@@ -194,7 +196,7 @@ export function PipelineByCustomer({
             axisLine={false}
             tickLine={false}
           />
-          <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
+          <Tooltip content={<CurrencyTooltip />} cursor={{ fill: 'rgba(31,36,33,0.03)' }} />
           <Bar
             dataKey="value"
             fill={GREEN}
@@ -262,13 +264,13 @@ export function SoldByStatus({
           <li key={d.status}>
             <button
               onClick={() => setSel({ label: d.label, projects: d.projects })}
-              className="flex w-full items-center justify-between rounded-md px-1 py-0.5 text-sm hover:bg-black/[0.03]"
+              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm transition-colors duration-150 hover:bg-black/[0.03]"
             >
               <span className="flex items-center gap-2 text-brand-ink">
-                <span className="h-2.5 w-2.5 rounded-sm" style={{ background: STATUS_COLOR[d.status] }} />
+                <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLOR[d.status] }} />
                 {d.label} <span className="text-xs text-brand-gray">({d.count})</span>
               </span>
-              <span className="font-semibold text-brand-ink">{money(d.value)}</span>
+              <span className="tnum font-semibold text-brand-ink">{money(d.value)}</span>
             </button>
           </li>
         ))}

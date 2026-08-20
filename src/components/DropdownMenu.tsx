@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useEnterTransition } from './useEnterTransition';
 
 /**
  * A kebab (⋮) action menu whose popup is rendered in a portal on <body> with
@@ -34,13 +35,17 @@ export function DropdownMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; up: boolean } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
 
   const close = useCallback(() => setOpen(false), []);
+
+  // Unmounting is immediate on close (the menu is gated on `open` below), so
+  // only the enter half of this is used.
+  const { state } = useEnterTransition(open);
 
   const position = useCallback(() => {
     const btn = btnRef.current;
@@ -57,7 +62,7 @@ export function DropdownMenu({
     let left = r.right - width;
     left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
 
-    setCoords({ top, left });
+    setCoords({ top, left, up: openUp });
   }, [width]);
 
   // Measure and place once the menu is in the DOM.
@@ -94,7 +99,7 @@ export function DropdownMenu({
       <button
         ref={btnRef}
         type="button"
-        className="rounded-lg px-2 py-1 text-brand-gray hover:bg-black/5 disabled:opacity-50"
+        className="rounded-lg px-2 py-1.5 text-brand-gray transition-[background-color,color,transform] duration-150 ease-out hover:bg-black/[0.05] hover:text-brand-ink active:scale-95 disabled:opacity-50"
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
         aria-label={ariaLabel}
@@ -114,6 +119,7 @@ export function DropdownMenu({
           <div
             ref={menuRef}
             role="menu"
+            data-state={state}
             style={{
               position: 'fixed',
               top: coords?.top ?? -9999,
@@ -121,8 +127,11 @@ export function DropdownMenu({
               width,
               maxHeight: 'calc(100vh - 16px)',
               visibility: coords ? 'visible' : 'hidden',
+              // Origin-aware: the menu grows out of the trigger it belongs to
+              // rather than out of its own centre.
+              transformOrigin: `${coords?.up ? 'bottom' : 'top'} right`,
             }}
-            className="z-50 overflow-y-auto rounded-lg border border-black/10 bg-white py-1 text-sm shadow-card-hover"
+            className="anim-pop z-50 overflow-y-auto rounded-xl border border-surface-line bg-white p-1 text-sm shadow-pop"
           >
             {children(close)}
           </div>,

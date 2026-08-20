@@ -45,20 +45,18 @@ export default async function ProjectsPage({
       </PageHeader>
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1 rounded-lg border border-black/10 bg-white p-1">
+        <div className="segmented">
           {TABS.map((t) => (
             <Link
               key={t.key}
               href={`/projects?status=${t.key}`}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                filter === t.key ? 'bg-brand-green text-brand-ink' : 'text-brand-gray hover:bg-black/5'
-              }`}
+              className={`segment ${filter === t.key ? 'segment-on' : ''}`}
             >
               {t.label}
             </Link>
           ))}
         </div>
-        <p className="text-sm text-brand-gray">
+        <p className="tnum text-sm text-brand-gray">
           <span className="font-semibold text-brand-ink">{projects.length}</span> jobs ·{' '}
           <span className="font-semibold text-brand-ink">{money(total)}</span>
         </p>
@@ -77,14 +75,12 @@ export default async function ProjectsPage({
               <Link
                 key={p.id}
                 href={`/projects/${p.id}`}
-                className="card group p-5 transition hover:shadow-card-hover"
+                className="card-interactive group p-5"
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-semibold uppercase tracking-wide text-brand-gray">
-                      {p.customer}
-                    </p>
-                    <h3 className="mt-0.5 font-semibold text-brand-ink group-hover:text-brand-green-dark">
+                    <p className="eyebrow truncate">{p.customer}</p>
+                    <h3 className="brand-heading mt-1 text-brand-ink transition-colors duration-150 group-hover:text-brand-green-dark">
                       {p.name}
                     </h3>
                   </div>
@@ -94,14 +90,14 @@ export default async function ProjectsPage({
                 <div className="mb-3">
                   <div className="mb-1 flex justify-between text-xs text-brand-gray">
                     <span>Progress</span>
-                    <span className="font-semibold text-brand-ink">{p.progress}%</span>
+                    <span className="tnum font-semibold text-brand-ink">{p.progress}%</span>
                   </div>
                   <ProgressBar value={p.progress} />
                 </div>
 
-                <div className="flex items-center justify-between border-t border-black/5 pt-3 text-sm">
-                  <span className="font-bold text-brand-ink">{money(p.value)}</span>
-                  <span className="flex items-center gap-3 text-xs text-brand-gray">
+                <div className="flex items-center justify-between border-t border-surface-line pt-3 text-sm">
+                  <span className="tnum font-semibold text-brand-ink">{money(p.value)}</span>
+                  <span className="tnum flex items-center gap-3 text-xs text-brand-gray">
                     {hrs > 0 && <span>{hrs.toFixed(1)}h logged</span>}
                     {p.due_date && <span>Due {shortDate(p.due_date)}</span>}
                   </span>

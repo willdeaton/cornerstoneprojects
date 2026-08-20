@@ -324,7 +324,7 @@ export function CrewWeek({
               onClick={() => setWeeks(s.weeks)}
               className={`px-3 py-2 text-sm font-medium transition-colors ${
                 weeks === s.weeks
-                  ? 'bg-brand-green text-white'
+                  ? 'bg-brand-green font-semibold text-brand-ink'
                   : 'text-brand-gray hover:bg-black/5'
               }`}
             >

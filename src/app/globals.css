@@ -5,8 +5,19 @@
 :root {
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
     sans-serif;
-  /* Headings share the body sans-serif; distinction comes from uppercase tracking and weight. */
+  /* Headings share the body sans-serif; distinction comes from weight and
+     tighter tracking rather than uppercase. */
   --font-display: var(--font-sans);
+
+  /* Motion. Strong custom curves — never `ease-in` on UI, which delays the
+     first few frames exactly where the eye is looking. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* Surfaces + hairlines, tinted toward the brand ink. */
+  --line: rgba(31, 36, 33, 0.08);
+  --line-strong: rgba(31, 36, 33, 0.16);
+  --ring: #7ba82c;
 }
 
 body {
@@ -14,45 +25,164 @@ body {
   background: #f4f6f4;
   color: #1f2421;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* One consistent, visible focus ring for everything keyboard-reachable, and
+   never a ring for plain mouse clicks. */
+:where(a, button, [role='button'], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
 }
 
 @layer components {
+  /* Page + section titles. Weight and tracking carry the emphasis. */
   .brand-heading {
     font-family: var(--font-display);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-weight: 600;
+    letter-spacing: -0.011em;
+  }
+
+  /* The small all-caps label above a value, a table column, or a field.
+     Uppercase is reserved for these — it stops being noise when it only ever
+     means "this is a label". */
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.07em] text-brand-gray;
   }
 
   .card {
-    @apply rounded-xl border border-black/5 bg-white shadow-card;
+    @apply rounded-xl border border-surface-line bg-white shadow-card;
+  }
+  /* Cards that are themselves a link or button. */
+  .card-interactive {
+    @apply card transition-[box-shadow,border-color,transform] duration-200 ease-out;
+  }
+  .card-interactive:hover {
+    @apply border-surface-line-strong shadow-card-hover;
+  }
+  .card-interactive:active {
+    transform: scale(0.995);
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
+      disabled:cursor-not-allowed disabled:opacity-50;
+    transition:
+      background-color 140ms var(--ease-out),
+      border-color 140ms var(--ease-out),
+      color 140ms var(--ease-out),
+      box-shadow 140ms var(--ease-out),
+      transform 140ms var(--ease-out);
+  }
+  /* Press feedback: the interface confirming it heard the click. */
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
   }
   .btn-primary {
-    @apply btn bg-brand-green text-brand-ink hover:bg-brand-green-dark hover:text-white;
+    /* Text colour stays put on hover — only the surface darkens, so the label
+       doesn't flash to a different colour mid-transition. */
+    @apply btn bg-brand-green text-brand-ink hover:bg-brand-green-dark;
   }
   .btn-secondary {
-    @apply btn border border-black/10 bg-white text-brand-ink hover:bg-black/5;
+    @apply btn border border-surface-line-strong bg-white text-brand-ink hover:bg-surface-sunken;
   }
   .btn-danger {
-    @apply btn border border-red-200 bg-white text-red-600 hover:bg-red-50;
+    @apply btn border border-red-200 bg-white text-red-600 hover:border-red-300 hover:bg-red-50;
+  }
+  /* Low-emphasis action that sits inside dense UI (table rows, card footers). */
+  .btn-ghost {
+    @apply btn bg-transparent text-brand-gray hover:bg-black/[0.04] hover:text-brand-ink;
   }
 
   .input {
-    @apply w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-green focus:ring-2 focus:ring-brand-green/30;
+    @apply w-full rounded-lg border border-surface-line-strong bg-white px-3 py-2 text-sm text-brand-ink
+      outline-none placeholder:text-brand-gray/70;
+    transition:
+      border-color 140ms var(--ease-out),
+      box-shadow 140ms var(--ease-out);
+  }
+  .input:focus {
+    border-color: #98c73a;
+    /* A single soft halo instead of a ring that also shifts the border width,
+       so the field doesn't nudge its neighbours on focus. */
+    box-shadow: 0 0 0 3px rgba(152, 199, 58, 0.18);
+    outline: none;
   }
   .label {
-    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-brand-gray;
+    @apply eyebrow mb-1.5 block;
   }
 
   .badge {
-    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
+    /* Never wrap: a two-word status breaking across lines pushes the dot out of
+       alignment and makes every row in a grid a different height. */
+    @apply inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5
+      text-[11px] font-semibold;
   }
+
+  /* --- Menu (popover) rows --------------------------------------------- */
+  /* Rows sit inside a rounded, padded popover, so their hover highlight is
+     rounded and inset too — a square highlight fighting a rounded container is
+     one of those details nobody names but everybody feels. */
+  .menu-item {
+    @apply block w-full rounded-lg px-3 py-2 text-left text-sm text-brand-ink transition-colors duration-100;
+  }
+  .menu-item:hover {
+    @apply bg-black/[0.05];
+  }
+  .menu-item-danger {
+    @apply menu-item text-red-600;
+  }
+  .menu-item-danger:hover {
+    @apply bg-red-50;
+  }
+  .menu-item-accent {
+    @apply menu-item font-medium text-brand-green-dark;
+  }
+  .menu-item-accent:hover {
+    @apply bg-brand-green/10;
+  }
+  .menu-label {
+    @apply eyebrow px-3 pb-1 pt-2;
+  }
+  .menu-sep {
+    @apply my-1 h-px bg-surface-line;
+  }
+
+  /* --- Segmented filter control ---------------------------------------- */
+  .segmented {
+    @apply inline-flex flex-wrap gap-0.5 rounded-lg border border-surface-line bg-white p-0.5;
+  }
+  .segment {
+    @apply rounded-[0.3rem] px-3 py-1.5 text-sm font-medium text-brand-gray;
+    transition:
+      background-color 140ms var(--ease-out),
+      color 140ms var(--ease-out),
+      transform 140ms var(--ease-out);
+  }
+  .segment:hover {
+    @apply bg-black/[0.04] text-brand-ink;
+  }
+  .segment:active {
+    transform: scale(0.97);
+  }
+  .segment-on {
+    @apply bg-brand-green font-semibold text-brand-ink;
+  }
+  .segment-on:hover {
+    @apply bg-brand-green text-brand-ink;
+  }
+
 }
 
 @layer utilities {
+  /* Figures that sit in a column need to line up — proportional digits make
+     currency columns look ragged. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
   /* Horizontally-scrollable strips (nav sub-tabs, filter pills) that shouldn't
      show a scrollbar. Momentum scrolling on touch devices. */
   .no-scrollbar {
@@ -62,6 +192,68 @@ body {
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Enter transitions driven by a `data-state` attribute the component flips
+     one frame after mount. Transitions (not keyframes) so a rapidly
+     re-triggered element retargets from where it is instead of restarting. */
+  .anim-pop {
+    opacity: 1;
+    transform: scale(1);
+    transition:
+      opacity 150ms var(--ease-out),
+      transform 150ms var(--ease-out);
+  }
+  .anim-pop[data-state='closed'] {
+    opacity: 0;
+    /* Never scale(0) — nothing in the real world appears from nothing. */
+    transform: scale(0.96);
+  }
+
+  .anim-modal {
+    opacity: 1;
+    transform: scale(1);
+    transition:
+      opacity 200ms var(--ease-out),
+      transform 200ms var(--ease-out);
+  }
+  .anim-modal[data-state='closed'] {
+    opacity: 0;
+    transform: scale(0.97);
+    /* Exit is quicker than enter — the system responding should feel snappy. */
+    transition-duration: 140ms;
+  }
+
+  .anim-scrim {
+    opacity: 1;
+    transition: opacity 200ms var(--ease-out);
+  }
+  .anim-scrim[data-state='closed'] {
+    opacity: 0;
+    transition-duration: 140ms;
+  }
+}
+
+/* Reduced motion means fewer and gentler animations, not none: opacity and
+   colour still aid comprehension, movement and scaling go away. */
+@media (prefers-reduced-motion: reduce) {
+  .anim-pop,
+  .anim-modal {
+    transition-property: opacity;
+  }
+  .anim-pop[data-state='closed'],
+  .anim-modal[data-state='closed'] {
+    transform: none;
+  }
+  .btn:active:not(:disabled),
+  .card-interactive:active {
+    transform: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

@@ -387,7 +387,7 @@ export function TaskModal({
                 if (Math.round(Number(crewSize) || 0) < 1) setCrewSize('1');
               }}
               className={`px-4 py-2 text-sm font-medium transition-colors ${
-                !subbed ? 'bg-brand-green text-white' : 'text-brand-gray hover:bg-black/5'
+                !subbed ? 'bg-brand-green font-semibold text-brand-ink' : 'text-brand-gray hover:bg-black/5'
               }`}
             >
               Our Crew
@@ -407,7 +407,7 @@ export function TaskModal({
                   : undefined
               }
               className={`border-l border-black/10 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
-                subbed ? 'bg-brand-green text-white' : 'text-brand-gray hover:bg-black/5'
+                subbed ? 'bg-brand-green font-semibold text-brand-ink' : 'text-brand-gray hover:bg-black/5'
               }`}
             >
               A Subcontractor
