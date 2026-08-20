@@ -8,17 +8,17 @@ import { itemActive, type NavItem } from './nav-config';
 export function NavTabs({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
   return (
-    <div className="no-scrollbar mb-6 flex gap-1 overflow-x-auto border-b border-black/10">
+    <div className="no-scrollbar mb-6 flex gap-1 overflow-x-auto border-b border-surface-line">
       {items.map((it) => {
         const active = itemActive(it, pathname);
         return (
           <Link
             key={it.href}
             href={it.href}
-            className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+            className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm transition-[color,border-color] duration-150 ease-out ${
               active
-                ? 'border-brand-green text-brand-ink'
-                : 'border-transparent text-brand-gray hover:text-brand-ink'
+                ? 'border-brand-green font-semibold text-brand-ink'
+                : 'border-transparent font-medium text-brand-gray hover:border-surface-line-strong hover:text-brand-ink'
             }`}
           >
             {it.label}

@@ -112,14 +112,14 @@ export function UserRowActions({
       <DropdownMenu width={192} disabled={pending}>
         {(close) => (
           <>
-            <p className="px-4 py-1 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+            <p className="menu-label">
               Set role
             </p>
             {roles.map((r) => (
               <button
                 key={r}
                 disabled={r === user.role}
-                className="block w-full px-4 py-1.5 text-left capitalize text-brand-ink hover:bg-black/5 disabled:font-semibold disabled:text-brand-green-dark"
+                className="menu-item capitalize disabled:font-semibold disabled:text-brand-green-dark"
                 onClick={() => {
                   close();
                   run(() => changeRoleAction(user.id, r));
@@ -129,9 +129,9 @@ export function UserRowActions({
                 {r === user.role ? ' ✓' : ''}
               </button>
             ))}
-            <div className="my-1 border-t border-black/5" />
+            <div className="menu-sep" />
             <button
-              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              className="menu-item"
               onClick={() => {
                 close();
                 setMgrId(user.manager_id != null ? String(user.manager_id) : '');
@@ -142,7 +142,7 @@ export function UserRowActions({
               Change manager
             </button>
             <button
-              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              className="menu-item"
               onClick={() => {
                 close();
                 setPwOpen(true);
@@ -151,7 +151,7 @@ export function UserRowActions({
               Reset password
             </button>
             <button
-              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              className="menu-item"
               onClick={() => {
                 close();
                 setRate(user.hourly_rate != null ? String(user.hourly_rate) : '');
@@ -162,7 +162,7 @@ export function UserRowActions({
               Set hourly rate
             </button>
             <button
-              className="block w-full px-4 py-1.5 text-left text-brand-ink hover:bg-black/5"
+              className="menu-item"
               onClick={() => {
                 close();
                 setSubsOpen(true);
@@ -173,7 +173,7 @@ export function UserRowActions({
             {!isSelf &&
               (user.active ? (
                 <button
-                  className="block w-full px-4 py-1.5 text-left text-red-600 hover:bg-red-50"
+                  className="menu-item-danger"
                   onClick={() => {
                     close();
                     run(() => toggleActiveAction(user.id, false));
@@ -183,7 +183,7 @@ export function UserRowActions({
                 </button>
               ) : (
                 <button
-                  className="block w-full px-4 py-1.5 text-left text-brand-green-dark hover:bg-brand-green/10"
+                  className="menu-item-accent"
                   onClick={() => {
                     close();
                     run(() => toggleActiveAction(user.id, true));
@@ -194,9 +194,9 @@ export function UserRowActions({
               ))}
             {!isSelf && (
               <>
-                <div className="my-1 border-t border-black/5" />
+                <div className="menu-sep" />
                 <button
-                  className="block w-full px-4 py-1.5 text-left text-red-600 hover:bg-red-50"
+                  className="menu-item-danger"
                   onClick={() => {
                     close();
                     setDelMsg(null);

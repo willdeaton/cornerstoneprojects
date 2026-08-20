@@ -37,14 +37,12 @@ export default async function QuotesPage({
       </PageHeader>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="flex gap-1 rounded-lg border border-black/10 bg-white p-1">
+        <div className="segmented">
           {TABS.map((t) => (
             <Link
               key={t.key}
               href={`/quotes?status=${t.key}`}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                filter === t.key ? 'bg-brand-green text-brand-ink' : 'text-brand-gray hover:bg-black/5'
-              }`}
+              className={`segment ${filter === t.key ? 'segment-on' : ''}`}
             >
               {t.label}
             </Link>

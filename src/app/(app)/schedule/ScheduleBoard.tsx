@@ -276,7 +276,7 @@ export function ScheduleBoard({
               onClick={() => setSpanDays(s.days)}
               className={`px-3 py-2 text-sm font-medium transition-colors ${
                 spanDays === s.days
-                  ? 'bg-brand-green text-white'
+                  ? 'bg-brand-green font-semibold text-brand-ink'
                   : 'text-brand-gray hover:bg-black/5'
               }`}
             >

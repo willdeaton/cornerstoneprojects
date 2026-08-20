@@ -206,14 +206,14 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
             </option>
           ))}
         </select>
-        <p className="text-sm text-brand-gray sm:ml-auto">
+        <p className="tnum text-sm text-brand-gray sm:ml-auto">
           <span className="font-semibold text-brand-ink">{filtered.length}</span> quotes ·{' '}
           <span className="font-semibold text-brand-ink">{money(total)}</span>
         </p>
       </div>
 
       {selected.size > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-green/40 bg-brand-green/10 px-4 py-2.5">
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-brand-green/30 bg-brand-green/10 px-4 py-2.5">
           <span className="text-sm font-semibold text-brand-ink">
             {selected.size} selected
           </span>
@@ -235,14 +235,14 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
               Mark Lost{openSelectedIds.length ? ` (${openSelectedIds.length})` : ''}
             </button>
             <button
-              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+              className="btn-danger px-3 py-1.5 text-sm"
               onClick={bulkDelete}
               disabled={busy}
             >
               Delete
             </button>
             <button
-              className="text-sm font-semibold text-brand-gray underline disabled:opacity-50"
+              className="px-2 text-sm font-semibold text-brand-gray transition-colors duration-150 hover:text-brand-ink disabled:opacity-50"
               onClick={() => setSelected(new Set())}
               disabled={busy}
             >
@@ -266,8 +266,8 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-sm">
               <thead>
-                <tr className="border-b border-black/5 text-left text-xs uppercase tracking-wide text-brand-gray">
-                  <th className="w-10 px-4 py-3">
+                <tr className="border-b border-surface-line text-left">
+                  <th className="w-10 px-4 py-2.5">
                     <input
                       ref={selectAllRef}
                       type="checkbox"
@@ -283,24 +283,33 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
                       <th
                         key={col.key}
                         aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                        className={`px-4 py-3 font-semibold ${col.align === 'right' ? 'text-right' : ''}`}
+                        className={`eyebrow whitespace-nowrap px-4 py-2.5 ${
+                          col.align === 'right' ? 'text-right' : ''
+                        }`}
                       >
                         <button
                           type="button"
                           onClick={() => toggleSort(col.key)}
-                          className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-brand-ink ${
+                          className={`inline-flex items-center gap-1 transition-colors duration-150 hover:text-brand-ink ${
                             active ? 'text-brand-ink' : ''
                           } ${col.align === 'right' ? 'flex-row-reverse' : ''}`}
                         >
                           {col.label}
-                          <span aria-hidden className="text-[0.65rem] leading-none">
-                            {active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+                          {/* Only the sorted column carries an arrow — an
+                              indicator on every column is just noise. */}
+                          <span
+                            aria-hidden
+                            className={`text-[0.6rem] leading-none transition-opacity duration-150 ${
+                              active ? 'opacity-100' : 'opacity-0'
+                            }`}
+                          >
+                            {sortDir === 'asc' ? '▲' : '▼'}
                           </span>
                         </button>
                       </th>
                     );
                   })}
-                  <th className="px-4 py-3" />
+                  <th className="px-4 py-2.5" />
                 </tr>
               </thead>
               <tbody>
@@ -308,8 +317,8 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
                   <tr
                     key={q.id}
                     onClick={() => router.push(`/quotes/${q.id}/edit`)}
-                    className={`cursor-pointer border-b border-black/5 last:border-0 hover:bg-black/[0.015] ${
-                      selected.has(q.id) ? 'bg-brand-green/5' : ''
+                    className={`cursor-pointer border-b border-surface-line transition-colors duration-100 last:border-0 ${
+                      selected.has(q.id) ? 'bg-brand-green/[0.07]' : 'hover:bg-black/[0.02]'
                     }`}
                   >
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -321,14 +330,16 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
                         aria-label={`Select quote ${q.quote_number ?? q.customer}`}
                       />
                     </td>
-                    <td className="px-4 py-3 font-semibold text-brand-ink">
+                    <td className="tnum whitespace-nowrap px-4 py-3 font-medium text-brand-ink">
                       {q.quote_number ?? '—'}
                     </td>
                     <td className="px-4 py-3 font-semibold text-brand-ink">{q.customer}</td>
                     <td className="px-4 py-3 text-brand-gray">{q.project_name ?? '—'}</td>
                     <td className="px-4 py-3 text-brand-gray">{q.category ?? '—'}</td>
-                    <td className="px-4 py-3 text-brand-gray">{shortDate(q.date_received)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-brand-ink">
+                    <td className="tnum whitespace-nowrap px-4 py-3 text-brand-gray">
+                      {shortDate(q.date_received)}
+                    </td>
+                    <td className="tnum whitespace-nowrap px-4 py-3 text-right font-semibold text-brand-ink">
                       {money(q.bid_value)}
                     </td>
                     <td className="px-4 py-3">

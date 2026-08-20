@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation';
 import { logoutAction } from '@/app/actions/auth';
 import { setViewAsAction } from '@/app/actions/view-as';
 import { SETTINGS_GROUPS, TIME_GROUP, itemActive, groupActive } from './nav-config';
+import { useEnterTransition } from '@/components/useEnterTransition';
 
 import type { Role } from '@/lib/auth';
 
@@ -111,7 +112,7 @@ export function AppShell({
       : [...BASE_NAV, timeEntry, ...(canManageUsers ? [settingsEntry] : [])];
 
   const NavLinks = ({ rail = false, mobile = false }: { rail?: boolean; mobile?: boolean }) => (
-    <nav className="flex flex-col gap-1">
+    <nav className="flex flex-col gap-0.5">
       {nav.map((entry) =>
         entry.kind === 'link' ? (
           <Link
@@ -120,12 +121,12 @@ export function AppShell({
             onClick={() => setOpen(false)}
             title={rail ? entry.label : undefined}
             aria-label={entry.label}
-            className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-3 rounded-lg py-2 text-sm transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98] ${
               rail ? 'justify-center px-0' : 'px-3'
             } ${
               isActive(entry.href)
-                ? 'bg-brand-green text-white hover:bg-brand-green'
-                : 'text-white hover:bg-white/10 hover:text-white'
+                ? 'bg-brand-green font-semibold text-brand-ink'
+                : 'font-medium text-white/70 hover:bg-white/[0.07] hover:text-white'
             }`}
           >
             <entry.icon />
@@ -150,14 +151,14 @@ export function AppShell({
       {/* Sidebar (desktop) — pinned to the viewport so it stays static and
           doesn't grow with long pages; only the main content scrolls. */}
       <aside
-        className={`sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto bg-black p-4 transition-[width] duration-200 lg:flex ${
-          collapsed ? 'w-20' : 'w-64'
+        className={`sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto bg-brand-ink p-3 transition-[width] duration-200 ease-out lg:flex ${
+          collapsed ? 'w-[4.5rem]' : 'w-64'
         }`}
       >
         {/* Logo + collapse toggle */}
         <div
-          className={`mb-6 flex pt-1 ${
-            collapsed ? 'flex-col items-center gap-3' : 'items-center justify-between gap-2 px-2'
+          className={`mb-5 flex pt-1 ${
+            collapsed ? 'flex-col items-center gap-3' : 'items-center justify-between gap-2 px-1'
           }`}
         >
           {collapsed ? (
@@ -168,7 +169,7 @@ export function AppShell({
           )}
           <button
             onClick={toggleCollapsed}
-            className="rounded-lg p-2 text-white hover:bg-white/10"
+            className="rounded-lg p-2 text-white/60 transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/[0.07] hover:text-white active:scale-95"
             aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
             title={collapsed ? 'Expand menu' : 'Collapse menu'}
           >
@@ -191,7 +192,7 @@ export function AppShell({
             ) : (
               <Link
                 href="/time"
-                className="block rounded-lg border border-brand-green/40 bg-brand-green/10 px-3 py-2 text-xs text-brand-green-light"
+                className="block rounded-lg border border-brand-green/25 bg-brand-green/10 px-3 py-2 text-xs text-brand-green-light transition-colors duration-150 hover:bg-brand-green/15"
               >
                 <span className="flex items-center gap-1.5 font-semibold">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-brand-green" /> Clocked in
@@ -204,19 +205,19 @@ export function AppShell({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="flex items-center justify-between bg-black px-4 py-3 lg:hidden">
+      <header className="flex items-center justify-between bg-brand-ink px-4 py-3 lg:hidden">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={logoSrc} alt="Company logo" className="h-9 w-auto max-w-[150px] object-contain" />
         <button
           onClick={() => setOpen((v) => !v)}
-          className="rounded-lg p-2 text-white hover:bg-white/10"
+          className="rounded-lg p-2 text-white/70 transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/[0.07] hover:text-white active:scale-95"
           aria-label="Menu"
         >
           <HamburgerIcon />
         </button>
       </header>
       {open && (
-        <div className="bg-black px-4 pb-4 lg:hidden">
+        <div className="border-t border-white/[0.07] bg-brand-ink px-4 pb-4 pt-2 lg:hidden">
           <NavLinks mobile />
           <div className="mt-4">
             <UserCard user={user} collapsed={false} />
@@ -262,6 +263,9 @@ function NavGroup({
 
   useEffect(() => setMounted(true), []);
 
+  // Gives the flyout a "closed" style to transition away from.
+  const { state } = useEnterTransition(open);
+
   const clearClose = () => {
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
@@ -304,20 +308,20 @@ function NavGroup({
   if (mobile) {
     return (
       <div>
-        <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-white">
+        <div className="flex items-center gap-3 px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.07em] text-white/40">
           <Icon />
           {group.label}
         </div>
-        <div className="ml-9 flex flex-col gap-1 border-l border-white/10 pl-2">
+        <div className="ml-9 flex flex-col gap-0.5 border-l border-white/10 pl-2">
           {group.items.map((it) => (
             <Link
               key={it.href}
               href={it.href}
               onClick={onNavigate}
-              className={`rounded-lg px-3 py-2 text-sm transition-colors ${
+              className={`rounded-lg px-3 py-2 text-sm transition-colors duration-150 ease-out ${
                 it.isActive(pathname)
-                  ? 'bg-brand-green text-white'
-                  : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  ? 'bg-brand-green font-semibold text-brand-ink'
+                  : 'text-white/60 hover:bg-white/[0.07] hover:text-white'
               }`}
             >
               {it.label}
@@ -341,12 +345,12 @@ function NavGroup({
         aria-label={group.label}
         aria-expanded={open}
         aria-haspopup="menu"
-        className={`w-full flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+        className={`w-full flex items-center gap-3 rounded-lg py-2 text-sm transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98] ${
           rail ? 'justify-center px-0' : 'px-3'
         } ${
           active
-            ? 'bg-brand-green text-white hover:bg-brand-green'
-            : 'text-white hover:bg-white/10 hover:text-white'
+            ? 'bg-brand-green font-semibold text-brand-ink'
+            : 'font-medium text-white/70 hover:bg-white/[0.07] hover:text-white'
         }`}
       >
         <Icon />
@@ -365,7 +369,11 @@ function NavGroup({
             onMouseEnter={clearClose}
             onMouseLeave={scheduleClose}
           >
-            <div className="min-w-[12rem] rounded-lg border border-black/10 bg-white py-1 shadow-lg">
+            <div
+              data-state={state}
+              style={{ transformOrigin: 'left center' }}
+              className="anim-pop min-w-[12rem] rounded-xl border border-surface-line bg-white p-1 shadow-pop"
+            >
               {group.items.map((it) => {
                 const on = it.isActive(pathname);
                 return (
@@ -376,10 +384,8 @@ function NavGroup({
                       setOpen(false);
                       onNavigate();
                     }}
-                    className={`block px-4 py-2 text-sm transition-colors ${
-                      on
-                        ? 'bg-brand-green/10 font-medium text-brand-ink'
-                        : 'text-brand-gray hover:bg-black/5 hover:text-brand-ink'
+                    className={`menu-item ${
+                      on ? 'bg-brand-green/10 font-semibold text-brand-ink' : 'text-brand-gray hover:text-brand-ink'
                     }`}
                   >
                     {it.label}
@@ -401,7 +407,7 @@ function IconMark({ iconSrc }: { iconSrc: string | null }) {
     return <img src={iconSrc} alt="Company icon" className="h-10 w-10 rounded-lg object-contain" />;
   }
   return (
-    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-green text-lg font-bold text-white">
+    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-green text-lg font-bold text-brand-ink">
       C
     </div>
   );
@@ -420,7 +426,7 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
       <div className="flex flex-col items-center gap-2">
         <div
           title={user.name}
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-green text-sm font-bold text-white"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-green text-sm font-bold text-brand-ink"
         >
           {initials}
         </div>
@@ -439,7 +445,7 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
           <button
             title="Sign out"
             aria-label="Sign out"
-            className="rounded-lg p-2 text-white/80 transition hover:bg-white/10"
+            className="rounded-lg p-2 text-white/60 transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/[0.08] hover:text-white active:scale-95"
           >
             <SignOutIcon />
           </button>
@@ -449,9 +455,9 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
   }
 
   return (
-    <div className="rounded-lg bg-white/5 p-3">
+    <div className="rounded-lg border border-white/[0.07] bg-white/[0.04] p-3">
       <div className="flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-green text-sm font-bold text-white">
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-green text-sm font-bold text-brand-ink">
           {initials}
         </div>
         <div className="min-w-0 flex-1">
@@ -466,7 +472,7 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
       {user.realRole === 'admin' && <ViewAsSwitcher active={user.role} />}
 
       <form action={logoutAction} className="mt-3">
-        <button className="w-full rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/10">
+        <button className="w-full rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/[0.08] hover:text-white active:scale-[0.98]">
           Sign out
         </button>
       </form>
@@ -489,7 +495,7 @@ const VIEW_AS_ROLES: { value: Role; label: string }[] = [
 function ViewAsSwitcher({ active }: { active: Role }) {
   return (
     <div className="mt-3 rounded-lg border border-white/10 p-2">
-      <p className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-white/40">
+      <p className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-white/40">
         <EyeIcon /> View as
       </p>
       <div className="grid grid-cols-2 gap-1">
@@ -500,10 +506,10 @@ function ViewAsSwitcher({ active }: { active: Role }) {
               <button
                 disabled={on}
                 aria-pressed={on}
-                className={`w-full rounded-md px-1 py-1.5 text-xs font-medium transition ${
+                className={`w-full rounded-md px-1 py-1.5 text-xs font-medium transition-[background-color,color,transform] duration-150 ease-out ${
                   on
-                    ? 'cursor-default bg-brand-green text-white'
-                    : 'text-white/70 hover:bg-white/10 hover:text-white'
+                    ? 'cursor-default bg-brand-green font-semibold text-brand-ink'
+                    : 'text-white/60 hover:bg-white/[0.08] hover:text-white active:scale-[0.97]'
                 }`}
               >
                 {r.label}
@@ -519,7 +525,7 @@ function ViewAsSwitcher({ active }: { active: Role }) {
 /** Amber banner shown across the top of every page while an admin is previewing. */
 function ViewAsBanner({ role }: { role: Role }) {
   return (
-    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
       <span className="flex items-center gap-2">
         <EyeIcon />
         <span>
@@ -528,7 +534,7 @@ function ViewAsBanner({ role }: { role: Role }) {
         </span>
       </span>
       <form action={setViewAsAction.bind(null, 'admin')}>
-        <button className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100">
+        <button className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition-[background-color,transform] duration-150 ease-out hover:bg-amber-100 active:scale-[0.97]">
           Exit preview
         </button>
       </form>
@@ -545,7 +551,7 @@ function base() {
     fill: 'none',
     // Always inherit the link's text color so icons stay white in every state.
     stroke: 'currentColor',
-    strokeWidth: 2,
+    strokeWidth: 1.75,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
   };

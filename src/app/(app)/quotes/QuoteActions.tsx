@@ -29,21 +29,21 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
         <>
           <Link
             href={`/quotes/${id}/print`}
-            className="block w-full px-4 py-2 text-left font-medium text-brand-ink hover:bg-black/5"
+            className="menu-item font-medium"
             onClick={close}
           >
             View / PDF
           </Link>
           <Link
             href={`/quotes/${id}/edit`}
-            className="block w-full px-4 py-2 text-left text-brand-ink hover:bg-black/5"
+            className="menu-item"
             onClick={close}
           >
             Edit Quote
           </Link>
           {status === 'open' && (
             <button
-              className="block w-full px-4 py-2 text-left font-medium text-brand-green-dark hover:bg-brand-green/10"
+              className="menu-item-accent"
               onClick={() => {
                 close();
                 run(() => convertQuoteAction(id));
@@ -54,7 +54,7 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
           )}
           {status === 'open' && (
             <button
-              className="block w-full px-4 py-2 text-left text-brand-ink hover:bg-black/5"
+              className="menu-item"
               onClick={() => {
                 close();
                 run(() => markQuoteLostAction(id));
@@ -65,7 +65,7 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
           )}
           {status !== 'open' && (
             <button
-              className="block w-full px-4 py-2 text-left text-brand-ink hover:bg-black/5"
+              className="menu-item"
               onClick={() => {
                 close();
                 run(() => reopenQuoteAction(id));
@@ -75,7 +75,7 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
             </button>
           )}
           <button
-            className="block w-full px-4 py-2 text-left text-red-600 hover:bg-red-50"
+            className="menu-item-danger"
             onClick={() => {
               close();
               if (confirm('Delete this quote? This cannot be undone.')) run(() => deleteQuoteAction(id));
