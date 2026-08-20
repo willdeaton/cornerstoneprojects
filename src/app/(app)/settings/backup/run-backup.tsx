@@ -183,6 +183,7 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
       'Working Days': s.working_days,
       Status: s.status,
       Follows: s.follows,
+      Subcontractor: s.subcontractor,
       'Crew Needed / Day': s.crew_needed,
       'Crew Days Booked': s.crew_days_booked,
       Crew: s.crew,

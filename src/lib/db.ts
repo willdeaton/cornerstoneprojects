@@ -803,6 +803,7 @@ Your City, ST 00000',
   `);
 
   await migrateCrewDays(pool);
+  await migrateSubcontractedPhases(pool);
 }
 
 /* ====================================================================
@@ -822,10 +823,12 @@ Your City, ST 00000',
  * ==================================================================== */
 async function migrateCrewDays(pool: Pool) {
   await pool.query(`
+    -- The bound on crew_size is asserted once, by migrateSubcontractedPhases
+    -- below. These blocks all re-run on every boot, so two of them declaring
+    -- the same constraint means the stricter one fails against rows the looser
+    -- one allows — which is exactly what a subcontracted phase needing none of
+    -- our crew is.
     ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS crew_size INTEGER NOT NULL DEFAULT 1;
-    ALTER TABLE schedule_tasks DROP CONSTRAINT IF EXISTS schedule_tasks_crew_size_check;
-    ALTER TABLE schedule_tasks ADD CONSTRAINT schedule_tasks_crew_size_check
-      CHECK (crew_size >= 1);
 
     -- One person, one day, one phase. Exactly one of user_id /
     -- subcontractor_id, the same shape schedule_assignments used.
@@ -849,6 +852,32 @@ async function migrateCrewDays(pool: Pool) {
   `);
 
   await backfillCrewDays(pool);
+}
+
+/* ====================================================================
+ * Subcontracted phases.
+ *
+ * Not every phase is staffed out of our own crew. When a phase is a
+ * subcontractor's work, the sub is chosen up front on the timeline — that
+ * is when the work is contracted — rather than booked a day at a time,
+ * and their days on site follow the phase's dates automatically. Hence a
+ * column on the phase rather than crew-day rows: there is nothing to
+ * decide week by week, and a sub whose phase slips should move with it.
+ *
+ * crew_size drops to a minimum of 0 to go with it, so a phase can say
+ * "the sub covers this, no Cornerstone crew needed" — or carry a headcount
+ * alongside the sub, for the supervisor we still send.
+ * ==================================================================== */
+async function migrateSubcontractedPhases(pool: Pool) {
+  await pool.query(`
+    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS subcontractor_id INTEGER
+      REFERENCES subcontractors(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_sched_tasks_sub ON schedule_tasks(subcontractor_id);
+
+    ALTER TABLE schedule_tasks DROP CONSTRAINT IF EXISTS schedule_tasks_crew_size_check;
+    ALTER TABLE schedule_tasks ADD CONSTRAINT schedule_tasks_crew_size_check
+      CHECK (crew_size >= 0);
+  `);
 }
 
 /**

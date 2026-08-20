@@ -13,6 +13,8 @@ import {
   listScheduleChanges,
   listTaskInputs,
   listHolidays,
+  listSubcontractors,
+  getSubcontractor,
   listAssigneeContacts,
   getPublishedVersion,
   publishSchedule,
@@ -137,8 +139,14 @@ export interface TaskFields {
   name: string;
   start_date: string;
   duration_days: number;
-  /** People needed per day. With the duration, the phase's crew budget. */
+  /** Our people needed per day. With the duration, the phase's crew budget. */
   crew_size?: number;
+  /**
+   * The sub doing this phase, or null when it's our own crew's work. A
+   * subcontracted phase can still carry a crew_size for the people we send
+   * alongside them.
+   */
+  subcontractor_id?: number | null;
   depends_on_id?: number | null;
   /** Whether the link hangs off the predecessor's finish or its start. */
   depends_type?: DependsType;
@@ -153,11 +161,28 @@ export interface TaskFields {
   reason?: string | null;
 }
 
-/** Phase names for the change log, so a link reads as a name and not an id. */
+/**
+ * Names for the change log, so a link or a subcontractor reads as a name and
+ * not an id. Subs already on the job's phases contribute their own name — the
+ * catalog lists only active ones, and a sub since deactivated would otherwise
+ * read as `#7`.
+ */
 async function diffNames(projectId: number): Promise<DiffNames> {
-  const tasks = await listScheduleTasks({ projectId });
+  const [tasks, subs] = await Promise.all([
+    listScheduleTasks({ projectId }),
+    listSubcontractors(),
+  ]);
   const phases = new Map(tasks.map((t) => [t.id, t.name]));
-  return { phase: (id) => phases.get(id) ?? 'a deleted phase' };
+  const subNames = new Map(subs.map((sub) => [sub.id, sub.name]));
+  for (const t of tasks) {
+    if (t.subcontractor_id != null && t.subcontractor_name && !subNames.has(t.subcontractor_id)) {
+      subNames.set(t.subcontractor_id, t.subcontractor_name);
+    }
+  }
+  return {
+    phase: (id) => phases.get(id) ?? 'a deleted phase',
+    sub: (id) => subNames.get(id) ?? `#${id}`,
+  };
 }
 
 /**
@@ -173,8 +198,14 @@ async function jobWindows(projectId: number) {
 
 /**
  * Create or update one phase of work: what it is, when it can start, how long
- * it runs and how many people it needs. Deliberately not WHO — crew is booked a
- * day at a time from the crew week, where the days are visible.
+ * it runs, and either how many of our people it needs or which subcontractor
+ * covers it.
+ *
+ * Our own crew is deliberately not named here — they're booked a day at a time
+ * from the crew week, where the days are visible. A sub is different: they're
+ * contracted for the phase, so they're chosen up front and their days on site
+ * follow its dates. A subcontracted phase can still ask for our people
+ * alongside them (the supervisor we send), which the crew week books as usual.
  *
  * Rejects a dependency that points at another job or that would close a loop,
  * so the solver in schedule-math never has to untangle one after the fact.
@@ -223,13 +254,26 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     }
   }
 
-  const crewSize = Math.max(1, Math.round(Number(input.crew_size) || 1));
+  const subId = input.subcontractor_id ?? null;
+  let subName: string | null = null;
+  if (subId != null) {
+    const sub = await getSubcontractor(subId);
+    if (!sub) return { ok: false, error: 'That subcontractor no longer exists.' };
+    subName = sub.name;
+  }
+  // Our own crew on the phase. A subcontracted phase may need none of them, so
+  // zero is only allowed when a sub is carrying the work.
+  const crewSize =
+    subId != null
+      ? Math.max(0, Math.round(Number(input.crew_size) || 0))
+      : Math.max(1, Math.round(Number(input.crew_size) || 1));
 
   const fields = {
     name,
     start_date: input.start_date,
     duration_days: duration,
     crew_size: crewSize,
+    subcontractor_id: subId,
     depends_on_id: dependsOn,
     depends_type: dependsType,
     lag_days: lag,
@@ -247,6 +291,7 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     start_date: fields.start_date,
     duration_days: duration,
     crew_size: crewSize,
+    subcontractor_name: subName,
   });
   // A brand-new phase moves nothing that was promised, so it only needs
   // explaining once the crew has the schedule.
@@ -268,6 +313,7 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
         depends_type: before.depends_type ?? 'finish_to_start',
         lag_days: before.lag_days,
         crew_size: before.crew_size,
+        subcontractor_id: before.subcontractor_id,
         start_time: before.start_time ?? null,
         day_times: before.day_times ?? [],
         notes: before.notes,
@@ -471,6 +517,13 @@ export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionR
     return { ok: false, error: 'That day is a weekend or a non-working day.' };
   }
 
+  if (input.kind === 'sub' && task.subcontractor_id === input.ref_id) {
+    return {
+      ok: false,
+      error: `${task.subcontractor_name ?? 'That subcontractor'} already has this phase — they're on site every day of it.`,
+    };
+  }
+
   const budget = crewBudget(task, window, calendar);
   const res = await addCrewDay(
     task.id,
@@ -544,6 +597,7 @@ export async function saveCrewCardAction(input: CrewCardFields): Promise<ActionR
     depends_type: task.depends_type ?? 'finish_to_start',
     lag_days: task.lag_days,
     crew_size: task.crew_size,
+    subcontractor_id: task.subcontractor_id,
     start_time: task.start_time ?? null,
     day_times: task.day_times ?? [],
     notes: task.notes,

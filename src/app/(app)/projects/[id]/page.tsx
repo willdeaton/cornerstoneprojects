@@ -12,6 +12,7 @@ import {
 import {
   listScheduleTasks,
   listHolidays,
+  listSubcontractors,
   getPublishedVersion,
   listScheduleChanges,
   listCrewNotes,
@@ -45,13 +46,15 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const hours = await projectHours(id);
   const files = await listProjectFiles(id);
   const invoices = await listProjectInvoices(id);
-  const [scheduleTasks, holidays, publication, scheduleChanges, crewNotes] = await Promise.all([
-    listScheduleTasks({ projectId: id }),
-    listHolidays(),
-    getPublishedVersion(id),
-    listScheduleChanges(id),
-    listCrewNotes(id),
-  ]);
+  const [scheduleTasks, holidays, subs, publication, scheduleChanges, crewNotes] =
+    await Promise.all([
+      listScheduleTasks({ projectId: id }),
+      listHolidays(),
+      listSubcontractors({ activeOnly: true }),
+      getPublishedVersion(id),
+      listScheduleChanges(id),
+      listCrewNotes(id),
+    ]);
   const holidayDays = holidays.map((h) => h.day);
   // Projected finish = the latest end across the scheduled phases, chains resolved.
   const projectedFinish = projectedEnd(
@@ -166,6 +169,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
               hard_finish_date: project.hard_finish_date,
             }}
             tasks={scheduleTasks}
+            subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
             holidays={holidayDays}
             published={
               publication

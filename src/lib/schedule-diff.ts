@@ -33,8 +33,10 @@ export interface TaskDraft {
   depends_on_id: number | null;
   depends_type: DependsType;
   lag_days: number;
-  /** People needed per day. */
+  /** Our people needed per day. */
   crew_size: number;
+  /** The sub doing this phase, or null when it's our crew's work. */
+  subcontractor_id: number | null;
   /** Daily start time as 'HH:MM', or null for the crew's normal hours. */
   start_time: string | null;
   /** Per-day start-time overrides. */
@@ -52,6 +54,7 @@ export interface TaskBefore {
   depends_type: DependsType;
   lag_days: number;
   crew_size: number;
+  subcontractor_id: number | null;
   start_time: string | null;
   day_times: TaskDayTime[];
   notes: string | null;
@@ -68,9 +71,10 @@ export interface FieldChange {
   timelineRelevant: boolean;
 }
 
-/** Looks up display names for phases referenced by id. */
+/** Looks up display names for phases and subcontractors referenced by id. */
 export interface DiffNames {
   phase: (id: number) => string;
+  sub: (id: number) => string;
 }
 
 const DEPENDS_LABEL: Record<DependsType, string> = {
@@ -137,6 +141,11 @@ export function diffTask(before: TaskBefore, draft: TaskDraft, names: DiffNames)
     describeLink(draft.depends_on_id, draft.depends_type, draft.lag_days, names),
     { timeline: true }
   );
+  push(
+    'Subcontractor',
+    before.subcontractor_id == null ? 'Our crew' : names.sub(before.subcontractor_id),
+    draft.subcontractor_id == null ? 'Our crew' : names.sub(draft.subcontractor_id)
+  );
   push('Crew needed', crewSizeLabel(before.crew_size), crewSizeLabel(draft.crew_size));
   push(
     'Daily start time',
@@ -179,6 +188,7 @@ export function summarizeChanges(changes: FieldChange[]): string {
 
 /** "2 people per day" — how the headcount reads in the change log. */
 function crewSizeLabel(size: number): string {
+  if (size === 0) return 'None of our crew';
   return `${size} ${size === 1 ? 'person' : 'people'} per day`;
 }
 
@@ -188,8 +198,13 @@ export function summarizePhase(draft: {
   start_date: string;
   duration_days: number;
   crew_size?: number;
+  subcontractor_name?: string | null;
 }): string {
-  const crew = draft.crew_size ? `, ${crewSizeLabel(draft.crew_size)}` : '';
+  const crew = draft.subcontractor_name
+    ? `, subcontracted to ${draft.subcontractor_name}`
+    : draft.crew_size
+      ? `, ${crewSizeLabel(draft.crew_size)}`
+      : '';
   return `${draft.name} — starts ${shortDate(draft.start_date)}, ${draft.duration_days} working day${
     draft.duration_days === 1 ? '' : 's'
   }${crew}`;

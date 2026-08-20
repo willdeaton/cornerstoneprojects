@@ -66,7 +66,9 @@ export interface BackupSchedulePhase {
   start_time: string;
   /** Name of the phase this one follows, blank when it stands alone. */
   follows: string;
-  /** People needed per day, as planned on the timeline. */
+  /** The subcontractor carrying the phase, blank when it's our crew's work. */
+  subcontractor: string;
+  /** Our people needed per day, as planned on the timeline. */
   crew_needed: number;
   /** Crew-days booked out of the crew_needed x working_days budget. */
   crew_days_booked: number;

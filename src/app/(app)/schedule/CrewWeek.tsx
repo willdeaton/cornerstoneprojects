@@ -32,6 +32,12 @@ import { CrewJobCard } from './CrewJobCard';
 import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
+/**
+ * One phase a person is on for one day. `contracted` days come from the phase
+ * being subcontracted rather than from a crew-day booking, and are read-only.
+ */
+type DayEntry = { task: ScheduleTaskRow; startTime: string | null; contracted: boolean };
+
 /** Widths the crew grid opens at, in whole weeks — two by default. */
 const SPANS = [
   { weeks: 1, label: 'Week' },
@@ -56,6 +62,11 @@ const DEFAULT_WEEKS = 2;
  * are two cards, because they're two different asks with two different budgets.
  * Clicking a card opens it: start times day by day, and the notes the crew reads
  * before they turn up.
+ *
+ * A subcontracted phase is read-only here. The sub was engaged on the timeline,
+ * so they're on site every working day of the phase and their days follow its
+ * dates — there's no budget to spend and nothing to click away. Only the crew we
+ * send alongside them, if any, is booked here.
  */
 export function CrewWeek({
   tasks,
@@ -131,23 +142,48 @@ export function CrewWeek({
   const pickedCard = picked != null ? cardByTask.get(picked) : undefined;
   const openedCard = opened != null ? cardByTask.get(opened) : undefined;
 
-  /** Person -> day -> the phases they're booked on that day, in view. */
+  /**
+   * Person -> day -> the phases they're on that day, in view.
+   *
+   * `contracted` marks a day that comes from the phase being subcontracted
+   * rather than from a booking: the sub is on site because they hold the work,
+   * so that day can't be clicked away here — it follows the phase's dates and
+   * changes on the timeline.
+   */
   const byPerson = useMemo(() => {
-    const out = new Map<string, Map<string, { task: ScheduleTaskRow; startTime: string | null }[]>>();
-    for (const { task } of cards) {
+    const out = new Map<string, Map<string, DayEntry[]>>();
+    const add = (key: string, day: string, entry: DayEntry) => {
+      let days = out.get(key);
+      if (!days) {
+        days = new Map();
+        out.set(key, days);
+      }
+      const list = days.get(day);
+      if (list) {
+        // The sub who holds the phase is already on every day of it.
+        if (!list.some((e) => e.task.id === entry.task.id)) list.push(entry);
+      } else days.set(day, [entry]);
+    };
+
+    for (const card of cards) {
+      const { task } = card;
       const times = dayTimeMap(task.day_times ?? []);
+      if (task.subcontractor_id != null) {
+        for (const day of card.days) {
+          add(`sub:${task.subcontractor_id}`, day, {
+            task,
+            startTime: startTimeOn(day, task.start_time, times),
+            contracted: true,
+          });
+        }
+      }
       for (const c of task.crew_days ?? []) {
         if (c.day < rangeFrom || c.day > rangeTo) continue;
-        const key = `${c.kind}:${c.ref_id}`;
-        let days = out.get(key);
-        if (!days) {
-          days = new Map();
-          out.set(key, days);
-        }
-        const entry = { task, startTime: startTimeOn(c.day, task.start_time, times) };
-        const list = days.get(c.day);
-        if (list) list.push(entry);
-        else days.set(c.day, [entry]);
+        add(`${c.kind}:${c.ref_id}`, c.day, {
+          task,
+          startTime: startTimeOn(c.day, task.start_time, times),
+          contracted: false,
+        });
       }
     }
     return out;
@@ -193,7 +229,7 @@ export function CrewWeek({
     ];
     return rows
       .map((p) => {
-        const days = byPerson.get(p.key) ?? new Map<string, { task: ScheduleTaskRow; startTime: string | null }[]>();
+        const days = byPerson.get(p.key) ?? new Map<string, DayEntry[]>();
         const booked = columns.filter((d) => (days.get(d)?.length ?? 0) > 0);
         // Two different jobs on one day is a real double-booking; two phases of
         // the same job is just one crew doing two things there.
@@ -368,6 +404,10 @@ export function CrewWeek({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {visibleCards.map((c) => {
                 const active = picked === c.task.id;
+                // A phase a sub carries outright has nothing of ours to staff,
+                // so its card reports who's on it rather than a budget to fill.
+                const subName = c.task.subcontractor_name;
+                const staffable = c.budget.capacity > 0;
                 return (
                   <div
                     key={c.task.id}
@@ -379,7 +419,14 @@ export function CrewWeek({
                       onClick={() => setPicked(active ? null : c.task.id)}
                       className="block w-full text-left"
                       aria-pressed={active}
-                      title={active ? 'Stop booking this phase' : 'Book crew onto this phase'}
+                      disabled={!staffable}
+                      title={
+                        !staffable
+                          ? `${subName ?? 'This phase'} covers this phase — nothing of ours to book`
+                          : active
+                            ? 'Stop booking this phase'
+                            : 'Book crew onto this phase'
+                      }
                     >
                       <p className="truncate text-sm font-semibold text-brand-ink">
                         {c.task.project_name}
@@ -394,22 +441,39 @@ export function CrewWeek({
                         {shortDate(c.window.start)} – {shortDate(c.window.end)}
                         {c.task.start_time && ` · starts ${timeLabel(c.task.start_time)}`}
                       </p>
-                      <BudgetBar filled={c.budget.filled} capacity={c.budget.capacity} />
-                      <p
-                        className={`mt-1 text-xs font-medium ${
-                          c.budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
-                        }`}
-                      >
-                        {c.budget.filled} / {c.budget.capacity} crew days
-                        {c.budget.remaining === 0
-                          ? ' · fully staffed'
-                          : ` · ${c.budget.remaining} to fill`}
-                      </p>
-                      <p className="text-[11px] text-brand-gray">
-                        needs {c.budget.needed} {c.budget.needed === 1 ? 'person' : 'people'} a day ·{' '}
-                        {c.budget.days} working {c.budget.days === 1 ? 'day' : 'days'}
-                      </p>
-                      {bands.length > 1 && <WeekSplit card={c} bands={bands} columns={columns} />}
+                      {subName && (
+                        <p className="mt-1 truncate text-xs font-medium text-brand-ink">
+                          Subcontracted to {subName}
+                        </p>
+                      )}
+                      {staffable ? (
+                        <>
+                          <BudgetBar filled={c.budget.filled} capacity={c.budget.capacity} />
+                          <p
+                            className={`mt-1 text-xs font-medium ${
+                              c.budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
+                            }`}
+                          >
+                            {c.budget.filled} / {c.budget.capacity} crew days
+                            {c.budget.remaining === 0
+                              ? ' · fully staffed'
+                              : ` · ${c.budget.remaining} to fill`}
+                          </p>
+                          <p className="text-[11px] text-brand-gray">
+                            {subName ? 'plus ' : 'needs '}
+                            {c.budget.needed} of ours a day · {c.budget.days} working{' '}
+                            {c.budget.days === 1 ? 'day' : 'days'}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="mt-1.5 text-[11px] text-brand-gray">
+                          On site all {c.budget.days} working{' '}
+                          {c.budget.days === 1 ? 'day' : 'days'} · none of our crew needed
+                        </p>
+                      )}
+                      {bands.length > 1 && (
+                        <WeekSplit card={c} bands={bands} columns={columns} staffable={staffable} />
+                      )}
                     </button>
                     <div className="mt-2 flex items-center justify-between gap-2 border-t border-black/5 pt-2">
                       <span
@@ -417,7 +481,7 @@ export function CrewWeek({
                           c.budget.full ? 'text-brand-gray' : 'text-brand-green-dark'
                         }`}
                       >
-                        {!active
+                        {!active || !staffable
                           ? ''
                           : c.budget.full
                             ? 'Fully staffed — click a booking to free a day'
@@ -539,8 +603,17 @@ export function CrewWeek({
                       (pickedCard.byDay.get(d) ?? []).some(
                         (c) => c.kind === p.kind && c.ref_id === p.refId
                       );
+                    // The sub carrying a phase is on it by contract, not by
+                    // booking — there's no day here to give or take.
+                    const contractedHere =
+                      !!pickedCard &&
+                      p.kind === 'sub' &&
+                      pickedCard.task.subcontractor_id === p.refId;
                     const bookable =
-                      !!pickedCard && (pickedCard.days.includes(d) ?? false) && (on || !pickedCard.budget.full);
+                      !!pickedCard &&
+                      !contractedHere &&
+                      pickedCard.days.includes(d) &&
+                      (on || !pickedCard.budget.full);
                     return (
                       <div
                         key={d}
@@ -551,11 +624,13 @@ export function CrewWeek({
                         }`}
                         onClick={bookable ? () => toggleCell(p, d) : undefined}
                         title={
-                          bookable
-                            ? on
-                              ? `Take ${p.name} off ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
-                              : `Book ${p.name} on ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
-                            : undefined
+                          contractedHere
+                            ? `${p.name} has this phase — their days follow it, change it on the timeline`
+                            : bookable
+                              ? on
+                                ? `Take ${p.name} off ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
+                                : `Book ${p.name} on ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
+                              : undefined
                         }
                       >
                         {items.map((b) => (
@@ -563,13 +638,18 @@ export function CrewWeek({
                             key={b.task.id}
                             onClick={(e) => {
                               e.stopPropagation();
-                              removeFrom(b.task.id, d, p);
+                              if (!b.contracted) removeFrom(b.task.id, d, p);
                             }}
+                            disabled={b.contracted}
                             title={`${b.task.project_name} — ${b.task.name}${
                               b.startTime ? `\nStarts ${timeLabel(b.startTime)}` : ''
-                            }\nClick to take ${p.name} off this day`}
+                            }\n${
+                              b.contracted
+                                ? 'Subcontracted for this phase — their days follow its dates'
+                                : `Click to take ${p.name} off this day`
+                            }`}
                             className={`block w-full rounded px-1.5 py-1 text-left text-[11px] leading-tight ${
-                              STATUS_CHIP[b.task.status]
+                              b.contracted ? CONTRACTED_CHIP : STATUS_CHIP[b.task.status]
                             }`}
                           >
                             {b.startTime && (
@@ -609,8 +689,9 @@ export function CrewWeek({
         {weeks > 1 &&
           'Both weeks book from the same card, so a phase running over a weekend is staffed in one pass. '}
         Click a booking to take someone off that day. A day shaded red is one where somebody is on
-        two different jobs. Open a card to set start times day by day and write what the crew needs
-        to know.
+        two different jobs. A subcontracted phase shows its sub on every day it runs, dashed and
+        not clickable — they were engaged on the timeline, so their days follow its dates. Open a
+        card to set start times day by day and write what the crew needs to know.
       </p>
 
       {openedCard && (
@@ -644,10 +725,13 @@ function WeekSplit({
   card,
   bands,
   columns,
+  staffable = true,
 }: {
   card: { window: ComputedWindow; byDay: Map<string, unknown[]>; days: string[] };
   bands: WeekBand[];
   columns: string[];
+  /** False on a subcontracted phase needing none of our crew — nothing to book. */
+  staffable?: boolean;
 }) {
   return (
     <span className="mt-1.5 flex flex-wrap gap-1">
@@ -664,7 +748,11 @@ function WeekSplit({
             title={`Week of ${shortDate(b.monday)}`}
           >
             {mondayLabel(b.monday)}:{' '}
-            {runs === 0 ? 'no work' : `${runs} ${runs === 1 ? 'day' : 'days'} · ${booked} booked`}
+            {runs === 0
+              ? 'no work'
+              : staffable
+                ? `${runs} ${runs === 1 ? 'day' : 'days'} · ${booked} booked`
+                : `${runs} ${runs === 1 ? 'day' : 'days'} on site`}
           </span>
         );
       })}
@@ -724,6 +812,10 @@ function HeavyDays({
     </div>
   );
 }
+
+/** A sub's day that comes from holding the phase, not from being booked on it. */
+const CONTRACTED_CHIP =
+  'cursor-default border border-dashed border-brand-gray/40 bg-brand-gray/5 text-brand-ink';
 
 const STATUS_CHIP: Record<ScheduleTaskRow['status'], string> = {
   not_started: 'bg-brand-gray/15 text-brand-ink hover:bg-red-100 hover:text-red-700',

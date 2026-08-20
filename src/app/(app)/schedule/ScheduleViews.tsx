@@ -74,6 +74,7 @@ export function ScheduleViews({
         <ScheduleBoard
           tasks={tasks}
           projects={projects}
+          subs={subs}
           holidays={holidays}
           published={published}
           changeCounts={changeCounts}

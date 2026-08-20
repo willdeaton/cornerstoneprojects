@@ -320,11 +320,18 @@ export interface ScheduleTask {
   /** Working days to wait after the predecessor's finish (or start). */
   lag_days: number;
   /**
-   * How many people this phase needs on site. Set on the timeline alongside the
-   * duration — the two together are the phase's crew budget (crew_size working
-   * days x duration), which the crew week then fills with actual people.
+   * How many of OUR people this phase needs on site. Set on the timeline
+   * alongside the duration — the two together are the phase's crew budget
+   * (crew_size x working days), which the crew week then fills with actual
+   * people. Zero on a phase a subcontractor covers outright.
    */
   crew_size: number;
+  /**
+   * The subcontractor doing this phase, or null when it's our own crew's work.
+   * Chosen on the timeline rather than booked day by day: a sub is contracted
+   * for the phase, and their days on site follow its dates automatically.
+   */
+  subcontractor_id: number | null;
   status: TaskStatus;
   /**
    * What time the crew starts each day of this phase, as 'HH:MM' (24-hour),
@@ -379,6 +386,8 @@ export type ScheduleTaskRow = ScheduleTask & {
   project_due_date: string | null;
   /** The job's immovable finish date, when it has one. */
   project_hard_finish_date: string | null;
+  /** The subcontractor's name, when the phase is theirs. */
+  subcontractor_name: string | null;
   /** Who is booked on which day, ascending by day then name. */
   crew_days: CrewDay[];
   /** Per-day start-time overrides for this phase, ascending by day. */

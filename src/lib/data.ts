@@ -1622,6 +1622,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     depends_type: DependsType;
     lag_days: number;
     crew_size: number;
+    subcontractor_name: string | null;
     status: TaskStatus;
     start_time: string | null;
     notes: string | null;
@@ -1634,7 +1635,8 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     // to one row per person with their day count for the spreadsheet.
     `SELECT t.id, t.project_id, p.name AS project_name, t.name,
             t.start_date, t.duration_days, t.depends_on_id, t.depends_type, t.lag_days,
-            t.crew_size, t.status, t.start_time, t.notes, t.position,
+            t.crew_size, sub.name AS subcontractor_name,
+            t.status, t.start_time, t.notes, t.position,
             (SELECT json_agg(json_build_object('name', person, 'days', days)
                              ORDER BY person)
                FROM (SELECT COALESCE(u.name, s.name) AS person, COUNT(*)::int AS days
@@ -1645,6 +1647,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
                       GROUP BY COALESCE(u.name, s.name)) roster) AS crew
        FROM schedule_tasks t
        JOIN projects p ON p.id = t.project_id
+       LEFT JOIN subcontractors sub ON sub.id = t.subcontractor_id
       WHERE t.project_id = ANY($1::int[])
       ORDER BY p.name, t.position, t.id`,
     [projectIds]
@@ -1670,6 +1673,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
       status: r.status,
       start_time: r.start_time ? timeLabel(r.start_time) : '',
       follows: (r.depends_on_id != null ? nameById.get(r.depends_on_id) : '') ?? '',
+      subcontractor: r.subcontractor_name ?? '',
       crew_needed: r.crew_size,
       crew_days_booked: (r.crew ?? []).reduce((n, c) => n + c.days, 0),
       crew: (r.crew ?? [])
