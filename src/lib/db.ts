@@ -434,6 +434,46 @@ Your City, ST 00000',
   `);
 
   /* ==================================================================
+   * Billing workflow.
+   *
+   * Where a job stands between "the work is finished" and "the money is in".
+   * The stage itself is DERIVED from the project's status and its invoice rows
+   * (see src/lib/billing.ts) — only the three things the invoices can't say
+   * are stored here:
+   *
+   *   completed_at        — when the job hit the billing desk. `end_date` is
+   *                         a date somebody typed for the work; this is
+   *                         stamped by the status change, so the queue can
+   *                         age jobs honestly. Cleared if a job is reopened.
+   *   billing_hold(+reason) — billing deliberately parked (dispute,
+   *                         retainage, waiting on paperwork), so a job that
+   *                         shouldn't be chased stops being counted late.
+   *   billing_closed_at/by — signed off the billing desk. A close-out is a
+   *                         human act: a fully paid job still wants a final
+   *                         look, and a no-charge job closes with nothing
+   *                         raised at all.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS completed_at         TIMESTAMPTZ;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_hold         BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_hold_reason  TEXT;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_closed_at    TIMESTAMPTZ;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS billing_closed_by    INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_projects_completed_at ON projects(completed_at);
+  `);
+
+  // Backfill: jobs already marked complete before the column existed. Their
+  // best available completion date is the end date entered for the work, and
+  // failing that when the row was last touched. Self-guarding rather than
+  // marker-guarded — a completed job with no stamp always wants one, and the
+  // stamp is only ever written by a status change afterwards.
+  await pool.query(`
+    UPDATE projects
+       SET completed_at = COALESCE(end_date::timestamptz, updated_at)
+     WHERE status = 'completed' AND completed_at IS NULL;
+  `);
+
+  /* ==================================================================
    * Self-service password reset.
    *
    * A user who forgets their password requests a reset from the login

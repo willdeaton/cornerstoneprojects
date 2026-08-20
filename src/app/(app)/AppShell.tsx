@@ -34,6 +34,14 @@ const BASE_NAV: LinkEntry[] = [
   { kind: 'link', href: '/schedule', label: 'Schedule', icon: CalendarIcon },
 ];
 
+/** The billing desk — admins and managers only, like Settings. */
+const BILLING_NAV: LinkEntry = {
+  kind: 'link',
+  href: '/billing',
+  label: 'Billing',
+  icon: BillingIcon,
+};
+
 export function AppShell({
   user,
   clockedInTo,
@@ -109,7 +117,13 @@ export function AppShell({
           { kind: 'link', href: '/time', label: 'Time Clock', icon: ClockIcon },
           { kind: 'link', href: '/schedule', label: 'Schedule', icon: CalendarIcon },
         ]
-      : [...BASE_NAV, timeEntry, ...(canManageUsers ? [settingsEntry] : [])];
+      : [
+          ...BASE_NAV,
+          // Billing sits with the work it follows on from, not off in Settings.
+          ...(canManageUsers ? [BILLING_NAV] : []),
+          timeEntry,
+          ...(canManageUsers ? [settingsEntry] : []),
+        ];
 
   const NavLinks = ({ rail = false, mobile = false }: { rail?: boolean; mobile?: boolean }) => (
     <nav className="flex flex-col gap-0.5">
@@ -613,6 +627,14 @@ function CalendarIcon() {
     <svg {...base()}>
       <rect x="3" y="5" width="18" height="16" rx="2" />
       <path d="M8 3v4M16 3v4M3 11h18" />
+    </svg>
+  );
+}
+function BillingIcon() {
+  return (
+    <svg {...base()}>
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M8 8h8M8 12h5M8 16h3" />
     </svg>
   );
 }

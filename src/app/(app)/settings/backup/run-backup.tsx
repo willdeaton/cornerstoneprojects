@@ -10,6 +10,12 @@
 import { QuoteDocument } from '@/app/quotes/[id]/print/QuoteDocument';
 import { richTextToPlain } from '@/lib/richtext';
 import type { BackupPayload } from '@/lib/backup-types';
+import {
+  billingSummary,
+  BILLING_STAGE_LABELS,
+  EMPTY_TALLY,
+  type InvoiceTally,
+} from '@/lib/billing';
 
 /** ISO date (YYYY-MM-DD) in the browser's local time. */
 export function isoDate(d: Date): string {
@@ -91,22 +97,48 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
     )
   );
 
+  // The billing stage is derived, so the backup works it out the same way the
+  // app does rather than reading a column that doesn't exist.
+  const talliesByProject = new Map<number, InvoiceTally>();
+  for (const inv of data.invoices) {
+    const t = talliesByProject.get(inv.project_id) ?? { ...EMPTY_TALLY };
+    const sent = inv.billed || inv.paid;
+    talliesByProject.set(inv.project_id, {
+      count: t.count + 1,
+      billedCount: t.billedCount + (sent ? 1 : 0),
+      paidCount: t.paidCount + (inv.paid ? 1 : 0),
+      invoiced: t.invoiced + inv.amount,
+      billed: t.billed + (sent ? inv.amount : 0),
+      paid: t.paid + (inv.paid ? inv.amount : 0),
+    });
+  }
+
   addSheet(
     'Projects',
-    data.projects.map((p) => ({
-      Name: p.name,
-      Customer: p.customer,
-      'Quote Number': p.quote_number ?? '',
-      Category: p.category ?? '',
-      Value: p.value,
-      Status: p.status,
-      'Progress %': p.progress,
-      Location: p.location ?? '',
-      'Start Date': p.start_date ?? '',
-      'End Date': p.end_date ?? '',
-      'Due Date': p.due_date ?? '',
-      Created: p.created_at,
-    }))
+    data.projects.map((p) => {
+      const billing = billingSummary(p, talliesByProject.get(p.id) ?? EMPTY_TALLY);
+      return {
+        Name: p.name,
+        Customer: p.customer,
+        'Quote Number': p.quote_number ?? '',
+        Category: p.category ?? '',
+        Value: p.value,
+        Status: p.status,
+        'Progress %': p.progress,
+        Location: p.location ?? '',
+        'Start Date': p.start_date ?? '',
+        'End Date': p.end_date ?? '',
+        'Due Date': p.due_date ?? '',
+        Completed: p.completed_at ?? '',
+        'Billing Stage': BILLING_STAGE_LABELS[billing.stage],
+        Invoiced: billing.invoiced,
+        Paid: billing.paid,
+        Outstanding: billing.outstanding,
+        'Billing Hold': p.billing_hold ? p.billing_hold_reason || 'Yes' : '',
+        'Billing Closed': p.billing_closed_at ?? '',
+        Created: p.created_at,
+      };
+    })
   );
 
   const projectName = new Map(data.projects.map((p) => [p.id, p.name]));

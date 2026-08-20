@@ -1,4 +1,5 @@
 import type { ProjectStatus, QuoteStatus } from '@/lib/types';
+import { BILLING_STAGE_LABELS, type BillingStage, type BillingUrgency } from '@/lib/billing';
 
 export function PageHeader({
   title,
@@ -93,6 +94,49 @@ export function QuoteStatusBadge({ status }: { status: QuoteStatus }) {
     <span className={`badge ${QUOTE_BADGE[status]}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${QUOTE_DOT[status]}`} />
       {label}
+    </span>
+  );
+}
+
+const BILLING_BADGE: Record<BillingStage, string> = {
+  not_ready: 'bg-brand-gray/10 text-brand-gray-dark',
+  ready_to_bill: 'bg-status-progress/15 text-amber-800',
+  invoiced: 'bg-blue-500/10 text-blue-700',
+  paid: 'bg-brand-green/15 text-brand-green-dark',
+  on_hold: 'bg-brand-gray/15 text-brand-gray-dark',
+  closed: 'bg-brand-ink/10 text-brand-ink',
+};
+const BILLING_DOT: Record<BillingStage, string> = {
+  not_ready: 'bg-brand-gray',
+  ready_to_bill: 'bg-status-progress',
+  invoiced: 'bg-blue-500',
+  paid: 'bg-brand-green',
+  on_hold: 'bg-brand-gray',
+  closed: 'bg-brand-ink',
+};
+
+/**
+ * Where a job stands on the billing desk. An overdue stage rings the badge
+ * rather than recolouring it — the stage is the fact, lateness is a warning
+ * about it, and collapsing the two would lose one of them.
+ */
+export function BillingStageBadge({
+  stage,
+  urgency = 'none',
+}: {
+  stage: BillingStage;
+  urgency?: BillingUrgency;
+}) {
+  const ring =
+    urgency === 'late'
+      ? ' ring-1 ring-inset ring-red-500/50'
+      : urgency === 'watch'
+        ? ' ring-1 ring-inset ring-status-progress/60'
+        : '';
+  return (
+    <span className={`badge ${BILLING_BADGE[stage]}${ring}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${BILLING_DOT[stage]}`} />
+      {BILLING_STAGE_LABELS[stage]}
     </span>
   );
 }

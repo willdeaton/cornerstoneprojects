@@ -1,10 +1,22 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { listProjects, projectHours } from '@/lib/data';
+import { listProjects, projectHours, listInvoiceTallies } from '@/lib/data';
+import {
+  billingSummary,
+  EMPTY_TALLY,
+  onBillingDesk,
+  type InvoiceTally,
+} from '@/lib/billing';
 import type { ProjectStatus } from '@/lib/types';
 import { money, shortDate, duration } from '@/lib/format';
-import { PageHeader, ProjectStatusBadge, ProgressBar, EmptyState } from '@/components/ui';
+import {
+  PageHeader,
+  ProjectStatusBadge,
+  ProgressBar,
+  EmptyState,
+  BillingStageBadge,
+} from '@/components/ui';
 import { AddProjectButton } from './AddProjectButton';
 
 export const dynamic = 'force-dynamic';
@@ -37,6 +49,11 @@ export default async function ProjectsPage({
   const hoursById = new Map(
     await Promise.all(projects.map(async (p) => [p.id, await projectHours(p.id)] as const))
   );
+  // Billing is an admin/manager concern, same as the Billing page itself.
+  const canBill = me.role === 'admin' || me.role === 'manager';
+  const tallies: Map<number, InvoiceTally> = canBill
+    ? await listInvoiceTallies(projects.map((p) => p.id))
+    : new Map();
 
   return (
     <div>
@@ -71,6 +88,12 @@ export default async function ProjectsPage({
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {projects.map((p) => {
             const hrs = hoursById.get(p.id) ?? 0;
+            // On a finished job the progress bar is always full, so the card
+            // gives that room to where the job stands on billing instead.
+            const billing = canBill
+              ? billingSummary(p, tallies.get(p.id) ?? EMPTY_TALLY)
+              : null;
+            const showBilling = billing != null && onBillingDesk(billing.stage);
             return (
               <Link
                 key={p.id}
@@ -87,13 +110,24 @@ export default async function ProjectsPage({
                   <ProjectStatusBadge status={p.status} />
                 </div>
 
-                <div className="mb-3">
-                  <div className="mb-1 flex justify-between text-xs text-brand-gray">
-                    <span>Progress</span>
-                    <span className="tnum font-semibold text-brand-ink">{p.progress}%</span>
+                {showBilling ? (
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-brand-gray">
+                    <BillingStageBadge stage={billing.stage} urgency={billing.urgency} />
+                    {billing.outstanding > 0 && (
+                      <span className="tnum">
+                        {money(billing.outstanding)} outstanding
+                      </span>
+                    )}
                   </div>
-                  <ProgressBar value={p.progress} />
-                </div>
+                ) : (
+                  <div className="mb-3">
+                    <div className="mb-1 flex justify-between text-xs text-brand-gray">
+                      <span>Progress</span>
+                      <span className="tnum font-semibold text-brand-ink">{p.progress}%</span>
+                    </div>
+                    <ProgressBar value={p.progress} />
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between border-t border-surface-line pt-3 text-sm">
                   <span className="tnum font-semibold text-brand-ink">{money(p.value)}</span>

@@ -195,6 +195,28 @@ export interface Project {
   hard_finish_date: string | null;
   invoice_numbers: string | null;
   invoice_notes: string | null;
+  /**
+   * When the job was marked complete — stamped automatically by the status
+   * change, not typed. `end_date` is the date somebody entered for the work;
+   * this is when the job actually arrived on the billing desk, and it's what
+   * the billing queue ages against. Cleared if the job is reopened.
+   */
+  completed_at: string | null;
+  /**
+   * Billing deliberately parked — a dispute, retainage, a customer waiting on
+   * paperwork. A held job keeps its place on the billing desk but stops being
+   * counted late.
+   */
+  billing_hold: boolean;
+  /** Why billing is on hold; only meaningful while `billing_hold` is true. */
+  billing_hold_reason: string | null;
+  /**
+   * When somebody signed the job off the billing desk. A close-out is a human
+   * act, not something the invoices imply: a fully paid job still wants a
+   * final look, and a no-charge job is closed with nothing raised at all.
+   */
+  billing_closed_at: string | null;
+  billing_closed_by: number | null;
   created_at: string;
   updated_at: string;
 }

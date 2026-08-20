@@ -86,12 +86,45 @@ export async function ensureSeed(pool: Pool) {
     for (const p of projects) {
       const id = (
         await client.query(
-          `INSERT INTO projects (quote_number, customer, name, category, value, status, progress, location, start_date, end_date, due_date)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-          [p.quote_number, p.customer, p.name, p.category, p.value, p.status, p.progress, p.location, p.start_date, p.end_date, p.due_date]
+          // A finished job carries its completion stamp — the billing queue
+          // ages against it, and seeding it keeps the demo data honest. In the
+          // app it's written by the status change, never typed.
+          `INSERT INTO projects (quote_number, customer, name, category, value, status, progress, location, start_date, end_date, due_date, completed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+          [p.quote_number, p.customer, p.name, p.category, p.value, p.status, p.progress, p.location, p.start_date, p.end_date, p.due_date, p.status === 'completed' ? p.end_date : null]
         )
       ).rows[0].id as number;
       projectIds[p.name] = id;
+    }
+
+    // ---- Billing: the completed jobs spread across the pipeline ----------
+    // One finished job with nothing raised (Ready to Bill), one invoiced and
+    // waiting on the money (Outstanding), and one collected in full (Paid), so
+    // the Billing page shows the whole workflow rather than a single state.
+    const billing: [string, [string, number, boolean, boolean][]][] = [
+      // Nothing raised yet — sitting on the desk since it completed.
+      ['Highlands ARH – Phase 1 Flooring', []],
+      // Progress-billed in two parts: the first collected, the second still out.
+      [
+        'Georgetown CH – East Wing Repaint',
+        [
+          ['INV-4411', 36008, true, true],
+          ['INV-4478', 36008, true, false],
+        ],
+      ],
+      // Billed and paid in full.
+      ['Heritage Pool – Showroom Refresh', [['INV-4390', 44500, true, true]]],
+    ];
+    for (const [name, invoices] of billing) {
+      for (const [invoice_number, amount, billed, paid] of invoices) {
+        await client.query(
+          `INSERT INTO project_invoices (project_id, invoice_number, amount, billed, paid, position)
+           VALUES ($1,$2,$3,$4,$5,
+             (SELECT COALESCE(MAX(position), 0) + 1
+                FROM project_invoices WHERE project_id = $1))`,
+          [projectIds[name], invoice_number, amount, billed, paid]
+        );
+      }
     }
 
     // ---- A few notes + time entries so the detail views aren't empty ------
