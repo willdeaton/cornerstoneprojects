@@ -22,10 +22,12 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   **Job Timeline** plans the *work*: each job is a set of phases carrying a
   duration in working days, who does it — our own crew as a headcount, or a
   named subcontractor — and optional links between phases. **Crew Week** then staffs that work: one row
-  per employee, one column per day, with a card for every job running that week.
+  per employee, one column per day, with the work still to staff sitting above the
+  grid as cards, each filed under the column of the week it starts in.
   Weekends and non-working days never count toward a duration and are drawn as
   breaks, so work carrying into the next week reads as separate stretches rather
-  than continuous weekend work.
+  than continuous weekend work — until a weekend is deliberately opened up and
+  worked.
   - **Plan the work, then staff it** — the timeline never names our own people.
     A phase says "2 people for 4 days", which is a budget of 8 crew-days; the
     crew week spends that budget by booking real people onto real days. The
@@ -45,7 +47,23 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **Staffing a week** — pick a job card, then click the day cells of the
     people working it; the card counts its crew-days down as you go, and cells
     stop offering to book once the phase is full. Click a booking to take
-    someone off that day.
+    someone off that day. Drag a card onto a day to book that day, or onto
+    somebody's name to put them on every working day of the phase on screen.
+  - **A job across several days at once** — with a card picked (or by grabbing a
+    booking somebody already has), press and drag sideways along their row: every
+    day the drag covers is booked in one pass, as far as the phase's budget goes.
+  - **Weekends when they're needed** — Saturday and Sunday stay off the grid
+    until you press **Show weekends**, or somebody is already booked on one, so a
+    normal fortnight is ten columns wide and nobody reads a weekend into the
+    plan. A weekend that is worked is bookable like any other day, ringed amber,
+    and shown to the crew on their own schedule. It doesn't eat the weekdays'
+    budget either: an extra day of work brings an extra day of crew with it,
+    while durations stay measured in working days.
+  - **Who has worked a phase** — the phase editor on the timeline carries a
+    synopsis of the crew days actually booked: everybody who has been on it with
+    their day count and the stretches they worked, then the phase day by day with
+    the names on each. Days an edit in progress would push outside the phase are
+    called out, because those are the bookings about to be dropped.
   - **Job cards** — open a card for the crew-facing half of a phase: the time
     the crew starts, a different time on any individual day (a 6 AM delivery, a
     late inspection), the notes they read before turning up, and who is booked
@@ -95,6 +113,11 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
 - **Users & Auth** — email/password login, sign out, and user management
   (add users, set roles, reset passwords, deactivate). Roles: **admin**,
   **manager**, **worker**. User management lives under **Settings → Users**.
+  Being scheduled is its own switch there — **Remove from scheduling** keeps
+  somebody out of the crew week entirely (an estimator, an office manager,
+  anyone who clocks in but isn't crew) without touching their access or their
+  time. Days they are already booked on are left exactly where they are, and
+  they still show in the crew week while those days stand.
 - **View as role** (admins only) — a "View as" switcher in the sidebar lets an
   admin preview the app exactly as a **manager** or **worker** would see it
   (hidden nav, page redirects, and restricted actions all apply). An amber

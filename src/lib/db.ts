@@ -382,6 +382,16 @@ Your City, ST 00000',
     ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
   `);
 
+  // Who the crew week offers to book. Someone can be an active user of the
+  // tracker without ever being scheduled onto a job — an office manager, an
+  // estimator, anyone who clocks in but isn't crew — so scheduling is its own
+  // flag rather than a role. TRUE for everybody who existed before it, which
+  // is the behaviour they already had. Turning it off hides them from the crew
+  // week; days they were already booked on are left alone.
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS schedulable BOOLEAN NOT NULL DEFAULT TRUE;
+  `);
+
   /* ==================================================================
    * Invoicing.
    *

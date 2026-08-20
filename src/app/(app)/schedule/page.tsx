@@ -98,7 +98,15 @@ export default async function SchedulePage() {
             due_date: p.due_date,
             hard_finish_date: p.hard_finish_date,
           }))}
-        workers={workers.map((w) => ({ id: w.id, name: w.name, role: w.role }))}
+        // Everybody active, with whether they're in scheduling at all: the crew
+        // week hides the ones who aren't, but still shows anybody already booked
+        // so a schedule that has gone out can't quietly lose a name.
+        workers={workers.map((w) => ({
+          id: w.id,
+          name: w.name,
+          role: w.role,
+          schedulable: w.schedulable,
+        }))}
         subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
         holidays={holidayDays}
         published={published}
