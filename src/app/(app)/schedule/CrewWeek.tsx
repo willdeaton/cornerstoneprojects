@@ -11,14 +11,20 @@ import {
   crewByDay,
   eachDay,
   fromDay,
+  isWeekend,
   isWorkingDay,
+  mondayLabel,
+  rangeLabel,
   startTimeOn,
   timeLabel,
   today,
+  weekAlignedRange,
+  weekBands,
   weekLabel,
   weekStart,
   dayTimeMap,
   type ComputedWindow,
+  type WeekBand,
 } from '@/lib/schedule-math';
 import type { ScheduleTaskRow } from '@/lib/types';
 import { assignCrewDayAction, unassignCrewDayAction } from '@/app/actions/schedule';
@@ -27,7 +33,21 @@ import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
 /**
- * The week the crew is actually staffed in.
+ * One phase a person is on for one day. `contracted` days come from the phase
+ * being subcontracted rather than from a crew-day booking, and are read-only.
+ */
+type DayEntry = { task: ScheduleTaskRow; startTime: string | null; contracted: boolean };
+
+/** Widths the crew grid opens at, in whole weeks — two by default. */
+const SPANS = [
+  { weeks: 1, label: 'Week' },
+  { weeks: 2, label: '2 Weeks' },
+] as const;
+
+const DEFAULT_WEEKS = 2;
+
+/**
+ * The weeks the crew is actually staffed in — a fortnight at a time.
  *
  * The timeline says a phase needs three people for four days. This is where
  * those twelve crew-days get spent: pick a job card, then click the day cells of
@@ -36,8 +56,17 @@ import type { PublishedInfo } from './PublishBar';
  * 5-day phase — which is how a week usually falls. A day carrying more than the
  * phase asked for is flagged, never blocked.
  *
- * Clicking a job card opens it: start times day by day, and the notes the crew
- * reads before they turn up.
+ * Two weeks show side by side so work that runs over a weekend, or a job whose
+ * next phase starts the following Monday, can be staffed without paging. Every
+ * job and phase with work in view gets its own card — two phases of the same job
+ * are two cards, because they're two different asks with two different budgets.
+ * Clicking a card opens it: start times day by day, and the notes the crew reads
+ * before they turn up.
+ *
+ * A subcontracted phase is read-only here. The sub was engaged on the timeline,
+ * so they're on site every working day of the phase and their days follow its
+ * dates — there's no budget to spend and nothing to click away. Only the crew we
+ * send alongside them, if any, is booked here.
  */
 export function CrewWeek({
   tasks,
@@ -54,9 +83,13 @@ export function CrewWeek({
   published?: Record<number, PublishedInfo>;
 }) {
   const router = useRouter();
-  const [monday, setMonday] = useState<string>(() => weekStart(today()));
+  /** How many weeks are on screen — the nav steps by exactly this much. */
+  const [weeks, setWeeks] = useState<number>(DEFAULT_WEEKS);
+  const [anchor, setAnchor] = useState<string>(() => weekStart(today()));
   const [showIdle, setShowIdle] = useState(true);
   const [includeSubs, setIncludeSubs] = useState(false);
+  /** Narrows the card list to phases still missing crew. */
+  const [onlyShort, setOnlyShort] = useState(false);
   /** The phase being staffed — clicking a day cell books it. */
   const [picked, setPicked] = useState<number | null>(null);
   /** The phase whose card is open. */
@@ -69,55 +102,57 @@ export function CrewWeek({
 
   const { windows } = useMemo(() => computeSchedule(tasks, calendar), [tasks, calendar]);
 
-  const weekDays = useMemo(() => eachDay(monday, addDays(monday, 6)), [monday]);
-  const weekFrom = weekDays[0];
-  const weekTo = weekDays[6];
+  // Always a whole number of weeks starting on a Monday: the crew reads the
+  // schedule a week at a time, and a fortnight that opened mid-week would put
+  // the same weekday in a different column every time it was paged.
+  const range = useMemo(() => weekAlignedRange(anchor, weeks * 7), [anchor, weeks]);
+  const rangeDays = useMemo(() => eachDay(range.start, range.end), [range]);
+  const rangeFrom = range.start;
+  const rangeTo = range.end;
 
-  /** The phases with work in this week — one card each, in date order. */
+  /** The phases with work in view — one card per job and phase, in date order. */
   const cards = useMemo(() => {
     return tasks
       .map((task) => ({ task, window: windows.get(task.id) }))
       .filter(
         (c): c is { task: ScheduleTaskRow; window: ComputedWindow } =>
-          !!c.window && c.window.start <= weekTo && c.window.end >= weekFrom
+          !!c.window && c.window.start <= rangeTo && c.window.end >= rangeFrom
       )
       .map(({ task, window }) => ({
         task,
         window,
         budget: crewBudget(task, window, calendar),
         byDay: crewByDay(task),
-        // The days of this phase that fall in the week on screen.
-        days: weekDays.filter(
+        // The days of this phase that fall in the range on screen.
+        days: rangeDays.filter(
           (d) => d >= window.start && d <= window.end && isWorkingDay(d, calendar)
         ),
       }))
       .sort((a, b) =>
         a.window.start === b.window.start
-          ? a.task.project_name.localeCompare(b.task.project_name)
+          ? a.task.project_name.localeCompare(b.task.project_name) ||
+            a.task.name.localeCompare(b.task.name)
           : a.window.start < b.window.start
             ? -1
             : 1
       );
-  }, [tasks, windows, calendar, weekDays, weekFrom, weekTo]);
+  }, [tasks, windows, calendar, rangeDays, rangeFrom, rangeTo]);
 
   const cardByTask = useMemo(() => new Map(cards.map((c) => [c.task.id, c])), [cards]);
   const pickedCard = picked != null ? cardByTask.get(picked) : undefined;
   const openedCard = opened != null ? cardByTask.get(opened) : undefined;
 
   /**
-   * Person -> day -> the phases they're on that day, this week.
+   * Person -> day -> the phases they're on that day, in view.
    *
    * `contracted` marks a day that comes from the phase being subcontracted
-   * rather than from a booking: the sub is on site because they have the work,
+   * rather than from a booking: the sub is on site because they hold the work,
    * so that day can't be clicked away here — it follows the phase's dates and
    * changes on the timeline.
    */
   const byPerson = useMemo(() => {
-    const out = new Map<
-      string,
-      Map<string, { task: ScheduleTaskRow; startTime: string | null; contracted: boolean }[]>
-    >();
-    const add = (key: string, day: string, entry: { task: ScheduleTaskRow; startTime: string | null; contracted: boolean }) => {
+    const out = new Map<string, Map<string, DayEntry[]>>();
+    const add = (key: string, day: string, entry: DayEntry) => {
       let days = out.get(key);
       if (!days) {
         days = new Map();
@@ -143,7 +178,7 @@ export function CrewWeek({
         }
       }
       for (const c of task.crew_days ?? []) {
-        if (c.day < weekFrom || c.day > weekTo) continue;
+        if (c.day < rangeFrom || c.day > rangeTo) continue;
         add(`${c.kind}:${c.ref_id}`, c.day, {
           task,
           startTime: startTimeOn(c.day, task.start_time, times),
@@ -152,20 +187,24 @@ export function CrewWeek({
       }
     }
     return out;
-  }, [cards, weekFrom, weekTo]);
+  }, [cards, rangeFrom, rangeTo]);
 
-  // Weekend columns only appear when there's actually weekend work booked, so a
-  // normal week stays five columns wide and nobody reads Saturday into the plan.
-  const showWeekend = useMemo(
+  // A weekend column only appears when that particular Saturday or Sunday has
+  // work on it, so a normal fortnight stays ten columns wide and nobody reads a
+  // weekend into the plan — while a weekend the crew really is working still
+  // shows, in the week it belongs to.
+  const columns = useMemo(
     () =>
-      [weekDays[5], weekDays[6]].some(
-        (d) =>
-          [...byPerson.values()].some((days) => (days.get(d)?.length ?? 0) > 0) ||
-          (pickedCard?.days.includes(d) ?? false)
-      ),
-    [byPerson, weekDays, pickedCard]
+      rangeDays.filter((d) => {
+        if (!isWeekend(d)) return true;
+        if ([...byPerson.values()].some((days) => (days.get(d)?.length ?? 0) > 0)) return true;
+        return pickedCard?.days.includes(d) ?? false;
+      }),
+    [rangeDays, byPerson, pickedCard]
   );
-  const columns = showWeekend ? weekDays : weekDays.slice(0, 5);
+
+  /** One band per week over the columns, so each week is labelled above its days. */
+  const bands = useMemo(() => weekBands(columns), [columns]);
 
   const people = useMemo(() => {
     const rows = [
@@ -190,9 +229,7 @@ export function CrewWeek({
     ];
     return rows
       .map((p) => {
-        const days =
-          byPerson.get(p.key) ??
-          new Map<string, { task: ScheduleTaskRow; startTime: string | null; contracted: boolean }[]>();
+        const days = byPerson.get(p.key) ?? new Map<string, DayEntry[]>();
         const booked = columns.filter((d) => (days.get(d)?.length ?? 0) > 0);
         // Two different jobs on one day is a real double-booking; two phases of
         // the same job is just one crew doing two things there.
@@ -207,9 +244,15 @@ export function CrewWeek({
       );
   }, [workers, subs, includeSubs, byPerson, columns, showIdle]);
 
-  const gridTemplate = `minmax(150px, 200px) repeat(${columns.length}, minmax(130px, 1fr))`;
+  // Ten or fourteen columns need to be narrower than seven, but never so narrow
+  // that a job and phase can't be read off a chip — so the grid scrolls instead.
+  const dayWidth = columns.length > 7 ? 116 : 130;
+  const gridTemplate = `minmax(150px, 200px) repeat(${columns.length}, minmax(${dayWidth}px, 1fr))`;
+  const gridMinWidth = 200 + columns.length * dayWidth;
   const bookedPeople = people.filter((p) => p.bookedCount > 0).length;
+  const visibleCards = onlyShort ? cards.filter((c) => c.budget.remaining > 0) : cards;
   const understaffed = cards.filter((c) => c.budget.remaining > 0).length;
+  const heading = weeks === 1 ? weekLabel(rangeFrom) : rangeLabel(rangeFrom, rangeTo);
 
   function refresh() {
     startTransition(() => router.refresh());
@@ -254,34 +297,50 @@ export function CrewWeek({
         <div className="flex overflow-hidden rounded-lg border border-black/10">
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setMonday(addDays(monday, -7))}
-            aria-label="Previous week"
+            onClick={() => setAnchor(addDays(rangeFrom, -7 * weeks))}
+            aria-label={weeks === 1 ? 'Previous week' : 'Earlier weeks'}
           >
             ‹
           </button>
           <button
             className="border-x border-black/10 px-3 py-2 text-sm font-medium text-brand-ink hover:bg-black/5"
-            onClick={() => setMonday(weekStart(today()))}
+            onClick={() => setAnchor(weekStart(today()))}
           >
             This Week
           </button>
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setMonday(addDays(monday, 7))}
-            aria-label="Next week"
+            onClick={() => setAnchor(addDays(rangeFrom, 7 * weeks))}
+            aria-label={weeks === 1 ? 'Next week' : 'Later weeks'}
           >
             ›
           </button>
         </div>
 
+        <div className="flex overflow-hidden rounded-lg border border-black/10">
+          {SPANS.map((s) => (
+            <button
+              key={s.weeks}
+              onClick={() => setWeeks(s.weeks)}
+              className={`px-3 py-2 text-sm font-medium transition-colors ${
+                weeks === s.weeks
+                  ? 'bg-brand-green text-white'
+                  : 'text-brand-gray hover:bg-black/5'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
         <p className="text-sm font-semibold text-brand-ink">
-          {weekLabel(monday)}
+          {heading}
           <span className="ml-2 font-normal text-brand-gray">
             {bookedPeople === 0
               ? 'nobody booked'
               : `${bookedPeople} ${bookedPeople === 1 ? 'person' : 'people'} booked`}
             {understaffed > 0 &&
-              ` · ${understaffed} ${understaffed === 1 ? 'job still needs' : 'jobs still need'} crew`}
+              ` · ${understaffed} ${understaffed === 1 ? 'phase still needs' : 'phases still need'} crew`}
           </span>
         </p>
 
@@ -309,106 +368,137 @@ export function CrewWeek({
         </p>
       )}
 
-      {/* Job cards: the work needing crew this week, and the budget left on each. */}
+      {/* Job cards: one per job and phase with work in view, and the budget left
+          on each. Two phases of the same job are two cards on purpose. */}
       {cards.length === 0 ? (
         <div className="card p-6 text-center">
-          <p className="font-semibold text-brand-ink">No jobs run this week</p>
+          <p className="font-semibold text-brand-ink">No jobs run in these weeks</p>
           <p className="mt-1 text-sm text-brand-gray">
             Plan work on the Job Timeline — how long it runs and how many people it needs — and its
             card will appear here to staff.
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {cards.map((c) => {
-            const active = picked === c.task.id;
-            // A phase a sub carries outright has nothing for us to staff, so
-            // its card reports who's on it rather than a budget to fill.
-            const subName = c.task.subcontractor_name;
-            const staffable = c.budget.capacity > 0;
-            return (
-              <div
-                key={c.task.id}
-                className={`card p-3 transition-shadow ${
-                  active ? 'ring-2 ring-brand-green' : 'hover:shadow-md'
-                }`}
-              >
-                <button
-                  onClick={() => setPicked(active ? null : c.task.id)}
-                  className="block w-full text-left"
-                  aria-pressed={active}
-                  disabled={!staffable}
-                  title={
-                    !staffable
-                      ? `${subName ?? 'This phase'} covers this phase — nothing of ours to book`
-                      : active
-                        ? 'Stop booking this job'
-                        : 'Book crew onto this job'
-                  }
-                >
-                  <p className="truncate text-sm font-semibold text-brand-ink">
-                    {c.task.project_name}
-                  </p>
-                  <p className="truncate text-xs text-brand-gray">
-                    {c.task.name} · {c.task.customer}
-                  </p>
-                  <p className="mt-1 text-xs text-brand-gray">
-                    {shortDate(c.window.start)} – {shortDate(c.window.end)}
-                    {c.task.start_time && ` · starts ${timeLabel(c.task.start_time)}`}
-                  </p>
-                  {subName && (
-                    <p className="mt-1 truncate text-xs font-medium text-brand-ink">
-                      Subcontracted to {subName}
-                    </p>
-                  )}
-                  {staffable ? (
-                    <>
-                      <BudgetBar filled={c.budget.filled} capacity={c.budget.capacity} />
-                      <p
-                        className={`mt-1 text-xs font-medium ${
-                          c.budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
-                        }`}
-                      >
-                        {c.budget.filled} / {c.budget.capacity} crew days
-                        {c.budget.remaining === 0
-                          ? ' · fully staffed'
-                          : ` · ${c.budget.remaining} to fill`}
-                      </p>
-                      <p className="text-[11px] text-brand-gray">
-                        {subName ? 'plus ' : 'needs '}
-                        {c.budget.needed} of ours a day · {c.budget.days} working{' '}
-                        {c.budget.days === 1 ? 'day' : 'days'}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-1.5 text-[11px] text-brand-gray">
-                      On site all {c.budget.days} working {c.budget.days === 1 ? 'day' : 'days'} ·
-                      none of our crew needed
-                    </p>
-                  )}
-                </button>
-                <div className="mt-2 flex items-center justify-between gap-2 border-t border-black/5 pt-2">
-                  <span
-                    className={`text-[11px] font-medium ${
-                      c.budget.full ? 'text-brand-gray' : 'text-brand-green-dark'
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
+              {visibleCards.length} {visibleCards.length === 1 ? 'job phase' : 'job phases'} in view
+            </p>
+            {understaffed > 0 && (
+              <label className="flex items-center gap-2 text-xs text-brand-ink">
+                <input
+                  type="checkbox"
+                  checked={onlyShort}
+                  onChange={(e) => setOnlyShort(e.target.checked)}
+                />
+                Only phases still needing crew
+              </label>
+            )}
+          </div>
+
+          {visibleCards.length === 0 ? (
+            <div className="card p-4 text-center text-sm text-brand-gray">
+              Every phase in view is fully staffed.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {visibleCards.map((c) => {
+                const active = picked === c.task.id;
+                // A phase a sub carries outright has nothing of ours to staff,
+                // so its card reports who's on it rather than a budget to fill.
+                const subName = c.task.subcontractor_name;
+                const staffable = c.budget.capacity > 0;
+                return (
+                  <div
+                    key={c.task.id}
+                    className={`card p-3 transition-shadow ${
+                      active ? 'ring-2 ring-brand-green' : 'hover:shadow-md'
                     }`}
                   >
-                    {!active || !staffable
-                      ? ''
-                      : c.budget.full
-                        ? 'Fully staffed — click a booking to free a day'
-                        : 'Click a day cell below to book'}
-                  </span>
-                  <button
-                    className="text-xs font-medium text-brand-green-dark hover:underline"
-                    onClick={() => setOpened(c.task.id)}
-                  >
-                    Start times &amp; notes
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+                    <button
+                      onClick={() => setPicked(active ? null : c.task.id)}
+                      className="block w-full text-left"
+                      aria-pressed={active}
+                      disabled={!staffable}
+                      title={
+                        !staffable
+                          ? `${subName ?? 'This phase'} covers this phase — nothing of ours to book`
+                          : active
+                            ? 'Stop booking this phase'
+                            : 'Book crew onto this phase'
+                      }
+                    >
+                      <p className="truncate text-sm font-semibold text-brand-ink">
+                        {c.task.project_name}
+                      </p>
+                      <p className="mt-0.5 flex items-center gap-1.5">
+                        <span className="max-w-full truncate rounded bg-brand-ink/[.06] px-1.5 py-0.5 text-[11px] font-semibold text-brand-ink">
+                          {c.task.name}
+                        </span>
+                      </p>
+                      <p className="mt-1 truncate text-xs text-brand-gray">{c.task.customer}</p>
+                      <p className="mt-1 text-xs text-brand-gray">
+                        {shortDate(c.window.start)} – {shortDate(c.window.end)}
+                        {c.task.start_time && ` · starts ${timeLabel(c.task.start_time)}`}
+                      </p>
+                      {subName && (
+                        <p className="mt-1 truncate text-xs font-medium text-brand-ink">
+                          Subcontracted to {subName}
+                        </p>
+                      )}
+                      {staffable ? (
+                        <>
+                          <BudgetBar filled={c.budget.filled} capacity={c.budget.capacity} />
+                          <p
+                            className={`mt-1 text-xs font-medium ${
+                              c.budget.remaining === 0 ? 'text-brand-green-dark' : 'text-amber-700'
+                            }`}
+                          >
+                            {c.budget.filled} / {c.budget.capacity} crew days
+                            {c.budget.remaining === 0
+                              ? ' · fully staffed'
+                              : ` · ${c.budget.remaining} to fill`}
+                          </p>
+                          <p className="text-[11px] text-brand-gray">
+                            {subName ? 'plus ' : 'needs '}
+                            {c.budget.needed} of ours a day · {c.budget.days} working{' '}
+                            {c.budget.days === 1 ? 'day' : 'days'}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="mt-1.5 text-[11px] text-brand-gray">
+                          On site all {c.budget.days} working{' '}
+                          {c.budget.days === 1 ? 'day' : 'days'} · none of our crew needed
+                        </p>
+                      )}
+                      {bands.length > 1 && (
+                        <WeekSplit card={c} bands={bands} columns={columns} staffable={staffable} />
+                      )}
+                    </button>
+                    <div className="mt-2 flex items-center justify-between gap-2 border-t border-black/5 pt-2">
+                      <span
+                        className={`text-[11px] font-medium ${
+                          c.budget.full ? 'text-brand-gray' : 'text-brand-green-dark'
+                        }`}
+                      >
+                        {!active || !staffable
+                          ? ''
+                          : c.budget.full
+                            ? 'Fully staffed — click a booking to free a day'
+                            : 'Click a day cell below to book'}
+                      </span>
+                      <button
+                        className="text-xs font-medium text-brand-green-dark hover:underline"
+                        onClick={() => setOpened(c.task.id)}
+                      >
+                        Start times &amp; notes
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -416,14 +506,35 @@ export function CrewWeek({
         <div className="card p-10 text-center">
           <p className="font-semibold text-brand-ink">Nobody to show</p>
           <p className="mt-1 text-sm text-brand-gray">
-            Nobody is booked for {weekLabel(monday)}. Tick &ldquo;Show everyone&rdquo; to see the
-            whole crew.
+            Nobody is booked for {heading}. Tick &ldquo;Show everyone&rdquo; to see the whole crew.
           </p>
         </div>
       ) : (
         <div className={`card overflow-hidden ${pending ? 'opacity-70' : ''}`}>
           <div className="overflow-x-auto">
-            <div className="min-w-[820px]">
+            <div style={{ minWidth: `${gridMinWidth}px` }}>
+              {/* Week band: each week's Monday, held across that week's columns. */}
+              <div
+                className="grid border-b border-black/10 bg-black/[.04]"
+                style={{ gridTemplateColumns: gridTemplate }}
+              >
+                <div className="sticky left-0 z-20 bg-[#f4f4f4] px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+                  Crew
+                </div>
+                {bands.map((b) => (
+                  <div
+                    key={b.monday}
+                    style={{ gridColumn: `${b.startIdx + 2} / ${b.startIdx + b.span + 2}` }}
+                    className={`border-l border-black/10 px-2 py-1.5 text-xs font-semibold ${
+                      b.monday === weekStart(now) ? 'text-brand-green-dark' : 'text-brand-gray'
+                    }`}
+                    title={`Week of ${shortDate(b.monday)}`}
+                  >
+                    Week of {mondayLabel(b.monday)}
+                  </div>
+                ))}
+              </div>
+
               {/* Day header */}
               <div
                 className="grid border-b border-black/10 bg-black/[.02]"
@@ -437,7 +548,7 @@ export function CrewWeek({
                   return (
                     <div
                       key={d}
-                      className={`border-l border-black/5 px-2 py-2 text-xs font-semibold ${
+                      className={`px-2 py-2 text-xs font-semibold ${weekEdge(d)} ${
                         d === now
                           ? 'text-brand-green-dark'
                           : off
@@ -484,9 +595,9 @@ export function CrewWeek({
                     const items = p.days.get(d) ?? [];
                     const off = !isWorkingDay(d, calendar);
                     const clash = new Set(items.map((b) => b.task.project_id)).size > 1;
-                    // A cell can take the picked job when that job runs that day
-                    // and still has budget — or when it's already booked there,
-                    // so clicking again takes them off.
+                    // A cell can take the picked phase when that phase runs that
+                    // day and still has budget — or when it's already booked
+                    // there, so clicking again takes them off.
                     const on =
                       !!pickedCard &&
                       (pickedCard.byDay.get(d) ?? []).some(
@@ -506,7 +617,7 @@ export function CrewWeek({
                     return (
                       <div
                         key={d}
-                        className={`min-h-[64px] space-y-1 border-l border-black/5 p-1.5 ${
+                        className={`min-h-[64px] space-y-1 p-1.5 ${weekEdge(d)} ${
                           d === now ? 'bg-brand-green/5' : off ? 'bg-black/[.04]' : ''
                         } ${clash ? 'bg-red-50' : ''} ${
                           bookable ? 'cursor-pointer ring-1 ring-inset ring-brand-green/40 hover:bg-brand-green/10' : ''
@@ -517,8 +628,8 @@ export function CrewWeek({
                             ? `${p.name} has this phase — their days follow it, change it on the timeline`
                             : bookable
                               ? on
-                                ? `Take ${p.name} off ${pickedCard!.task.name}`
-                                : `Book ${p.name} on ${pickedCard!.task.name}`
+                                ? `Take ${p.name} off ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
+                                : `Book ${p.name} on ${pickedCard!.task.project_name} — ${pickedCard!.task.name}`
                               : undefined
                         }
                       >
@@ -568,15 +679,19 @@ export function CrewWeek({
       )}
 
       {/* Days carrying more people than the phase asked for. Allowed on purpose
-          — the budget is a total — but worth seeing before the week goes out. */}
+          — the budget is a total — but worth seeing before the weeks go out. */}
       <HeavyDays cards={cards} />
 
       <p className="text-xs text-brand-gray">
-        Pick a job card, then click the day cells of the people working it — the card&apos;s crew
-        days count down as you go, and you can&apos;t book past what the timeline planned. Click a
-        booking to take someone off that day. A day shaded red is one where somebody is on two
-        different jobs. Open a card to set start times day by day and write what the crew needs to
-        know.
+        Pick a job card — one per job and phase — then click the day cells of the people working it.
+        The card&apos;s crew days count down as you go, and you can&apos;t book past what the
+        timeline planned.{' '}
+        {weeks > 1 &&
+          'Both weeks book from the same card, so a phase running over a weekend is staffed in one pass. '}
+        Click a booking to take someone off that day. A day shaded red is one where somebody is on
+        two different jobs. A subcontracted phase shows its sub on every day it runs, dashed and
+        not clickable — they were engaged on the timeline, so their days follow its dates. Open a
+        card to set start times day by day and write what the crew needs to know.
       </p>
 
       {openedCard && (
@@ -593,6 +708,55 @@ export function CrewWeek({
         />
       )}
     </div>
+  );
+}
+
+/** Monday reads as the start of a week, so its column carries a heavier rule. */
+function weekEdge(day: string): string {
+  return fromDay(day).getDay() === 1 ? 'border-l border-black/20' : 'border-l border-black/5';
+}
+
+/**
+ * A phase's work split across the weeks on screen: days it runs in each week,
+ * and crew booked there. On a fortnight this is the difference between a phase
+ * that's short two people this week and one that's short them next week.
+ */
+function WeekSplit({
+  card,
+  bands,
+  columns,
+  staffable = true,
+}: {
+  card: { window: ComputedWindow; byDay: Map<string, unknown[]>; days: string[] };
+  bands: WeekBand[];
+  columns: string[];
+  /** False on a subcontracted phase needing none of our crew — nothing to book. */
+  staffable?: boolean;
+}) {
+  return (
+    <span className="mt-1.5 flex flex-wrap gap-1">
+      {bands.map((b) => {
+        const weekDays = columns.slice(b.startIdx, b.startIdx + b.span);
+        const runs = weekDays.filter((d) => card.days.includes(d)).length;
+        const booked = weekDays.reduce((n, d) => n + (card.byDay.get(d)?.length ?? 0), 0);
+        return (
+          <span
+            key={b.monday}
+            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              runs === 0 ? 'bg-black/[.04] text-brand-gray/70' : 'bg-black/[.05] text-brand-gray'
+            }`}
+            title={`Week of ${shortDate(b.monday)}`}
+          >
+            {mondayLabel(b.monday)}:{' '}
+            {runs === 0
+              ? 'no work'
+              : staffable
+                ? `${runs} ${runs === 1 ? 'day' : 'days'} · ${booked} booked`
+                : `${runs} ${runs === 1 ? 'day' : 'days'} on site`}
+          </span>
+        );
+      })}
+    </span>
   );
 }
 

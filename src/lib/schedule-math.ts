@@ -628,6 +628,20 @@ export function weekLabel(monday: string): string {
   return `${left} – ${right}, ${b.getFullYear()}`;
 }
 
+/** "Aug 17" — a single day for a week band or range heading. */
+export function mondayLabel(day: string): string {
+  return fromDay(day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * A multi-week range as "Aug 17 – Aug 30, 2026" — what a fortnight of crew week
+ * is headed with. A single week reads better as `weekLabel`, which drops the
+ * repeated month.
+ */
+export function rangeLabel(from: string, to: string): string {
+  return `${mondayLabel(from)} – ${mondayLabel(to)}, ${fromDay(to).getFullYear()}`;
+}
+
 /**
  * The Monday-anchored range of `spanDays` days that contains `day`.
  *
