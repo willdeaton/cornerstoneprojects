@@ -3,7 +3,19 @@
 import { useMemo, useState } from 'react';
 import { Modal } from '@/components/Modal';
 import { shortDate } from '@/lib/format';
-import { computeSchedule, today, workedSegments, workingDaySpan } from '@/lib/schedule-math';
+import {
+  DAY_LABELS,
+  computeSchedule,
+  crewRoster,
+  fromDay,
+  isWorkingDay,
+  mergeDays,
+  today,
+  workedSegments,
+  workingDaySpan,
+  type ComputedWindow,
+  type WorkCalendar,
+} from '@/lib/schedule-math';
 import { diffTask, movesTimeline, needsReason, summarizeChanges } from '@/lib/schedule-diff';
 import type { DependsType, ScheduleTaskRow, TaskStatus } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
@@ -21,6 +33,12 @@ export interface WorkerOption {
   id: number;
   name: string;
   role: string;
+  /**
+   * False when they've been taken out of scheduling under Settings -> Users.
+   * The crew week leaves them out of the grid unless they're already booked.
+   * Absent counts as schedulable, which is how everybody started.
+   */
+  schedulable?: boolean;
 }
 export interface SubOption {
   id: number;
@@ -593,6 +611,18 @@ export function TaskModal({
           </div>
         )}
 
+        {/* Who has actually worked this phase, and on which days. The timeline
+            plans a headcount; this is the answer to "who was on it" without
+            leaving the phase you're editing. */}
+        {task && (
+          <PhaseCrewSynopsis
+            task={task}
+            window={preview}
+            calendar={calendar}
+            subName={sub?.name ?? task.subcontractor_name ?? null}
+          />
+        )}
+
         <p className="text-xs text-brand-gray">
           {subbed && crew === 0
             ? 'The start times and the notes this crew reads are set on the phase\u2019s card in the '
@@ -695,5 +725,140 @@ export function TaskModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** "Mon Aug 17" — a day of the phase, as the synopsis lists it. */
+function dayLabel(day: string): string {
+  const d = fromDay(day);
+  return `${DAY_LABELS[d.getDay()]} ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+}
+
+/** "Aug 17–20" / "Aug 17" — one run of days a person worked. */
+function segmentLabel(start: string, end: string): string {
+  const from = fromDay(start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (start === end) return from;
+  const to = fromDay(end);
+  const sameMonth = fromDay(start).getMonth() === to.getMonth();
+  return `${from}\u2013${
+    sameMonth ? to.getDate() : to.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }`;
+}
+
+/**
+ * A synopsis of the days this phase has actually been worked, and by whom.
+ *
+ * The phase editor plans a headcount; the crew week spends it. Coming back to a
+ * phase, the first question is usually "who has been on this, and when" — so
+ * the answer sits here rather than being a trip to another view. Every day
+ * shown is a day somebody was really booked on, in the order they happened,
+ * with the people on each of them.
+ *
+ * Days the phase would no longer cover after the edit being made are called out
+ * rather than hidden: they're the crew days about to be dropped, and seeing
+ * whose they are is the point.
+ */
+function PhaseCrewSynopsis({
+  task,
+  window,
+  calendar,
+  subName,
+}: {
+  task: ScheduleTaskRow;
+  /** The window as this edit would leave it, for flagging days it drops. */
+  window: ComputedWindow | null;
+  calendar: WorkCalendar;
+  /** The sub covering the phase, when one does. */
+  subName: string | null;
+}) {
+  const roster = useMemo(
+    () =>
+      crewRoster(task).map((r) => ({
+        ...r,
+        // Their own days, merged into the runs they actually worked.
+        segments: mergeDays(
+          (task.crew_days ?? [])
+            .filter((c) => c.kind === r.kind && c.ref_id === r.refId)
+            .map((c) => c.day)
+            .sort()
+        ),
+        detail: (task.crew_days ?? []).find((c) => c.kind === r.kind && c.ref_id === r.refId)?.detail,
+      })),
+    [task]
+  );
+
+  const days = useMemo(() => {
+    const byDay = new Map<string, string[]>();
+    for (const c of task.crew_days ?? []) {
+      const list = byDay.get(c.day);
+      if (list) list.push(c.name);
+      else byDay.set(c.day, [c.name]);
+    }
+    return [...byDay.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([day, names]) => ({ day, names: [...names].sort((a, b) => a.localeCompare(b)) }));
+  }, [task]);
+
+  const crewDays = (task.crew_days ?? []).length;
+
+  return (
+    <div className="rounded-lg border border-black/10 px-4 py-3 text-sm">
+      <p className="font-semibold text-brand-ink">Crew on this phase so far</p>
+
+      {subName && (
+        <p className="mt-0.5 text-brand-gray">
+          {subName} holds the phase — on site every working day of it, following its dates.
+        </p>
+      )}
+
+      {crewDays === 0 ? (
+        <p className="mt-0.5 text-brand-gray">
+          {subName
+            ? 'None of our people have been booked alongside them yet.'
+            : 'Nobody has been booked on this phase yet — staff it in the Crew Week.'}
+        </p>
+      ) : (
+        <>
+          <p className="mt-0.5 text-brand-gray">
+            {crewDays} crew {crewDays === 1 ? 'day' : 'days'} booked over {days.length}{' '}
+            {days.length === 1 ? 'day' : 'days'} · {roster.length}{' '}
+            {roster.length === 1 ? 'person' : 'people'}
+          </p>
+
+          <ul className="mt-2 space-y-0.5">
+            {roster.map((r) => (
+              <li key={r.key} className="text-brand-ink">
+                <span className="font-medium">{r.name}</span>
+                {r.detail && <span className="text-brand-gray"> — {r.detail}</span>}
+                <span className="text-brand-gray">
+                  {' '}
+                  · {r.days} {r.days === 1 ? 'day' : 'days'} (
+                  {r.segments.map((seg) => segmentLabel(seg.start, seg.end)).join(', ')})
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-brand-gray">
+            Day by day
+          </p>
+          <ul className="mt-0.5 max-h-40 space-y-0.5 overflow-y-auto pr-1 text-xs">
+            {days.map(({ day, names }) => {
+              // A day the edit in progress would push outside the phase.
+              const dropped = !!window && (day < window.start || day > window.end);
+              const off = !isWorkingDay(day, calendar);
+              return (
+                <li key={day} className={dropped ? 'text-amber-700' : 'text-brand-ink'}>
+                  <span className="font-medium">{dayLabel(day)}</span>
+                  {off && <span className="text-brand-gray"> (weekend/holiday)</span>}
+                  <span className="text-brand-gray"> — {names.join(', ')}</span>
+                  {dropped && <span className="font-medium"> · outside the new dates</span>}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </div>
   );
 }

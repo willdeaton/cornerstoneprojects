@@ -11,6 +11,7 @@ import {
   toggleActiveAction,
   resetPasswordAction,
   setUserRateAction,
+  setUserSchedulableAction,
   updateUserSubscriptionsAction,
   deleteUserAction,
   setUserManagerAction,
@@ -170,6 +171,33 @@ export function UserRowActions({
             >
               Email subscriptions
             </button>
+            <div className="menu-sep" />
+            {/* Scheduling is separate from access on purpose: somebody can use
+                the tracker and clock in without ever being crew the schedule
+                books. Days they're already on are left where they are. */}
+            {user.schedulable ? (
+              <button
+                className="menu-item"
+                title={`Stop the crew week offering ${user.name} — days they are already booked on stay booked`}
+                onClick={() => {
+                  close();
+                  run(() => setUserSchedulableAction(user.id, false));
+                }}
+              >
+                Remove from scheduling
+              </button>
+            ) : (
+              <button
+                className="menu-item-accent"
+                title={`Let the crew week book ${user.name} again`}
+                onClick={() => {
+                  close();
+                  run(() => setUserSchedulableAction(user.id, true));
+                }}
+              >
+                Add back to scheduling
+              </button>
+            )}
             {!isSelf &&
               (user.active ? (
                 <button

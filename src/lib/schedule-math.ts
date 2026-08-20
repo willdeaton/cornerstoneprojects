@@ -349,8 +349,11 @@ export function projectedEnd(
 export interface CrewBudget {
   /** People per day the phase was planned for. */
   needed: number;
-  /** Working days in the phase's window. */
+  /** Days of the phase being staffed: working days, plus any weekend or
+   *  holiday inside the window the crew has actually been put on. */
   days: number;
+  /** The non-working days counted in `days` — a weekend being worked. */
+  extraDays: string[];
   /** needed x days — every crew-day this phase may be staffed with. */
   capacity: number;
   /** Crew-days actually booked. */
@@ -361,18 +364,46 @@ export interface CrewBudget {
   full: boolean;
 }
 
+/**
+ * A weekend the crew is being asked to work counts as a day of the phase.
+ *
+ * Duration is still measured in working days — that's what the timeline plans —
+ * but a Saturday somebody is actually booked on (or is being booked on right
+ * now, via `alsoWorked`) is a real day of work, so it brings its own crew_size
+ * of budget with it rather than eating the weekdays'. Without that, adding a
+ * catch-up Saturday to a fully staffed phase would be refused as over-budget.
+ */
+function workedNonWorkingDays(
+  task: Pick<ScheduleTaskRow, 'crew_days'>,
+  window: ComputedWindow,
+  cal: WorkCalendar,
+  alsoWorked: string[] = []
+): string[] {
+  const days = new Set<string>();
+  for (const day of [...(task.crew_days ?? []).map((c) => c.day), ...alsoWorked]) {
+    if (day < window.start || day > window.end) continue;
+    if (isWorkingDay(day, cal)) continue;
+    days.add(day);
+  }
+  return [...days].sort();
+}
+
 export function crewBudget(
   task: Pick<ScheduleTaskRow, 'crew_size' | 'crew_days'>,
   window: ComputedWindow | undefined,
-  cal: WorkCalendar
+  cal: WorkCalendar,
+  /** Non-working days about to be booked, so the budget makes room for them. */
+  alsoWorked: string[] = []
 ): CrewBudget {
   const needed = Math.max(0, task.crew_size);
-  const days = window ? workingDaySpan(window.start, window.end, cal) : 0;
+  const extraDays = window ? workedNonWorkingDays(task, window, cal, alsoWorked) : [];
+  const days = window ? workingDaySpan(window.start, window.end, cal) + extraDays.length : 0;
   const capacity = needed * days;
   const filled = (task.crew_days ?? []).length;
   return {
     needed,
     days,
+    extraDays,
     capacity,
     filled,
     remaining: Math.max(0, capacity - filled),
@@ -456,6 +487,10 @@ export interface AssigneeBooking {
  * windows were computed with; days booked outside a phase's window (left behind
  * by a phase that has since moved or shrunk) are dropped rather than shown.
  *
+ * A weekend or holiday inside the window is kept when somebody was actually
+ * booked on it: the crew week only puts a person on one deliberately, and a
+ * Saturday being worked is exactly the sort of thing the crew has to be told.
+ *
  * A subcontracted phase contributes the sub on every working day of its window,
  * derived rather than booked. That's the whole point of contracting the phase
  * out on the timeline: the sub is on site for the work, so their days follow it
@@ -489,7 +524,10 @@ export function assigneeBookings(
       });
     }
     for (const c of task.crew_days ?? []) {
-      if (c.day < w.start || c.day > w.end || !isWorkingDay(c.day, cal)) continue;
+      // A non-working day is kept when somebody was deliberately booked on it —
+      // a weekend worked to catch up is work, and the crew has to be told about
+      // it. Only days the phase no longer covers are dropped.
+      if (c.day < w.start || c.day > w.end) continue;
       const key = `${c.kind}:${c.ref_id}`;
       const entry = byPerson.get(key);
       // The sub who has the phase is already on every day of it; a stray

@@ -31,7 +31,9 @@ export default async function UsersPage() {
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="brand-heading text-sm text-brand-gray">Users</h2>
-          <p className="text-sm text-brand-gray">Manage who can access the tracker and clock in.</p>
+          <p className="text-sm text-brand-gray">
+            Manage who can access the tracker, clock in, and be scheduled onto jobs.
+          </p>
         </div>
         <AddUserButton canGrantAdmin={me.role === 'admin'} managers={managerOptions} />
       </div>
@@ -71,6 +73,16 @@ export default async function UsersPage() {
                       <span className="text-brand-green-dark">Active</span>
                     ) : (
                       <span className="text-brand-gray">Inactive</span>
+                    )}
+                    {/* Being in the schedule is its own thing: an active user
+                        who isn't crew never appears in the crew week. */}
+                    {u.active && !u.schedulable && (
+                      <span
+                        className="mt-0.5 block text-xs text-brand-gray"
+                        title="The crew week doesn't offer this person — change it from the row menu"
+                      >
+                        Not scheduled
+                      </span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-brand-gray">{shortDate(u.created_at)}</td>

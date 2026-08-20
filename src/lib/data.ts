@@ -1705,6 +1705,9 @@ export interface UserRow {
   manager_name: string | null;
   // Hourly pay rate (manager/admin-only surfaces). NULL = no rate set.
   hourly_rate: number | null;
+  // Whether the crew week offers to book them. FALSE keeps an active user out
+  // of scheduling entirely without touching their access or their time.
+  schedulable: boolean;
 }
 
 /** Column names ↔ payload keys for the per-user subscription flags. */
@@ -1720,7 +1723,7 @@ const USER_SELECT =
   `u.id, u.name, u.email, u.role, u.active, u.created_at,
    u.personal_email, u.work_email,
    u.receives_new_project_emails, u.receives_completion_emails,
-   u.hourly_rate,
+   u.hourly_rate, u.schedulable,
    u.manager_id, m.name AS manager_name`;
 
 export async function listUsers(): Promise<UserRow[]> {
@@ -1732,12 +1735,20 @@ export async function listUsers(): Promise<UserRow[]> {
   );
 }
 
-export async function listActiveWorkers(): Promise<UserRow[]> {
+/**
+ * Active users. `schedulableOnly` narrows to the ones the crew week books —
+ * everybody, until somebody is deliberately taken out of scheduling under
+ * Settings -> Users. Payroll and timesheets want the whole list, so the filter
+ * is asked for rather than assumed.
+ */
+export async function listActiveWorkers(
+  opts: { schedulableOnly?: boolean } = {}
+): Promise<UserRow[]> {
   return q<UserRow>(
     `SELECT ${USER_SELECT}
        FROM users u
        LEFT JOIN users m ON m.id = u.manager_id
-      WHERE u.active = 1
+      WHERE u.active = 1 ${opts.schedulableOnly ? 'AND u.schedulable = TRUE' : ''}
       ORDER BY u.name`
   );
 }
@@ -1786,6 +1797,15 @@ export async function createUserRow(u: {
 /** Set (or clear, with null) a user's hourly pay rate. */
 export async function setUserRate(userId: number, rate: number | null): Promise<void> {
   await q('UPDATE users SET hourly_rate = $1 WHERE id = $2', [rate, userId]);
+}
+
+/**
+ * Put someone in or out of scheduling. Existing bookings are deliberately left
+ * where they are: taking a person out of scheduling stops the crew week
+ * offering them, it doesn't rewrite a schedule the crew may already have.
+ */
+export async function setUserSchedulable(userId: number, schedulable: boolean): Promise<void> {
+  await q('UPDATE users SET schedulable = $1 WHERE id = $2', [schedulable, userId]);
 }
 
 /**

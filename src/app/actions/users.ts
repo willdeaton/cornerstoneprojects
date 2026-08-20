@@ -14,6 +14,7 @@ import {
   setUserActive,
   setUserPassword,
   setUserRate,
+  setUserSchedulable,
   deleteUser,
   countAdmins,
   getUserRole,
@@ -211,6 +212,19 @@ export async function setUserRateAction(id: number, rateInput: string) {
   await setUserRate(id, parsed.rate);
   revalidatePath('/settings/users');
   revalidatePath('/timesheets');
+  return { ok: true };
+}
+
+/**
+ * Put a user in or out of the crew week. Nothing about their access or their
+ * time changes — only whether the schedule offers to book them — and days they
+ * are already booked on stay booked, so a published schedule doesn't move.
+ */
+export async function setUserSchedulableAction(id: number, schedulable: boolean) {
+  await requireManager();
+  await setUserSchedulable(id, schedulable);
+  revalidatePath('/settings/users');
+  revalidatePath('/schedule');
   return { ok: true };
 }
 

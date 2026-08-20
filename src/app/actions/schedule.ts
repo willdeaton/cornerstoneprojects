@@ -43,7 +43,6 @@ import {
   computeSchedule,
   crewBudget,
   isValidTime,
-  isWorkingDay,
   wouldCycle,
 } from '@/lib/schedule-math';
 import { shortDate } from '@/lib/format';
@@ -490,9 +489,12 @@ export interface CrewDayFields {
 /**
  * Book one person onto one day of a phase.
  *
- * The phase's own dates decide what's allowed: the day has to be a working day
- * inside its window, and the phase can only hold crew_size x working-days
- * bookings in total. That budget is spent freely — four people on Monday and
+ * The phase's own dates decide what's allowed: the day has to be inside its
+ * window, and the phase can only hold crew_size x its days of bookings in
+ * total. A weekend or holiday inside the window is a legitimate day to book —
+ * the crew week only offers one once its weekend columns are open — and counts
+ * as a day of the phase, so a Saturday worked to catch up brings its own crew
+ * budget rather than spending the weekdays'. That budget is spent freely — four people on Monday and
  * one on Friday is a fine way to staff a 2-crew, 5-day phase — so nothing here
  * enforces an even spread; the crew week flags a heavy day and lets it stand.
  *
@@ -514,9 +516,6 @@ export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionR
       error: `${task.name} runs ${shortDate(window.start)} – ${shortDate(window.end)} — that day is outside it.`,
     };
   }
-  if (!isWorkingDay(input.day, calendar)) {
-    return { ok: false, error: 'That day is a weekend or a non-working day.' };
-  }
 
   if (input.kind === 'sub' && task.subcontractor_id === input.ref_id) {
     return {
@@ -525,7 +524,10 @@ export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionR
     };
   }
 
-  const budget = crewBudget(task, window, calendar);
+  // A weekend or holiday inside the window is allowed, and brings its own day
+  // of budget with it — the crew week only offers one when the weekends have
+  // been opened up, so landing here means somebody meant it.
+  const budget = crewBudget(task, window, calendar, [input.day]);
   const res = await addCrewDay(
     task.id,
     { day: input.day, kind: input.kind, ref_id: input.ref_id },
@@ -562,9 +564,10 @@ export interface CrewSpanFields {
  * somebody's name in the crew week means: "they're on this, for the days of it
  * that are on screen."
  *
- * The phase's own rules still decide what lands: days outside its window or on a
- * weekend are dropped before anything is written, and the crew-day budget stops
- * the rest. A partial fill is a success, not an error — the message says how far
+ * The phase's own rules still decide what lands: days outside its window are
+ * dropped before anything is written, and the crew-day budget stops the rest.
+ * Weekends and holidays inside the window are kept — booking a run of days
+ * across one is how a weekend gets worked. A partial fill is a success, not an error — the message says how far
  * it got so the manager can spread the remainder themselves.
  */
 export async function assignCrewSpanAction(input: CrewSpanFields): Promise<ActionResult> {
@@ -578,7 +581,7 @@ export async function assignCrewSpanAction(input: CrewSpanFields): Promise<Actio
 
   const days = [...new Set(input.days ?? [])]
     .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-    .filter((d) => d >= window.start && d <= window.end && isWorkingDay(d, calendar))
+    .filter((d) => d >= window.start && d <= window.end)
     .sort();
   if (days.length === 0) {
     return {
@@ -587,7 +590,7 @@ export async function assignCrewSpanAction(input: CrewSpanFields): Promise<Actio
     };
   }
 
-  const budget = crewBudget(task, window, calendar);
+  const budget = crewBudget(task, window, calendar, days);
   const res = await addCrewDays(task.id, days, { kind: input.kind, ref_id: input.ref_id }, budget.capacity);
   revalidateSchedule(task.project_id);
 

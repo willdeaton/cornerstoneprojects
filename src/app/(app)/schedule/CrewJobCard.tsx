@@ -63,10 +63,16 @@ export function CrewJobCard({
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
 
+  // The days of the phase a time can be set on: every working day of its
+  // window, plus any weekend or holiday somebody has actually been booked on —
+  // a Saturday being worked needs a start time as much as a Tuesday does.
   const workingDays = useMemo(() => {
     if (!window) return [];
-    return eachDay(window.start, window.end).filter((d) => isWorkingDay(d, calendar));
-  }, [window, calendar]);
+    const worked = new Set((task.crew_days ?? []).map((c) => c.day));
+    return eachDay(window.start, window.end).filter(
+      (d) => isWorkingDay(d, calendar) || worked.has(d)
+    );
+  }, [window, calendar, task]);
 
   const budget = crewBudget(task, window, calendar);
   const byDay = useMemo(() => crewByDay(task), [task]);
