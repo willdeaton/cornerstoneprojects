@@ -26,6 +26,19 @@ async function requireUser() {
   return user;
 }
 
+/**
+ * Billing is an admin/manager concern — what a customer owes is not a worker's
+ * view, which is the line the Billing page, the nav and the project list all
+ * already draw. Invoices are the numbers behind it, so they draw it too.
+ */
+async function requireBiller() {
+  const user = await requireUser();
+  if (user.role !== 'admin' && user.role !== 'manager') {
+    throw new Error('Not authorized.');
+  }
+  return user;
+}
+
 export async function createProjectAction(formData: FormData) {
   await requireUser();
   const customer = String(formData.get('customer') ?? '').trim();
@@ -58,7 +71,7 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
   // Best-effort completion notification when a job is marked complete; must not
   // block the status update.
   if (status === 'completed') await sendJobCompletedEmail(id);
-  revalidatePath(`/projects/${id}`);
+  revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
 }
@@ -66,7 +79,7 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
 export async function setProjectProgressAction(id: number, progress: number) {
   await requireUser();
   await updateProject(id, { progress: Math.max(0, Math.min(100, progress)) });
-  revalidatePath(`/projects/${id}`);
+  revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
 }
 
@@ -93,7 +106,7 @@ export async function updateProjectDetailsAction(id: number, formData: FormData)
     due_date: String(formData.get('due_date') ?? '') || null,
     hard_finish_date: String(formData.get('hard_finish_date') ?? '') || null,
   });
-  revalidatePath(`/projects/${id}`);
+  revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
 }
@@ -120,7 +133,7 @@ export async function updateInvoiceAction(
   invoices: InvoiceInput[],
   formData: FormData
 ) {
-  await requireUser();
+  await requireBiller();
 
   await updateProject(id, {
     invoice_notes: String(formData.get('invoice_notes') ?? '').trim() || null,
@@ -153,7 +166,7 @@ export async function updateInvoiceAction(
     }
   }
 
-  revalidatePath(`/projects/${id}`);
+  revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
 }
@@ -171,11 +184,11 @@ export async function addNoteAction(projectId: number, formData: FormData) {
   const body = String(formData.get('body') ?? '').trim();
   if (!body) return;
   await addNote(projectId, user.id, user.name, body);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, 'layout');
 }
 
 export async function deleteNoteAction(projectId: number, noteId: number) {
   await requireUser();
   await deleteNote(noteId);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, 'layout');
 }
