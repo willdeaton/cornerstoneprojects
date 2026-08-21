@@ -38,6 +38,11 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
  * timeline is already there when you switch to the crew week, and one Save
  * writes the lot. Nothing either view does emails anybody: only the Publish
  * button on the bar above them does that.
+ *
+ * Finished jobs ride along in the same rows so that paging back to a week that
+ * has already been worked shows what actually ran. Both views draw them and
+ * neither lets them be edited, so the draft can never pick up a change to a job
+ * that is over.
  */
 export function ScheduleViews({
   tasks,
@@ -49,9 +54,13 @@ export function ScheduleViews({
   changeCounts,
   canUnpublish,
   drafts,
+  finishedProjects = [],
 }: {
   tasks: ScheduleTaskRow[];
-  /** Every live job, so the timeline can list the unplanned ones too. */
+  /**
+   * Every live job, so the timeline can list the unplanned ones too, plus the
+   * finished ones with work in the loaded history.
+   */
   projects: BoardProject[];
   workers: WorkerOption[];
   subs: SubOption[];
@@ -62,6 +71,11 @@ export function ScheduleViews({
   canUnpublish: boolean;
   /** Jobs whose schedule has moved since the crew was last sent it. */
   drafts: DraftJob[];
+  /**
+   * Finished jobs whose work is in `tasks` — loaded so a previous week reads
+   * true, and read-only in both views: the plan for them is over.
+   */
+  finishedProjects?: number[];
 }) {
   const [view, setView] = useState<View>('timeline');
   const draft = useScheduleDraft(tasks, holidays);
@@ -95,6 +109,7 @@ export function ScheduleViews({
           changeCounts={changeCounts}
           canUnpublish={canUnpublish}
           draft={draft}
+          finishedProjects={finishedProjects}
         />
       ) : (
         <CrewWeek
@@ -104,6 +119,7 @@ export function ScheduleViews({
           holidays={holidays}
           published={published}
           draft={draft}
+          finishedProjects={finishedProjects}
         />
       )}
     </div>
