@@ -7,7 +7,7 @@ import type {
   Quote,
   QuoteLineItem,
   Project,
-  ProjectInvoice,
+  ProjectInvoiceWithFile,
   Note,
   Customer,
   CustomerContact,
@@ -87,7 +87,9 @@ export interface BackupSchedulePhase {
 export interface BackupData {
   quotes: BackupQuote[];
   projects: Project[];
-  invoices: ProjectInvoice[];
+  /** Invoice rows, each naming its attached PDF (the bytes are fetched from
+   *  `/api/invoices/[id]/pdf`, like project files). */
+  invoices: ProjectInvoiceWithFile[];
   notes: Note[];
   projectFiles: BackupProjectFile[];
   timeEntries: BackupTimeEntry[];

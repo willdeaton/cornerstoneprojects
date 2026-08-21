@@ -101,28 +101,33 @@ export async function ensureSeed(pool: Pool) {
     // One finished job with nothing raised (Ready to Bill), one invoiced and
     // waiting on the money (Outstanding), and one collected in full (Paid), so
     // the Billing page shows the whole workflow rather than a single state.
-    const billing: [string, [string, number, boolean, boolean][]][] = [
+    // Each invoice: number, the customer's PO, amount, sent, the day it went
+    // out, paid. No PDFs — the seed can't invent paperwork, so the demo jobs
+    // show the "attach the invoice PDF" state as empty.
+    type SeedInvoice = [string, string, number, boolean, string | null, boolean];
+    const billing: [string, SeedInvoice[]][] = [
       // Nothing raised yet — sitting on the desk since it completed.
       ['Highlands ARH – Phase 1 Flooring', []],
       // Progress-billed in two parts: the first collected, the second still out.
       [
         'Georgetown CH – East Wing Repaint',
         [
-          ['INV-4411', 36008, true, true],
-          ['INV-4478', 36008, true, false],
+          ['INV-4411', 'PO-88214', 36008, true, '2025-05-16', true],
+          ['INV-4478', 'PO-88214', 36008, true, '2025-06-13', false],
         ],
       ],
       // Billed and paid in full.
-      ['Heritage Pool – Showroom Refresh', [['INV-4390', 44500, true, true]]],
+      ['Heritage Pool – Showroom Refresh', [['INV-4390', 'PO-70552', 44500, true, '2025-04-30', true]]],
     ];
     for (const [name, invoices] of billing) {
-      for (const [invoice_number, amount, billed, paid] of invoices) {
+      for (const [invoice_number, po_number, amount, billed, sent_on, paid] of invoices) {
         await client.query(
-          `INSERT INTO project_invoices (project_id, invoice_number, amount, billed, paid, position)
-           VALUES ($1,$2,$3,$4,$5,
+          `INSERT INTO project_invoices
+             (project_id, invoice_number, po_number, amount, billed, sent_on, paid, position)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,
              (SELECT COALESCE(MAX(position), 0) + 1
                 FROM project_invoices WHERE project_id = $1))`,
-          [projectIds[name], invoice_number, amount, billed, paid]
+          [projectIds[name], invoice_number, po_number, amount, billed, sent_on, paid]
         );
       }
     }

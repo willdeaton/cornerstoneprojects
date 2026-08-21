@@ -130,13 +130,17 @@ hangs off:
 - **Status & progress** — setting status to `completed` stamps `completed_at`,
   which is what puts the job on the billing desk and starts its aging clock.
   (Reopening clears the stamp.) It also fires the job-completion email.
-- **Invoices** — one `project_invoices` row per invoice, each with an amount and
-  two independent flags: **billed** (sent to the customer) and **paid** (money
-  landed). This is where billing is actually *edited*; the Billing page only
-  points at it.
-- **Billing card** — the derived stage, aging, and the contract-vs-invoiced
-  variance, plus the two deliberate acts: put billing **on hold** (reason
-  required) and **close out**.
+- **Invoices** — one `project_invoices` row per invoice: the invoice number, the
+  customer's **PO number**, the amount, the day it was **sent** (`sent_on`), two
+  independent flags — **billed** (it has gone out) and **paid** (money landed) —
+  and the **invoice PDF** in `invoice_files` (one per invoice, keyed by it, so a
+  re-upload replaces it). `billed` stays the flag the pipeline reads; `sent_on`
+  is the paperwork date, kept in step with it (a date implies sent, clearing
+  sent clears the date). This is where billing is actually *edited*; the Billing
+  page only points at it.
+- **Billing card** — the derived stage, aging, what's **left to bill** (contract
+  less what has gone out) and the contract-vs-invoiced variance, plus the two
+  deliberate acts: put billing **on hold** (reason required) and **close out**.
 - **Job notes** — internal, staff-facing.
 - **Crew notes** — separate table, written *to be read by the crew*: gate codes,
   parking, who to ask for. Pinned notes stay on top. These surface on every
@@ -145,7 +149,10 @@ hangs off:
   hard finish date, and its change history.
 - **Time** — every entry logged against this job, and total hours.
 - **Files** — attachments, stored as base64 in the database, streamed back via
-  `/api/files/[id]`.
+  `/api/files/[id]`. Invoice PDFs deliberately do *not* live here: they're in
+  `invoice_files` behind `/api/invoices/[id]/pdf`, which is gated to
+  admins/managers rather than to "not an employee" — the Files tab is a wider
+  audience than the Billing tab.
 - **Site address** — the full mappable address crews drive to, kept separate
   from `location` (the short "City, ST" label used on quotes and lists), with a
   Google Maps directions link.
@@ -173,6 +180,10 @@ Chasing*.
 It also calls out three money variances: a job billed **short** of its contract
 value, one billed **over** it (worth checking for a change order), and money
 raised on an invoice that was never actually sent.
+
+**Left to bill** — contract value less what has actually gone out — is shown per
+job and totalled desk-wide. It is wider than the short-billed variance on
+purpose: an invoice raised but never sent is still work left to bill.
 
 ### Schedule `/schedule`
 Two views over one load of the same rows, and the split between them is the
@@ -452,9 +463,11 @@ want.
 >
 > **Projects** — sold work, tabbed by status, with progress, value, hours logged
 > and due dates. The **project detail page is the hub everything hangs off**:
-> status and progress; **invoices** (one row each, with independent
-> billed/paid flags — this is where billing is actually edited); a billing card
-> showing the derived stage, aging and contract-vs-invoiced variance; internal
+> status and progress; **invoices** (one row each, carrying the invoice number,
+> the customer's PO, the amount, the date it was sent, independent billed/paid
+> flags and the invoice PDF — this is where billing is actually edited); a
+> billing card showing the derived stage, aging, what's left to bill and the
+> contract-vs-invoiced variance; internal
 > **job notes**; crew-facing **crew notes** (gate codes, parking, who to ask
 > for — these surface on every booked person's schedule and in the schedule
 > email); the job's schedule phases and projected finish; time logged; file
@@ -478,7 +491,8 @@ want.
 > chased in days (7 watch / 14 late), an invoice that's out is measured against
 > net-30 terms (30 / 45). It also calls out three money variances: billed short
 > of contract, billed over it (check for a change order), and money raised on an
-> invoice that was never sent.
+> invoice that was never sent — and totals **what's left to bill** per job and
+> across the desk.
 >
 > **Schedule** — two views over the same rows, and the split between them is the
 > whole design:

@@ -15,6 +15,7 @@ import {
   updateProjectInvoice,
   setProjectInvoicePosition,
   deleteProjectInvoice,
+  deleteInvoiceFile,
 } from '@/lib/data';
 import { sendJobCompletedEmail } from '@/lib/email/send';
 
@@ -116,10 +117,16 @@ export interface InvoiceInput {
   /** Existing invoice id, or null for a row added in this edit. */
   id: number | null;
   invoice_number: string;
+  /** The customer's PO this invoice bills against. */
+  po_number: string;
   /** Free text as typed ("$1,200.50") — parsed server-side. */
   amount: string;
   billed: boolean;
+  /** The day it went out, as YYYY-MM-DD from a date input; '' when unknown. */
+  sent_on: string;
   paid: boolean;
+  /** Detach the invoice's PDF as part of this save. */
+  remove_pdf?: boolean;
 }
 
 /**
@@ -127,12 +134,17 @@ export interface InvoiceInput {
  * Rows missing from `invoices` are deleted, rows with an id are updated, and
  * rows without one are inserted — so the client can add, edit and remove
  * locally and commit it all with a single Save.
+ *
+ * Returns the saved invoice id for each submitted row, in the order they were
+ * submitted. A row that was new until this save has no id on the client, and
+ * its PDF can only be attached once the row exists — the card uploads against
+ * these ids straight after saving.
  */
 export async function updateInvoiceAction(
   id: number,
   invoices: InvoiceInput[],
   formData: FormData
-) {
+): Promise<{ ids: number[] }> {
   await requireBiller();
 
   await updateProject(id, {
@@ -145,30 +157,46 @@ export async function updateInvoiceAction(
     if (!keep.has(row.id)) await deleteProjectInvoice(row.id);
   }
 
+  const ids: number[] = [];
   for (const [i, inv] of invoices.entries()) {
     // Amounts arrive as typed, so strip currency formatting before parsing.
     const parsed = parseFloat(String(inv.amount ?? '').replace(/[$,\s]/g, ''));
     const amount = isNaN(parsed) ? 0 : parsed;
     // Paid implies billed — an invoice can't be collected on before it goes out.
     const billed = inv.paid || inv.billed;
+    // A send date only means anything on an invoice that has gone out: entering
+    // one is how you say it went out, and taking the invoice back out of
+    // "sent" drops the date with it rather than leaving a stale one behind.
+    const sent_on = billed ? isoDate(inv.sent_on) : null;
     const fields = {
       invoice_number: inv.invoice_number.trim() || null,
+      po_number: inv.po_number?.trim() || null,
       amount,
       billed,
+      sent_on,
       paid: inv.paid,
     };
     // Only touch rows that belong to this project; ignore anything else.
     if (inv.id != null && existing.some((row) => row.id === inv.id)) {
       await updateProjectInvoice(inv.id, fields);
       await setProjectInvoicePosition(inv.id, i + 1);
+      if (inv.remove_pdf) await deleteInvoiceFile(inv.id);
+      ids.push(inv.id);
     } else {
-      await addProjectInvoice({ project_id: id, ...fields });
+      ids.push(await addProjectInvoice({ project_id: id, ...fields }));
     }
   }
 
   revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
+  return { ids };
+}
+
+/** A date input's value, kept only if it really is one (YYYY-MM-DD). */
+function isoDate(raw: string | null | undefined): string | null {
+  const v = String(raw ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 }
 
 export async function deleteProjectAction(id: number) {
