@@ -116,10 +116,19 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     Marking a phase in progress or complete is progress, not a schedule change,
     and needs no reason. Booking crew never needs one either — who turns up is
     exactly what a manager is expected to keep adjusting.
-  - **Publish** — publishing a job's schedule (explicitly, or by sending it out
-    from **Send Schedule**) marks the dates the crew has. After that, changes to
-    the headcount, the subcontractor, start times and phase notes need a reason
-    too.
+  - **Draft, Save, Publish** — the schedule is a draft while it's being worked
+    on. Edits (phases, bookings, start times, crew notes) collect in the browser,
+    the board redraws from them at once, and they're written to the database
+    every ten seconds or the moment you hit **Save**. Saving emails nobody, so a
+    week can be planned and re-planned without anything going out.
+    **Publish & Send** is what tells people: it baselines each job's dates as
+    the version its crew is working to and emails everyone booked on that work
+    their own days — the only schedule email the app sends. The bar above the
+    views keeps count of unsaved changes and of the jobs whose dates have moved
+    since they were last published, and the publish dialog lists exactly who
+    will be emailed before anything is sent. A single job can be published from
+    its row on the timeline. After a publish, changes to the headcount, the
+    subcontractor, start times and phase notes need a reason too.
   - **Moved work drops stale bookings** — shortening or moving a phase releases
     anyone booked on days it no longer covers, across the whole job, since a
     phase that slips takes everything after it along.

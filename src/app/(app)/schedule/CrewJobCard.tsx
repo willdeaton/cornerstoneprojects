@@ -15,7 +15,7 @@ import {
 } from '@/lib/schedule-math';
 import { diffTask, needsReason, summarizeChanges } from '@/lib/schedule-diff';
 import type { ScheduleTaskRow, TaskDayTime } from '@/lib/types';
-import { saveCrewCardAction, unassignCrewDayAction } from '@/app/actions/schedule';
+import type { ScheduleDraft } from './useScheduleDraft';
 
 /**
  * One job's card, opened from the crew week.
@@ -37,6 +37,7 @@ export function CrewJobCard({
   window,
   holidays,
   publishedVersion,
+  draft,
   onClose,
   onSaved,
 }: {
@@ -46,6 +47,8 @@ export function CrewJobCard({
   holidays: string[];
   /** The job's published version, when its schedule has gone out. */
   publishedVersion?: number | null;
+  /** The draft the card's changes join — saved with everything else. */
+  draft: ScheduleDraft;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -133,29 +136,42 @@ export function CrewJobCard({
     });
   }
 
-  async function unassign(day: string, kind: 'user' | 'sub', refId: number) {
+  function unassign(day: string, kind: 'user' | 'sub', refId: number) {
+    const person = (task.crew_days ?? []).find(
+      (c) => c.day === day && c.kind === kind && c.ref_id === refId
+    );
     setRemoving(`${day}:${kind}:${refId}`);
-    const res = await unassignCrewDayAction({ task_id: task.id, day, kind, ref_id: refId });
+    draft.queue({
+      kind: 'crew-unbook',
+      projectId: task.project_id,
+      taskId: task.id,
+      label: `${person?.name ?? 'Crew'} off ${task.name} (${task.project_name})`,
+      person: { kind, ref_id: refId, name: person?.name ?? 'Crew', detail: person?.detail ?? null },
+      days: [day],
+    });
     setRemoving(null);
-    if (res.ok) onSaved();
-    else setError(res.error ?? 'Could not take them off that day.');
+    onSaved();
   }
 
-  async function submit() {
+  /**
+   * Put the card's changes into the draft. Times and crew notes are what the
+   * crew reads before they turn up, so they only reach them when the schedule
+   * is published — saving the draft just keeps the work.
+   */
+  function submit() {
     setError(null);
     setSaving(true);
-    const res = await saveCrewCardAction({
-      task_id: task.id,
+    draft.queue({
+      kind: 'crew-card',
+      projectId: task.project_id,
+      taskId: task.id,
+      label: `${task.name} start times and notes (${task.project_name})`,
       start_time: draftStartTime,
       day_times: draftDayTimes,
-      notes,
-      reason,
+      notes: notes.trim() === '' ? null : notes.trim(),
+      reason: reason.trim() === '' ? null : reason.trim(),
     });
-    if (res.ok) onSaved();
-    else {
-      setError(res.error ?? 'Could not save.');
-      setSaving(false);
-    }
+    onSaved();
   }
 
   return (

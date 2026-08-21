@@ -20,6 +20,10 @@ import {
   publishSchedule,
   unpublishSchedule,
   logScheduleChange,
+  markScheduleChanged,
+  clearScheduleChanged,
+  listScheduleDrafts,
+  type ScheduleDraftJob,
   addCrewDay,
   addCrewDays,
   removeCrewDay,
@@ -38,6 +42,7 @@ import {
   type DayTimeInput,
 } from '@/lib/schedule-data';
 import { sendScheduleEmails, type SendScheduleResult } from '@/lib/email/send';
+import type { DraftEdit } from '@/lib/schedule-draft';
 import {
   addDays,
   computeSchedule,
@@ -66,6 +71,11 @@ export interface ActionResult {
    * than an error the user has to decode.
    */
   needsReason?: boolean;
+  /**
+   * The phase's id after the write. A draft flush needs it: bookings queued
+   * against a phase that didn't exist yet are re-pointed at the real row.
+   */
+  id?: number;
 }
 
 /** Only admins and managers build the schedule; everyone else reads it. */
@@ -120,6 +130,16 @@ function isUniqueViolation(err: unknown): boolean {
   return (
     !!err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === '23505'
   );
+}
+
+/**
+ * Note that the crew no longer has what's on the board for this job, so the
+ * schedule's Publish button can list it. Every edit to the plan calls this;
+ * publishing clears it. Progress reporting (a phase marked complete) doesn't —
+ * it tells the crew nothing new about where to be.
+ */
+async function touchSchedule(projectId: number, userId: number | null) {
+  await markScheduleChanged(projectId, userId);
 }
 
 /** Refresh every view that renders schedule data for a job. */
@@ -371,8 +391,9 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     });
   }
 
+  await touchSchedule(input.project_id, me.id);
   revalidateSchedule(input.project_id);
-  return { ok: true };
+  return { ok: true, id: taskId };
 }
 
 /**
@@ -410,6 +431,7 @@ export async function deleteTaskAction(id: number, reason?: string | null): Prom
     changed_by: me.id,
   });
 
+  await touchSchedule(task.project_id, me.id);
   revalidateSchedule(task.project_id);
   return { ok: true };
 }
@@ -471,6 +493,7 @@ export async function shiftTaskAction(
     changed_by: me.id,
   });
 
+  await touchSchedule(task.project_id, me.id);
   revalidateSchedule(task.project_id);
   return { ok: true };
 }
@@ -502,7 +525,7 @@ export interface CrewDayFields {
  * not: who turns up is exactly what a manager is expected to keep adjusting.
  */
 export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionResult> {
-  await requireManager();
+  const me = await requireManager();
   const task = await getScheduleTask(input.task_id);
   if (!task) return { ok: false, error: 'That phase no longer exists.' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.day ?? '')) return { ok: false, error: 'Pick a day.' };
@@ -546,6 +569,7 @@ export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionR
       : { ok: false, error: 'They are already booked on this phase that day.' };
   }
 
+  await touchSchedule(task.project_id, me.id);
   revalidateSchedule(task.project_id);
   return { ok: true };
 }
@@ -571,7 +595,7 @@ export interface CrewSpanFields {
  * it got so the manager can spread the remainder themselves.
  */
 export async function assignCrewSpanAction(input: CrewSpanFields): Promise<ActionResult> {
-  await requireManager();
+  const me = await requireManager();
   const task = await getScheduleTask(input.task_id);
   if (!task) return { ok: false, error: 'That phase no longer exists.' };
 
@@ -592,6 +616,7 @@ export async function assignCrewSpanAction(input: CrewSpanFields): Promise<Actio
 
   const budget = crewBudget(task, window, calendar, days);
   const res = await addCrewDays(task.id, days, { kind: input.kind, ref_id: input.ref_id }, budget.capacity);
+  if (res.booked > 0) await touchSchedule(task.project_id, me.id);
   revalidateSchedule(task.project_id);
 
   if (res.booked === 0 && res.full) {
@@ -608,10 +633,11 @@ export async function assignCrewSpanAction(input: CrewSpanFields): Promise<Actio
 
 /** Take one person off one day of a phase. */
 export async function unassignCrewDayAction(input: CrewDayFields): Promise<ActionResult> {
-  await requireManager();
+  const me = await requireManager();
   const task = await getScheduleTask(input.task_id);
   if (!task) return { ok: true };
   await removeCrewDay(task.id, { day: input.day, kind: input.kind, ref_id: input.ref_id });
+  await touchSchedule(task.project_id, me.id);
   revalidateSchedule(task.project_id);
   return { ok: true };
 }
@@ -695,6 +721,7 @@ export async function saveCrewCardAction(input: CrewCardFields): Promise<ActionR
     });
   }
 
+  await touchSchedule(task.project_id, me.id);
   revalidateSchedule(task.project_id);
   return { ok: true };
 }
@@ -752,6 +779,7 @@ export async function setHardFinishDateAction(
     });
   }
 
+  await touchSchedule(projectId, me.id);
   revalidateSchedule(projectId);
   return { ok: true };
 }
@@ -788,44 +816,112 @@ export async function saveCrewNoteAction(input: {
     });
   }
 
+  await touchSchedule(input.project_id, me.id);
   revalidateSchedule(input.project_id);
   return { ok: true };
 }
 
 export async function deleteCrewNoteAction(id: number): Promise<ActionResult> {
-  await requireManager();
+  const me = await requireManager();
   const note = await getCrewNote(id);
   if (!note) return { ok: true };
   await deleteCrewNote(id);
+  await touchSchedule(note.project_id, me.id);
   revalidateSchedule(note.project_id);
   return { ok: true };
 }
 
 /* ------------------------------------------------- Publishing & history */
 
-/**
- * Mark a job's schedule as published — the dates the crew has been told. From
- * here on, edits to its phases need a reason. Publishing again bumps the
- * version, which is how a manager re-baselines after a round of changes.
- */
-export async function publishScheduleAction(
-  projectId: number,
-  note?: string | null
-): Promise<ActionResult & { version?: number }> {
-  const me = await requireManager();
-  if (!projectId) return { ok: false, error: 'Pick a job to publish.' };
-  const version = await publishSchedule(projectId, me.id, clean(note));
-  revalidateSchedule(projectId);
-  return { ok: true, version };
+/** What publishing did: the versions written, and how the emails went. */
+export interface PublishResult {
+  ok: boolean;
+  error?: string;
+  /** One entry per job published, with the version the crew now has. */
+  published: { project_id: number; project_name: string; version: number }[];
+  /** The send that went with it — publishing is the only thing that emails. */
+  email?: SendScheduleResult;
 }
 
-/** Undo a publish (admins only) — for a job published by mistake. */
+/** Every live job whose schedule has changed since the crew was last told. */
+export async function listScheduleDraftsAction(): Promise<ScheduleDraftJob[]> {
+  await requireManager();
+  return listScheduleDrafts();
+}
+
+/**
+ * PUBLISH: tell the crew. For each job it baselines the dates as a new version,
+ * then emails everyone booked on that work their own days — and that send is
+ * the only schedule email the app makes. Editing and saving the schedule
+ * notifies nobody, which is the whole point of the split: a manager can move
+ * next month around all afternoon and only the publish goes out.
+ *
+ * The emails are sent BEFORE the versions are written, and a send that fails
+ * outright (email isn't configured, the API is down) stops the publish
+ * completely rather than recording that people were told when they weren't. A
+ * partial send still publishes: the result names who was skipped, and a job
+ * with nobody booked yet publishes quietly with nothing to send.
+ *
+ * From then on, changes to those jobs need a reason, and each job reappears in
+ * the unsent list the moment its schedule moves again.
+ */
+export async function publishScheduleAction(
+  projectIds: number[],
+  opts: {
+    note?: string | null;
+    /** Also email subcontractors who have an address on file. */
+    includeSubs?: boolean;
+    /** Narrow the days covered; by default it's everything still ahead. */
+    from?: string | null;
+    to?: string | null;
+  } = {}
+): Promise<PublishResult> {
+  const me = await requireManager();
+  const ids = [...new Set((projectIds ?? []).filter((id) => Number.isInteger(id) && id > 0))];
+  if (ids.length === 0) return { ok: false, error: 'Pick a job to publish.', published: [] };
+
+  const email = await sendScheduleEmails({
+    projectIds: ids,
+    includeSubs: opts.includeSubs ?? true,
+    from: clean(opts.from),
+    to: clean(opts.to),
+  });
+  if (email.status === 'error') {
+    return {
+      ok: false,
+      error: `Nothing was published — the crew couldn't be emailed. ${email.reason ?? ''}`.trim(),
+      published: [],
+      email,
+    };
+  }
+
+  const note = clean(opts.note);
+  const published: PublishResult['published'] = [];
+  for (const id of ids) {
+    const project = await getProject(id);
+    if (!project) continue;
+    const version = await publishSchedule(id, me.id, note);
+    // The crew now has these dates, so the job has nothing outstanding until
+    // somebody moves it again.
+    await clearScheduleChanged(id);
+    published.push({ project_id: id, project_name: project.name, version });
+    revalidateSchedule(id);
+  }
+
+  return { ok: true, published, email };
+}
+
+/**
+ * Undo a publish (admins only) — for a job published by mistake. The crew
+ * doesn't have a baseline any more, so the job goes back on the unsent list.
+ */
 export async function unpublishScheduleAction(projectId: number): Promise<ActionResult> {
   const me = await requireManager();
   if (me.role !== 'admin') {
     return { ok: false, error: 'Only an admin can un-publish a schedule.' };
   }
   await unpublishSchedule(projectId);
+  await touchSchedule(projectId, me.id);
   revalidateSchedule(projectId);
   return { ok: true };
 }
@@ -905,40 +1001,143 @@ export async function deleteHolidayAction(day: string): Promise<ActionResult> {
   return { ok: true };
 }
 
-/* ---------------------------------------------------------- Send schedule */
+/* --------------------------------------------------- Saving a draft */
+
+/** How a flush of the draft went, edit by edit. */
+export interface DraftSaveResult {
+  ok: boolean;
+  /** Edits written, in the order they were made. */
+  applied: number;
+  /**
+   * Placeholder phase id -> the real id it was saved as, so bookings queued
+   * against a phase that didn't exist yet can be re-pointed after the save.
+   */
+  ids: Record<number, number>;
+  /** Edits that couldn't be written, each with the reason the server gave. */
+  failures: { editId: number; label: string; error: string }[];
+}
 
 /**
- * Email everyone scheduled in the date range their own list of work. Best-effort
- * per recipient — the result reports who was skipped and why.
+ * SAVE: write the draft the schedule has been building up. Never emails
+ * anybody — that's what publishing is for.
  *
- * `publish` marks every job covered by the send as published, since that send is
- * the moment the crew was told these dates. Changes to those jobs afterwards
- * need a reason.
+ * The edits are replayed in the order they were made, through the very same
+ * actions the editors used to call one at a time, so every rule still applies
+ * at the moment the edit lands: phase windows, crew budgets, dependency loops
+ * and the reasons a published job demands. Nothing here re-implements any of
+ * that; it just plays the queue back.
+ *
+ * A phase created in the draft carries a negative placeholder id. Saving it
+ * hands back the real one, and later edits in the same batch — the bookings
+ * made against it, a phase set to follow it — are re-pointed as they go.
+ *
+ * A failed edit is reported and dropped rather than retried forever: the queue
+ * would otherwise fail on the same edit every ten seconds. Anything that
+ * depended on it (bookings on a phase that never saved) is reported too, so
+ * what's on screen after a refresh is what's really in the database.
  */
-export async function sendScheduleAction(
-  from: string,
-  to: string,
-  includeSubs: boolean,
-  publish = false
-): Promise<SendScheduleResult & { published?: number }> {
-  const me = await requireManager();
-  if (!from || !to || to < from) {
-    return {
-      status: 'error',
-      count: 0,
-      attempted: 0,
-      reason: 'Pick a valid date range.',
-      skipped: [],
-    };
-  }
-  const result = await sendScheduleEmails(from, to, includeSubs);
+export async function saveScheduleDraftAction(edits: DraftEdit[]): Promise<DraftSaveResult> {
+  await requireManager();
+  const ids: Record<number, number> = {};
+  const failures: DraftSaveResult['failures'] = [];
+  let applied = 0;
 
-  if (!publish || result.status === 'error') return result;
+  /** A draft id resolved to the real row, once its phase has been saved. */
+  const real = (id: number): number | null => (id < 0 ? ids[id] ?? null : id);
 
-  const ids = result.projectIds ?? [];
-  for (const id of ids) {
-    await publishSchedule(id, me.id, `Schedule sent for ${from} – ${to}`);
-    revalidateSchedule(id);
+  for (const edit of edits ?? []) {
+    const fail = (error: string) => failures.push({ editId: edit.editId, label: edit.label, error });
+
+    if (edit.kind === 'task-save') {
+      const existing = real(edit.taskId);
+      // A phase that follows one created earlier in the same batch.
+      const dependsOn = edit.fields.depends_on_id;
+      let resolvedDependsOn: number | null = dependsOn;
+      if (dependsOn != null && dependsOn < 0) {
+        resolvedDependsOn = ids[dependsOn] ?? null;
+        if (resolvedDependsOn == null) {
+          fail('The phase it follows was never saved, so the link was dropped.');
+        }
+      }
+      const res = await saveTaskAction({
+        id: existing ?? undefined,
+        project_id: edit.fields.project_id,
+        name: edit.fields.name,
+        start_date: edit.fields.start_date,
+        duration_days: edit.fields.duration_days,
+        crew_size: edit.fields.crew_size,
+        subcontractor_id: edit.fields.subcontractor_id,
+        depends_on_id: resolvedDependsOn,
+        depends_type: edit.fields.depends_type,
+        lag_days: edit.fields.lag_days,
+        status: edit.fields.status,
+        notes: edit.fields.notes,
+        reason: edit.fields.reason,
+      });
+      if (!res.ok) fail(res.error ?? 'Could not save that phase.');
+      else {
+        applied++;
+        if (edit.taskId < 0 && res.id) ids[edit.taskId] = res.id;
+      }
+      continue;
+    }
+
+    const taskId = real(edit.taskId);
+    if (taskId == null) {
+      fail('The phase it belongs to was never saved.');
+      continue;
+    }
+
+    switch (edit.kind) {
+      case 'task-delete': {
+        const res = await deleteTaskAction(taskId, edit.reason);
+        if (res.ok) applied++;
+        else fail(res.error ?? 'Could not remove that phase.');
+        break;
+      }
+      case 'crew-book': {
+        const res = await assignCrewSpanAction({
+          task_id: taskId,
+          days: edit.days,
+          kind: edit.person.kind,
+          ref_id: edit.person.ref_id,
+        });
+        if (res.ok) applied++;
+        else fail(res.error ?? 'Could not book those days.');
+        break;
+      }
+      case 'crew-unbook': {
+        let ok = true;
+        for (const day of edit.days) {
+          const res = await unassignCrewDayAction({
+            task_id: taskId,
+            day,
+            kind: edit.person.kind,
+            ref_id: edit.person.ref_id,
+          });
+          if (!res.ok) {
+            ok = false;
+            fail(res.error ?? 'Could not take them off that day.');
+            break;
+          }
+        }
+        if (ok) applied++;
+        break;
+      }
+      case 'crew-card': {
+        const res = await saveCrewCardAction({
+          task_id: taskId,
+          start_time: edit.start_time,
+          day_times: edit.day_times,
+          notes: edit.notes,
+          reason: edit.reason,
+        });
+        if (res.ok) applied++;
+        else fail(res.error ?? 'Could not save that job card.');
+        break;
+      }
+    }
   }
-  return { ...result, published: ids.length };
+
+  return { ok: failures.length === 0, applied, ids, failures };
 }

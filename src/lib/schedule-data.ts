@@ -652,3 +652,61 @@ export async function countScheduleChanges(): Promise<Map<number, number>> {
   );
   return new Map(rows.map((r) => [r.project_id, r.n]));
 }
+
+/* ------------------------------------------- Unsent changes (draft state) */
+
+/**
+ * A job whose schedule has moved since the crew was last told. The row exists
+ * only while there is something unsent: publishing the job deletes it.
+ */
+export interface ScheduleDraftJob {
+  project_id: number;
+  project_name: string;
+  customer: string;
+  changed_at: string;
+  changed_by_name: string | null;
+}
+
+/**
+ * Note that this job's schedule no longer matches what the crew has. Called by
+ * every action that changes the plan — phases, bookings, start times, crew
+ * notes — so Publish can list exactly what is outstanding.
+ */
+export async function markScheduleChanged(
+  projectId: number,
+  changedBy: number | null
+): Promise<void> {
+  await q(
+    `INSERT INTO schedule_draft_state (project_id, changed_at, changed_by)
+     VALUES ($1, now(), $2)
+     ON CONFLICT (project_id)
+     DO UPDATE SET changed_at = now(), changed_by = EXCLUDED.changed_by`,
+    [projectId, changedBy]
+  );
+}
+
+/** The crew now has these dates, so nothing is outstanding on this job. */
+export async function clearScheduleChanged(projectId: number): Promise<void> {
+  await q('DELETE FROM schedule_draft_state WHERE project_id = $1', [projectId]);
+}
+
+/**
+ * Every live job with changes the crew hasn't been sent, oldest change first —
+ * what the schedule's Publish button offers, and the order it worries about
+ * them in. Completed jobs are left out: nobody needs to be emailed dates for
+ * work that is finished.
+ */
+export async function listScheduleDrafts(): Promise<ScheduleDraftJob[]> {
+  return q<ScheduleDraftJob>(
+    `SELECT d.project_id,
+            p.name     AS project_name,
+            p.customer AS customer,
+            d.changed_at,
+            u.name     AS changed_by_name
+       FROM schedule_draft_state d
+       JOIN projects p ON p.id = d.project_id
+       LEFT JOIN users u ON u.id = d.changed_by
+      WHERE p.status <> 'completed'
+      ORDER BY d.changed_at`
+  );
+}

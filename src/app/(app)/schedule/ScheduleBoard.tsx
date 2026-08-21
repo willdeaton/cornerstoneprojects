@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { shortDate } from '@/lib/format';
 import {
   addDays,
@@ -28,8 +27,8 @@ import {
 import type { ProjectStatus, ScheduleTaskRow } from '@/lib/types';
 import { PROJECT_STATUS_LABELS } from '@/lib/types';
 import { TaskModal, type ProjectOption, type SubOption } from './TaskModal';
-import { SendScheduleModal } from './SendScheduleModal';
 import { PublishBar, type PublishedInfo } from './PublishBar';
+import type { ScheduleDraft } from './useScheduleDraft';
 import { HardFinishControl } from './HardFinishControl';
 
 /** Timeline widths offered by the range switcher, in whole weeks. */
@@ -81,6 +80,7 @@ export function ScheduleBoard({
   published,
   changeCounts = {},
   canUnpublish = false,
+  draft,
 }: {
   tasks: ScheduleTaskRow[];
   /** Every live job, including ones with nothing scheduled yet. */
@@ -94,15 +94,18 @@ export function ScheduleBoard({
   changeCounts?: Record<number, number>;
   /** Admins can undo a publish. */
   canUnpublish?: boolean;
+  /**
+   * The draft phases are edited into. Saving it is what writes them; the crew
+   * only ever hears about them when the schedule is published.
+   */
+  draft: ScheduleDraft;
 }) {
-  const router = useRouter();
   const [spanDays, setSpanDays] = useState<number>(DEFAULT_SPAN);
   const [anchor, setAnchor] = useState<string>(() => initialAnchor(tasks, holidays));
   const [projectFilter, setProjectFilter] = useState<number | 'all'>('all');
   /** 'short' narrows the board to phases the crew week hasn't filled yet. */
   const [staffing, setStaffing] = useState<'all' | 'short'>('all');
   const [editing, setEditing] = useState<Editing>(null);
-  const [sending, setSending] = useState(false);
   // Per-job expand/collapse, only for jobs the user has actually clicked. Jobs
   // they haven't touched follow the default below, which tracks the visible
   // range — so paging to a quiet week doesn't leave every row shut.
@@ -310,9 +313,6 @@ export function ScheduleBoard({
         </select>
 
         <div className="ml-auto flex gap-2">
-          <button className="btn-secondary" onClick={() => setSending(true)}>
-            Send Schedule
-          </button>
           <button
             className="btn-primary"
             onClick={() => setEditing({})}
@@ -590,20 +590,9 @@ export function ScheduleBoard({
           subs={subs}
           holidays={holidays}
           publishedVersions={publishedVersionMap}
+          draft={draft}
           onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            router.refresh();
-          }}
-        />
-      )}
-
-      {sending && (
-        <SendScheduleModal
-          defaultFrom={rangeStart}
-          defaultTo={rangeEnd}
-          onClose={() => setSending(false)}
-          onSent={() => router.refresh()}
+          onSaved={() => setEditing(null)}
         />
       )}
     </div>
