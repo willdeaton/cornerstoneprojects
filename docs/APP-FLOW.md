@@ -199,6 +199,14 @@ nothing can be booked past the total. Staff by clicking day cells, dragging a
 card onto a day, dragging it onto a name (books every working day of the phase
 on screen), or press-and-drag sideways along a row to book a span in one pass.
 
+The **Warehouse** card is the one card that isn't a phase: `warehouse_days` is
+one row per person per day, with no window, no budget and no project, so the
+card sits beside the band's heading instead of under a week and is always
+available. It books through the same draft (`warehouse-book` /
+`warehouse-unbook` edits, replayed server-side by `bookWarehouseDaysAction`),
+takes our own people only, and is outside publishing — nothing about it
+baselines a job's dates or emails a crew.
+
 Rules that fall out of this model:
 
 - **Weekends** stay off the grid until you press *Show weekends* or somebody is
@@ -229,7 +237,8 @@ Views run in whole Monday-to-Sunday weeks (Week / 2-Week / 6-Week, defaulting to
 
 **My Schedule** is what an employee gets instead: a read-only week of
 their own bookings — one card per day, with the start time, job, address, phase
-notes and crew notes, and arrows to step weeks.
+notes and crew notes, and arrows to step weeks. Their warehouse days appear on
+the same day cards, above the jobs and without an address.
 
 **Send Schedule** emails each assignee their own dates only.
 

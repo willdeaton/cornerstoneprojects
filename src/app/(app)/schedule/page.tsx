@@ -9,6 +9,7 @@ import {
   listCrewNotesForProjects,
   countScheduleChanges,
   listScheduleDrafts,
+  listWarehouseDays,
 } from '@/lib/schedule-data';
 import { PageHeader } from '@/components/ui';
 import { ScheduleViews } from './ScheduleViews';
@@ -31,6 +32,9 @@ export default async function SchedulePage() {
   const holidayDays = holidays.map((h) => h.day);
 
   if (me.role !== 'admin' && me.role !== 'manager') {
+    // Their own warehouse days, so the week shows the days they're in there
+    // alongside the days they're on a job.
+    const myWarehouse = await listWarehouseDays({ userId: me.id });
     // Crew notes for the jobs they could be booked on, so the week view can show
     // the job-specific instructions alongside each day.
     const crewNotes = await listCrewNotesForProjects([
@@ -48,6 +52,7 @@ export default async function SchedulePage() {
         />
         <MySchedule
           tasks={tasks}
+          warehouse={myWarehouse}
           holidays={holidayDays}
           userId={me.id}
           crewNotes={crewNotes}
@@ -56,14 +61,16 @@ export default async function SchedulePage() {
     );
   }
 
-  const [projects, workers, subs, publications, changeCounts, draftJobs] = await Promise.all([
-    listProjects(),
-    listActiveWorkers(),
-    listSubcontractors({ activeOnly: true }),
-    listPublishedVersions(),
-    countScheduleChanges(),
-    listScheduleDrafts(),
-  ]);
+  const [projects, workers, subs, publications, changeCounts, draftJobs, warehouse] =
+    await Promise.all([
+      listProjects(),
+      listActiveWorkers(),
+      listSubcontractors({ activeOnly: true }),
+      listPublishedVersions(),
+      countScheduleChanges(),
+      listScheduleDrafts(),
+      listWarehouseDays(),
+    ]);
 
   // Publish state per job: which version went out, and how many changes have
   // been explained since. Plain objects so it crosses to the client component.
@@ -100,6 +107,7 @@ export default async function SchedulePage() {
       />
       <ScheduleViews
         tasks={tasks}
+        warehouse={warehouse}
         projects={projects
           .filter((p) => p.status !== 'completed')
           .map((p) => ({

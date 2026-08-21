@@ -873,6 +873,39 @@ Your City, ST 00000',
 
   await migrateCrewDays(pool);
   await migrateSubcontractedPhases(pool);
+  await migrateWarehouseDays(pool);
+}
+
+/* ====================================================================
+ * Warehouse days — the standing card.
+ *
+ * Not every day of work is a job. Somebody has to be in the warehouse:
+ * loading out, taking a delivery, putting stock away, cleaning up after
+ * a job that has gone. That work has no customer, no phases, no budget
+ * and no end date, so it is not a project and never was — a project
+ * invented to hold it would land on the billing desk and in the
+ * dashboard's counts, which is the opposite of what it is.
+ *
+ * Hence its own table, and its own card in the crew week: one row per
+ * person per day in the warehouse, always available, never full. The
+ * crew week draws it as a card that is always there rather than one
+ * filed under the week some phase starts in, because there is no week
+ * it belongs to more than another.
+ * ==================================================================== */
+async function migrateWarehouseDays(pool: Pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS warehouse_days (
+      id         SERIAL PRIMARY KEY,
+      day        DATE NOT NULL,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    -- One person, one day: booking somebody who is already in that day is a
+    -- click that landed twice, not a second day of work.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouse_days_person
+      ON warehouse_days(day, user_id);
+    CREATE INDEX IF NOT EXISTS idx_warehouse_days_user ON warehouse_days(user_id, day);
+  `);
 }
 
 /* ====================================================================

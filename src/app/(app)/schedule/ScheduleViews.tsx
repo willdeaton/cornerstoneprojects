@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { ScheduleTaskRow } from '@/lib/types';
+import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import { ScheduleBoard, type BoardProject } from './ScheduleBoard';
 import { CrewWeek } from './CrewWeek';
 import { ScheduleSaveBar } from './ScheduleSaveBar';
@@ -41,6 +41,7 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
  */
 export function ScheduleViews({
   tasks,
+  warehouse,
   projects,
   workers,
   subs,
@@ -51,6 +52,8 @@ export function ScheduleViews({
   drafts,
 }: {
   tasks: ScheduleTaskRow[];
+  /** Who is in the warehouse on which day — the crew week's standing card. */
+  warehouse: WarehouseDay[];
   /** Every live job, so the timeline can list the unplanned ones too. */
   projects: BoardProject[];
   workers: WorkerOption[];
@@ -64,7 +67,7 @@ export function ScheduleViews({
   drafts: DraftJob[];
 }) {
   const [view, setView] = useState<View>('timeline');
-  const draft = useScheduleDraft(tasks, holidays);
+  const draft = useScheduleDraft(tasks, holidays, warehouse);
 
   return (
     <div className="space-y-4">
@@ -99,6 +102,7 @@ export function ScheduleViews({
       ) : (
         <CrewWeek
           tasks={draft.tasks}
+          warehouse={draft.warehouse}
           workers={workers}
           subs={subs}
           holidays={holidays}

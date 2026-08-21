@@ -24,7 +24,7 @@ import {
   dayTimeMap,
   type ComputedWindow,
 } from '@/lib/schedule-math';
-import type { ScheduleTaskRow } from '@/lib/types';
+import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import type { DraftPerson } from '@/lib/schedule-draft';
 import type { ScheduleDraft } from './useScheduleDraft';
 import { CrewJobCard } from './CrewJobCard';
@@ -32,10 +32,25 @@ import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
 /**
- * One phase a person is on for one day. `contracted` days come from the phase
- * being subcontracted rather than from a crew-day booking, and are read-only.
+ * One thing a person is on for one day: a phase of a job, or a day in the
+ * warehouse. `contracted` phase days come from the phase being subcontracted
+ * rather than from a crew-day booking, and are read-only.
  */
-type DayEntry = { task: ScheduleTaskRow; startTime: string | null; contracted: boolean };
+type DayEntry =
+  | { kind: 'phase'; task: ScheduleTaskRow; startTime: string | null; contracted: boolean }
+  | { kind: 'warehouse' };
+
+/** Which of the two a day entry is, for de-duplicating a cell's contents. */
+function entryKey(e: DayEntry): string {
+  return e.kind === 'warehouse' ? 'warehouse' : `task:${e.task.id}`;
+}
+
+/** The jobs a day's entries belong to — what a double-booking is counted over. */
+function jobsOn(entries: DayEntry[]): Set<number> {
+  return new Set(
+    entries.filter((e) => e.kind === 'phase').map((e) => (e as { task: ScheduleTaskRow }).task.project_id)
+  );
+}
 
 /** Widths the crew grid opens at, in whole weeks — two by default. */
 const SPANS = [
@@ -47,6 +62,20 @@ const DEFAULT_WEEKS = 2;
 
 /** What a card being dragged carries. Read on drop; the state drives the hover. */
 const DRAG_TYPE = 'application/x-cornerstone-phase';
+
+/**
+ * The standing warehouse card.
+ *
+ * Every other card on the board is a phase of a job, and comes and goes with
+ * the weeks that job runs in. The warehouse is always there — somebody has to
+ * load out, take the delivery and put the stock away, whatever is on site — so
+ * it is not filed under a week and it never fills up: there is no customer, no
+ * phase and no crew budget behind it, only a day and a person.
+ */
+const WAREHOUSE = 'warehouse' as const;
+
+/** What the grid is booking right now: one job phase, or the warehouse. */
+type Target = number | typeof WAREHOUSE;
 
 /** A phase card, as both the work band and the grid need it. */
 interface PhaseCard {
@@ -76,7 +105,7 @@ interface Person {
  */
 interface RangeDrag {
   personKey: string;
-  taskId: number;
+  target: Target;
   from: string;
   to: string;
 }
@@ -112,6 +141,7 @@ interface RangeDrag {
  */
 export function CrewWeek({
   tasks,
+  warehouse,
   workers,
   subs,
   holidays,
@@ -119,6 +149,8 @@ export function CrewWeek({
   draft,
 }: {
   tasks: ScheduleTaskRow[];
+  /** Who is in the warehouse on which day — the standing card's bookings. */
+  warehouse: WarehouseDay[];
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
@@ -142,10 +174,10 @@ export function CrewWeek({
   const [onlyShort, setOnlyShort] = useState(false);
   /** Free-text filter over the work band — job, phase or customer. */
   const [search, setSearch] = useState('');
-  /** The phase picked by click, for booking without a mouse drag. */
-  const [picked, setPicked] = useState<number | null>(null);
-  /** The phase currently being dragged. */
-  const [dragging, setDragging] = useState<number | null>(null);
+  /** The card picked by click, for booking without a mouse drag. */
+  const [picked, setPicked] = useState<Target | null>(null);
+  /** The card currently being dragged. */
+  const [dragging, setDragging] = useState<Target | null>(null);
   /** The cell or name the drag is over: `person|day`, or `person|row`. */
   const [over, setOver] = useState<string | null>(null);
   /** The stretch of days currently being dragged out along one person's row. */
@@ -197,7 +229,10 @@ export function CrewWeek({
   const cardByTask = useMemo(() => new Map(cards.map((c) => [c.task.id, c])), [cards]);
   // Dragging takes over from clicking, so the grid highlights whichever phase
   // the manager is actually working with.
-  const activeCard = (dragging ?? picked) != null ? cardByTask.get((dragging ?? picked)!) : undefined;
+  const active: Target | null = dragging ?? picked;
+  const activeCard = typeof active === 'number' ? cardByTask.get(active) : undefined;
+  /** True while the standing warehouse card is the one being booked. */
+  const activeWarehouse = active === WAREHOUSE;
   const openedCard = opened != null ? cardByTask.get(opened) : undefined;
 
   /**
@@ -219,7 +254,7 @@ export function CrewWeek({
       const list = days.get(day);
       if (list) {
         // The sub who holds the phase is already on every day of it.
-        if (!list.some((e) => e.task.id === entry.task.id)) list.push(entry);
+        if (!list.some((e) => entryKey(e) === entryKey(entry))) list.push(entry);
       } else days.set(day, [entry]);
     };
 
@@ -229,6 +264,7 @@ export function CrewWeek({
       if (task.subcontractor_id != null) {
         for (const day of card.days) {
           add(`sub:${task.subcontractor_id}`, day, {
+            kind: 'phase',
             task,
             startTime: startTimeOn(day, task.start_time, times),
             contracted: true,
@@ -238,14 +274,21 @@ export function CrewWeek({
       for (const c of task.crew_days ?? []) {
         if (c.day < rangeFrom || c.day > rangeTo) continue;
         add(`${c.kind}:${c.ref_id}`, c.day, {
+          kind: 'phase',
           task,
           startTime: startTimeOn(c.day, task.start_time, times),
           contracted: false,
         });
       }
     }
+    // Warehouse days sit in the same map as the job bookings, so a day in the
+    // warehouse counts as a day booked and the grid draws it in the same cell.
+    for (const w of warehouse) {
+      if (w.day < rangeFrom || w.day > rangeTo) continue;
+      add(`user:${w.user_id}`, w.day, { kind: 'warehouse' });
+    }
     return out;
-  }, [cards, rangeFrom, rangeTo]);
+  }, [cards, warehouse, rangeFrom, rangeTo]);
 
   // A weekend column shows when the weekends have been opened up, or when that
   // particular Saturday or Sunday already has somebody on it. Otherwise a normal
@@ -291,10 +334,10 @@ export function CrewWeek({
         const days = byPerson.get(p.key) ?? new Map<string, DayEntry[]>();
         const booked = columns.filter((d) => (days.get(d)?.length ?? 0) > 0);
         // Two different jobs on one day is a real double-booking; two phases of
-        // the same job is just one crew doing two things there.
-        const clashes = columns.filter(
-          (d) => new Set((days.get(d) ?? []).map((b) => b.task.project_id)).size > 1
-        );
+        // the same job is just one crew doing two things there. A warehouse day
+        // alongside a job isn't one either — loading out in the morning and
+        // driving to site after is an ordinary day, not a clash.
+        const clashes = columns.filter((d) => jobsOn(days.get(d) ?? []).size > 1);
         return { ...p, days, bookedCount: booked.length, clashes };
       })
       // Somebody taken out of scheduling under Settings -> Users isn't offered
@@ -315,6 +358,8 @@ export function CrewWeek({
   const gridMinWidth = columns.length > 7 ? 880 : 660;
   const bookedPeople = people.filter((p) => p.bookedCount > 0).length;
   const understaffed = cards.filter((c) => c.budget.remaining > 0).length;
+  /** Warehouse days booked inside the weeks on screen, for the standing card. */
+  const warehouseInView = warehouse.filter((w) => w.day >= rangeFrom && w.day <= rangeTo).length;
   const needle = search.trim().toLowerCase();
   const bandCards = cards
     .filter((c) => !onlyShort || c.budget.remaining > 0)
@@ -382,6 +427,82 @@ export function CrewWeek({
     return isBooked(card, day, person) || hasRoom(card, day);
   }
 
+  /** Is this person in the warehouse that day? */
+  function inWarehouse(day: string, person: Person): boolean {
+    return (
+      person.kind === 'user' && warehouse.some((w) => w.day === day && w.user_id === person.refId)
+    );
+  }
+
+  /**
+   * Is this person already on whatever is being booked, that day? The warehouse
+   * and a phase answer it from different rows, so every caller asks here.
+   */
+  function isOn(target: Target, day: string, person: Person): boolean {
+    if (target === WAREHOUSE) return inWarehouse(day, person);
+    const card = cardByTask.get(target);
+    return !!card && isBooked(card, day, person);
+  }
+
+  /**
+   * Can this be booked on that person's day at all?
+   *
+   * A phase answers with its window and its budget. The warehouse answers with
+   * one rule: our own people only. Subs are contracted to a job's phase on the
+   * timeline, and the warehouse is not a job — there is nothing to contract.
+   */
+  function takesDay(target: Target, day: string, person: Person): boolean {
+    if (target === WAREHOUSE) return person.kind === 'user';
+    const card = cardByTask.get(target);
+    return !!card && canTake(card, day, person);
+  }
+
+  /** Book whatever is picked onto a run of that person's days. */
+  function bookDays(target: Target, person: Person, days: string[]) {
+    if (target === WAREHOUSE) return bookWarehouse(person, days);
+    const card = cardByTask.get(target);
+    if (card) bookSpan(card, person, days);
+  }
+
+  /** Take that person back off those days of whatever is picked. */
+  function unbookDays(target: Target, person: Person, days: string[]) {
+    if (target === WAREHOUSE) return unbookWarehouse(person, days);
+    const task = tasks.find((t) => t.id === target);
+    if (task) unbook(task, person, days);
+  }
+
+  /**
+   * Put one person in the warehouse for a run of days. Nothing to check but
+   * whose days they are: the card never fills up, and any day — weekend
+   * included, once its column is open — is a day somebody can be in there.
+   */
+  function bookWarehouse(person: Person, days: string[]) {
+    setError(null);
+    const bookable = days.filter((d) => !inWarehouse(d, person));
+    if (bookable.length === 0) {
+      setError(`${person.name} is already in the warehouse on those days.`);
+      return;
+    }
+    draft.queue({
+      kind: 'warehouse-book',
+      userId: person.refId,
+      label: `${person.name} in the warehouse`,
+      person: draftPerson(person),
+      days: bookable,
+    });
+  }
+
+  /** Take one person out of the warehouse for the given days. */
+  function unbookWarehouse(person: Person, days: string[]) {
+    draft.queue({
+      kind: 'warehouse-unbook',
+      userId: person.refId,
+      label: `${person.name} out of the warehouse`,
+      person: draftPerson(person),
+      days,
+    });
+  }
+
   /** The person, as the draft records a booking against them. */
   function draftPerson(person: Person): DraftPerson {
     return {
@@ -392,19 +513,19 @@ export function CrewWeek({
     };
   }
 
-  /** Book the picked phase onto one person's day, or take them back off it. */
+  /** Book the picked card onto one person's day, or take them back off it. */
   function toggleCell(person: Person, day: string) {
-    if (!activeCard) return;
+    if (active == null) return;
     setError(null);
-    if (isBooked(activeCard, day, person)) unbook(activeCard.task, person, [day]);
-    else bookSpan(activeCard, person, [day]);
+    if (isOn(active, day, person)) unbookDays(active, person, [day]);
+    else bookDays(active, person, [day]);
   }
 
   /** A card dropped on one day cell books that one day. */
-  function dropOnDay(card: PhaseCard, person: Person, day: string) {
+  function dropOnDay(target: Target, person: Person, day: string) {
     setError(null);
-    if (isBooked(card, day, person)) return; // Dropping where they already are is a no-op.
-    bookSpan(card, person, [day]);
+    if (isOn(target, day, person)) return; // Dropping where they already are is a no-op.
+    bookDays(target, person, [day]);
   }
 
   /**
@@ -452,30 +573,39 @@ export function CrewWeek({
    * working day of it that's on screen, as far as the budget goes. A weekend is
    * never swept in by that: one gets worked deliberately, by dragging across it.
    */
-  function dropOnPerson(card: PhaseCard, person: Person) {
+  function dropOnPerson(target: Target, person: Person) {
     setError(null);
-    const days = card.days.filter((d) => !isBooked(card, d, person));
+    // The warehouse has no window of its own, so "the whole card" means every
+    // working day on screen — a weekend is only ever worked deliberately.
+    const span =
+      target === WAREHOUSE
+        ? rangeDays.filter((d) => isWorkingDay(d, calendar))
+        : (cardByTask.get(target)?.days ?? []);
+    const days = span.filter((d) => !isOn(target, d, person));
     if (days.length === 0) {
-      setError(`${person.name} is already on every day of ${card.task.name} in view.`);
+      setError(
+        target === WAREHOUSE
+          ? `${person.name} is already in the warehouse every day in view.`
+          : `${person.name} is already on every day of ${cardByTask.get(target)?.task.name} in view.`
+      );
       return;
     }
-    bookSpan(card, person, days);
+    bookDays(target, person, days);
   }
 
-  function removeFrom(taskId: number, day: string, person: Person) {
+  function removeFrom(target: Target, day: string, person: Person) {
     setError(null);
-    const task = tasks.find((t) => t.id === taskId);
-    if (task) unbook(task, person, [day]);
+    unbookDays(target, person, [day]);
   }
 
-  function startDrag(e: DragEvent<HTMLDivElement>, card: PhaseCard) {
+  function startDrag(e: DragEvent<HTMLDivElement>, target: Target, label: string) {
     // Firefox only starts a drag once some data is set, so both a typed payload
     // and a plain-text fallback go on.
-    e.dataTransfer.setData(DRAG_TYPE, String(card.task.id));
-    e.dataTransfer.setData('text/plain', `${card.task.project_name} — ${card.task.name}`);
+    e.dataTransfer.setData(DRAG_TYPE, String(target));
+    e.dataTransfer.setData('text/plain', label);
     e.dataTransfer.effectAllowed = 'copy';
-    setDragging(card.task.id);
-    setPicked(card.task.id);
+    setDragging(target);
+    setPicked(target);
   }
 
   function endDrag() {
@@ -513,19 +643,25 @@ export function CrewWeek({
     const drag = range;
     function finish() {
       setRange(null);
-      const card = cardByTask.get(drag.taskId);
       const person = people.find((p) => p.key === drag.personKey);
-      if (!card || !person) return;
+      if (!person) return;
+      if (drag.target !== WAREHOUSE && !cardByTask.has(drag.target)) return;
       const covered = rangeDaysCovered(drag);
       if (covered.length < 2) return;
-      const days = covered.filter((d) => canTake(card, d, person) && !isBooked(card, d, person));
+      const days = covered.filter(
+        (d) => takesDay(drag.target, d, person) && !isOn(drag.target, d, person)
+      );
       if (days.length === 0) {
         setError(
-          `Nothing to book there — ${person.name} is already on those days of ${card.task.name}, or the phase doesn't run then.`
+          drag.target === WAREHOUSE
+            ? `Nothing to book there — ${person.name} is already in the warehouse on those days.`
+            : `Nothing to book there — ${person.name} is already on those days of ${
+                cardByTask.get(drag.target)?.task.name
+              }, or the phase doesn't run then.`
         );
         return;
       }
-      bookSpan(card, person, days);
+      bookDays(drag.target, person, days);
     }
     document.addEventListener('mouseup', finish);
     return () => document.removeEventListener('mouseup', finish);
@@ -659,13 +795,25 @@ export function CrewWeek({
               className="grid border-b border-black/10 bg-black/[.02]"
               style={{ gridTemplateColumns: gridTemplate }}
             >
-              <div className="sticky left-0 z-20 bg-[#fafafa] px-3 py-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
-                  Work to staff
-                </p>
-                <p className="text-[11px] text-brand-ink">
-                  {bandCards.length} {bandCards.length === 1 ? 'phase' : 'phases'}
-                </p>
+              <div className="sticky left-0 z-20 space-y-1.5 bg-[#fafafa] px-2 py-2">
+                <div className="px-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
+                    Work to staff
+                  </p>
+                  <p className="text-[11px] text-brand-ink">
+                    {bandCards.length} {bandCards.length === 1 ? 'phase' : 'phases'}
+                  </p>
+                </div>
+                {/* The one card that is never filed under a week: the warehouse
+                    is always there, whatever weeks are on screen. */}
+                <WarehouseTile
+                  picked={picked === WAREHOUSE}
+                  dragging={dragging === WAREHOUSE}
+                  booked={warehouseInView}
+                  onPick={() => setPicked(picked === WAREHOUSE ? null : WAREHOUSE)}
+                  onDragStart={(e) => startDrag(e, WAREHOUSE, 'Warehouse')}
+                  onDragEnd={endDrag}
+                />
               </div>
               {cards.length === 0 || bandCards.length === 0 ? (
                 <div
@@ -708,7 +856,13 @@ export function CrewWeek({
                               startedEarlier={c.window.start < rangeFrom}
                               onPick={() => setPicked(picked === c.task.id ? null : c.task.id)}
                               onOpen={() => setOpened(c.task.id)}
-                              onDragStart={(e) => startDrag(e, c)}
+                              onDragStart={(e) =>
+                                startDrag(
+                                  e,
+                                  c.task.id,
+                                  `${c.task.project_name} — ${c.task.name}`
+                                )
+                              }
                               onDragEnd={endDrag}
                             />
                           ))}
@@ -787,9 +941,11 @@ export function CrewWeek({
                 // Dropping on a name means "put them on this phase" — only
                 // offered while a phase with room is actually being dragged.
                 const rowTakes =
-                  !!activeCard &&
-                  !!dragging &&
-                  activeCard.days.some((d) => canTake(activeCard, d, p));
+                  active != null &&
+                  dragging != null &&
+                  (activeWarehouse
+                    ? p.kind === 'user'
+                    : !!activeCard && activeCard.days.some((d) => canTake(activeCard, d, p)));
                 return (
                   <div
                     key={p.key}
@@ -806,15 +962,17 @@ export function CrewWeek({
                         rowTakes
                           ? (e) => {
                               e.preventDefault();
-                              dropOnPerson(activeCard!, p);
+                              dropOnPerson(active!, p);
                               endDrag();
                             }
                           : undefined
                       }
                       title={
-                        rowTakes
-                          ? `Put ${p.name} on ${activeCard!.task.name} for every working day of it on screen`
-                          : undefined
+                        !rowTakes
+                          ? undefined
+                          : activeWarehouse
+                            ? `Put ${p.name} in the warehouse for every working day on screen`
+                            : `Put ${p.name} on ${activeCard!.task.name} for every working day of it on screen`
                       }
                     >
                       <p className="flex items-baseline justify-between gap-1">
@@ -853,13 +1011,14 @@ export function CrewWeek({
                     {columns.map((d) => {
                       const items = p.days.get(d) ?? [];
                       const off = !isWorkingDay(d, calendar);
-                      const clash = new Set(items.map((b) => b.task.project_id)).size > 1;
+                      const clash = jobsOn(items).size > 1;
                       const cellKey = `${p.key}|${d}`;
-                      const on = !!activeCard && isBooked(activeCard, d, p);
-                      // A cell takes the active phase when that phase runs that
+                      const on = active != null && isOn(active, d, p);
+                      // A cell takes the active card when that phase runs that
                       // day and still has budget — or when it's already booked
-                      // there, so clicking again takes them off.
-                      const takes = !!activeCard && canTake(activeCard, d, p);
+                      // there, so clicking again takes them off. The warehouse
+                      // takes any day of any of our own people.
+                      const takes = active != null && takesDay(active, d, p);
                       const dropping = !!dragging && takes && !on;
                       const stretching = inRange(p.key, d);
                       // The sub carrying a phase is on it by contract, not by
@@ -890,7 +1049,7 @@ export function CrewWeek({
                                   e.preventDefault();
                                   setRange({
                                     personKey: p.key,
-                                    taskId: activeCard!.task.id,
+                                    target: active!,
                                     from: d,
                                     to: d,
                                   });
@@ -908,7 +1067,7 @@ export function CrewWeek({
                             dropping
                               ? (e) => {
                                   e.preventDefault();
-                                  dropOnDay(activeCard!, p, d);
+                                  dropOnDay(active!, p, d);
                                   endDrag();
                                 }
                               : undefined
@@ -916,16 +1075,49 @@ export function CrewWeek({
                           title={
                             contractedHere
                               ? `${p.name} has this phase — their days follow it, change it on the timeline`
-                              : takes
-                                ? on
-                                  ? `Take ${p.name} off ${activeCard!.task.name}`
-                                  : `Book ${p.name} on ${activeCard!.task.project_name} — ${activeCard!.task.name}${
-                                      off ? ' (a non-working day — an extra day of work)' : ''
-                                    }\nDrag sideways to book a run of days`
-                                : undefined
+                              : !takes
+                                ? undefined
+                                : activeWarehouse
+                                  ? on
+                                    ? `Take ${p.name} out of the warehouse that day`
+                                    : `Put ${p.name} in the warehouse${
+                                        off ? ' (a non-working day)' : ''
+                                      }\nDrag sideways to book a run of days`
+                                  : on
+                                    ? `Take ${p.name} off ${activeCard!.task.name}`
+                                    : `Book ${p.name} on ${activeCard!.task.project_name} — ${activeCard!.task.name}${
+                                        off ? ' (a non-working day — an extra day of work)' : ''
+                                      }\nDrag sideways to book a run of days`
                           }
                         >
-                          {items.map((b) => (
+                          {items.map((b) =>
+                            b.kind === 'warehouse' ? (
+                              <button
+                                key="warehouse"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeFrom(WAREHOUSE, d, p);
+                                }}
+                                onMouseDown={(e) => {
+                                  if (e.button !== 0) return;
+                                  e.stopPropagation();
+                                  setPicked(WAREHOUSE);
+                                  setRange({
+                                    personKey: p.key,
+                                    target: WAREHOUSE,
+                                    from: d,
+                                    to: d,
+                                  });
+                                }}
+                                title={`Warehouse\nClick to take ${p.name} out of the warehouse that day, or drag sideways to put them in for more days`}
+                                className={`block w-full rounded border-l-[3px] px-1 py-0.5 text-left text-[10px] leading-tight ${WAREHOUSE_CHIP} ${
+                                  off ? 'ring-1 ring-amber-300' : ''
+                                }`}
+                                style={{ borderLeftColor: WAREHOUSE_TINT }}
+                              >
+                                <span className="block truncate font-semibold">Warehouse</span>
+                              </button>
+                            ) : (
                             <button
                               key={b.task.id}
                               onClick={(e) => {
@@ -940,7 +1132,7 @@ export function CrewWeek({
                                 setPicked(b.task.id);
                                 setRange({
                                   personKey: p.key,
-                                  taskId: b.task.id,
+                                  target: b.task.id,
                                   from: d,
                                   to: d,
                                 });
@@ -972,7 +1164,8 @@ export function CrewWeek({
                               </span>
                               <span className="block truncate opacity-90">{b.task.name}</span>
                             </button>
-                          ))}
+                            )
+                          )}
                           {takes && !on && items.length === 0 && (
                             <span className="block pt-1 text-center text-[10px] font-medium text-brand-green-dark">
                               {dragging ? 'drop' : stretching ? '⇢' : '+ book'}
@@ -1007,7 +1200,10 @@ export function CrewWeek({
         phase rather than spending the weekdays&apos;. A subcontracted phase shows its sub on every
         day it runs, dashed and not clickable — they were engaged on the timeline, so their days
         follow its dates and its card can&apos;t be dragged. Open a card&apos;s ⋯ to set start times
-        day by day and write what the crew needs to know.
+        day by day and write what the crew needs to know. The <strong>Warehouse</strong> card
+        beside the heading is always there and never fills up — it&apos;s standing work rather
+        than a job, so it takes any day of any of our own people, and a warehouse day alongside
+        a job isn&apos;t counted as a double-booking.
       </p>
 
       {openedCard && (
@@ -1151,6 +1347,63 @@ function PhaseTile({
   );
 }
 
+/**
+ * The standing warehouse card.
+ *
+ * It sits in the band's own corner rather than under a week, because it doesn't
+ * start in one: the warehouse is work that is always available, so the card is
+ * in the same place whatever fortnight is on screen. There is no budget to
+ * count down and nothing to open — only who is in there, and for how many days
+ * of the weeks in view.
+ */
+function WarehouseTile({
+  picked,
+  dragging,
+  booked,
+  onPick,
+  onDragStart,
+  onDragEnd,
+}: {
+  picked: boolean;
+  dragging: boolean;
+  /** Warehouse days booked across the weeks on screen. */
+  booked: number;
+  onPick: () => void;
+  onDragStart: (e: DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+}) {
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onPick}
+      role="button"
+      tabIndex={0}
+      aria-pressed={picked}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onPick();
+        }
+      }}
+      title={`Warehouse\nStanding work — always here, never full\n${
+        booked === 0 ? 'Nobody in the warehouse in these weeks' : `${booked} warehouse ${booked === 1 ? 'day' : 'days'} booked in these weeks`
+      }\nDrag onto a day, or onto a name for every working day on screen`}
+      className={`min-w-0 cursor-grab rounded-md border border-l-[3px] bg-white p-1.5 text-left transition-shadow active:cursor-grabbing ${
+        picked ? 'border-brand-green ring-1 ring-brand-green' : 'border-black/10 hover:shadow-sm'
+      } ${dragging ? 'opacity-50' : ''}`}
+      style={{ borderLeftColor: picked ? undefined : WAREHOUSE_TINT }}
+    >
+      <p className="truncate text-[11px] font-semibold leading-tight text-brand-ink">Warehouse</p>
+      <p className="truncate text-[10px] leading-tight text-brand-gray">Standing work</p>
+      <p className="truncate text-[10px] leading-tight text-brand-gray/80">
+        {booked === 0 ? 'nobody in these weeks' : `${booked} ${booked === 1 ? 'day' : 'days'} booked`}
+      </p>
+    </div>
+  );
+}
+
 /** Monday reads as the start of a week, so its column carries a heavier rule. */
 function weekEdge(day: string): string {
   return fromDay(day).getDay() === 1 ? 'border-l border-black/20' : 'border-l border-black/5';
@@ -1220,6 +1473,15 @@ const JOB_TINTS = ['#1f6feb', '#2f7d32', '#b45309', '#7c3aed', '#0f766e', '#be12
 function jobTint(projectId: number): string {
   return JOB_TINTS[Math.abs(projectId) % JOB_TINTS.length];
 }
+
+/**
+ * The warehouse's own colour, kept out of the job palette on purpose: a
+ * warehouse day is the one chip on the grid that isn't a customer's job.
+ */
+const WAREHOUSE_TINT = '#475569';
+
+const WAREHOUSE_CHIP =
+  'bg-slate-100 text-slate-700 hover:bg-red-100 hover:text-red-700';
 
 /** A sub's day that comes from holding the phase, not from being booked on it. */
 const CONTRACTED_CHIP =

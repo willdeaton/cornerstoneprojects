@@ -25,7 +25,14 @@
  */
 
 import { computeSchedule } from './schedule-math';
-import type { CrewDay, DependsType, ScheduleTaskRow, TaskDayTime, TaskStatus } from './types';
+import type {
+  CrewDay,
+  DependsType,
+  ScheduleTaskRow,
+  TaskDayTime,
+  TaskStatus,
+  WarehouseDay,
+} from './types';
 
 /** A phase's editable fields, as the phase editor holds them. */
 export interface DraftTaskFields {
@@ -57,9 +64,16 @@ export interface DraftPerson {
 interface EditBase {
   /** Client-side sequence number — how the queue tracks and reports an edit. */
   editId: number;
-  projectId: number;
   /** One line for the save bar and for a failure that has to be explained. */
   label: string;
+}
+
+/**
+ * An edit that belongs to a job — every edit but a warehouse booking, which is
+ * standing work with no job behind it.
+ */
+interface JobEditBase extends EditBase {
+  projectId: number;
 }
 
 /**
@@ -69,7 +83,7 @@ interface EditBase {
  * `savedId` is stamped on once the save lands, so the placeholder drops out
  * the moment the real row arrives instead of briefly doubling up.
  */
-export interface TaskSaveEdit extends EditBase {
+export interface TaskSaveEdit extends JobEditBase {
   kind: 'task-save';
   taskId: number;
   fields: DraftTaskFields;
@@ -77,21 +91,21 @@ export interface TaskSaveEdit extends EditBase {
   savedId?: number;
 }
 
-export interface TaskDeleteEdit extends EditBase {
+export interface TaskDeleteEdit extends JobEditBase {
   kind: 'task-delete';
   taskId: number;
   reason: string;
 }
 
 /** Book one person onto a run of days of one phase. */
-export interface CrewBookEdit extends EditBase {
+export interface CrewBookEdit extends JobEditBase {
   kind: 'crew-book';
   taskId: number;
   person: DraftPerson;
   days: string[];
 }
 
-export interface CrewUnbookEdit extends EditBase {
+export interface CrewUnbookEdit extends JobEditBase {
   kind: 'crew-unbook';
   taskId: number;
   person: DraftPerson;
@@ -99,7 +113,7 @@ export interface CrewUnbookEdit extends EditBase {
 }
 
 /** The crew-facing half of a phase: start times and the notes they read. */
-export interface CrewCardEdit extends EditBase {
+export interface CrewCardEdit extends JobEditBase {
   kind: 'crew-card';
   taskId: number;
   start_time: string | null;
@@ -108,12 +122,34 @@ export interface CrewCardEdit extends EditBase {
   reason: string | null;
 }
 
+/**
+ * Put one person in the warehouse for a run of days. No task and no job: the
+ * warehouse card is standing work, so the only thing an edit needs to name is
+ * who and when.
+ */
+export interface WarehouseBookEdit extends EditBase {
+  kind: 'warehouse-book';
+  userId: number;
+  /** The person as the board draws them while the edit is still pending. */
+  person: DraftPerson;
+  days: string[];
+}
+
+export interface WarehouseUnbookEdit extends EditBase {
+  kind: 'warehouse-unbook';
+  userId: number;
+  person: DraftPerson;
+  days: string[];
+}
+
 export type DraftEdit =
   | TaskSaveEdit
   | TaskDeleteEdit
   | CrewBookEdit
   | CrewUnbookEdit
-  | CrewCardEdit;
+  | CrewCardEdit
+  | WarehouseBookEdit
+  | WarehouseUnbookEdit;
 
 /** An edit as the queue receives it — the editId is handed out by the queue. */
 export type NewDraftEdit =
@@ -121,7 +157,9 @@ export type NewDraftEdit =
   | Omit<TaskDeleteEdit, 'editId'>
   | Omit<CrewBookEdit, 'editId'>
   | Omit<CrewUnbookEdit, 'editId'>
-  | Omit<CrewCardEdit, 'editId'>;
+  | Omit<CrewCardEdit, 'editId'>
+  | Omit<WarehouseBookEdit, 'editId'>
+  | Omit<WarehouseUnbookEdit, 'editId'>;
 
 /** True for the placeholder id a phase carries before it has been saved. */
 export function isDraftId(id: number): boolean {
@@ -130,7 +168,15 @@ export function isDraftId(id: number): boolean {
 
 /** The jobs a pending edit list touches, for "what is about to be saved". */
 export function draftProjectIds(edits: DraftEdit[]): number[] {
-  return [...new Set(edits.map((e) => e.projectId))];
+  return [
+    ...new Set(
+      edits
+        .filter((e): e is Exclude<DraftEdit, WarehouseBookEdit | WarehouseUnbookEdit> =>
+          e.kind !== 'warehouse-book' && e.kind !== 'warehouse-unbook'
+        )
+        .map((e) => e.projectId)
+    ),
+  ];
 }
 
 /**
@@ -232,6 +278,44 @@ export function applyDraft(
 
   const out = order.map((id) => byId.get(id)).filter((t): t is ScheduleTaskRow => !!t);
   return pruneToWindows(out, holidays);
+}
+
+/**
+ * The warehouse as it stands with every pending booking applied — the same
+ * replay `applyDraft` does for phases, over the standing card's own rows.
+ *
+ * Kept as a second function rather than folded into `applyDraft` because the
+ * two hold different things: a phase booking lives on the phase it belongs to,
+ * and a warehouse day belongs to nothing but the day.
+ */
+export function applyWarehouseDraft(
+  days: WarehouseDay[],
+  edits: DraftEdit[]
+): WarehouseDay[] {
+  if (edits.length === 0) return days;
+  let out = [...days];
+  let syntheticId = -1;
+
+  for (const edit of edits) {
+    if (edit.kind === 'warehouse-book') {
+      for (const day of edit.days) {
+        if (out.some((w) => w.day === day && w.user_id === edit.userId)) continue;
+        out.push({
+          id: syntheticId--,
+          day,
+          user_id: edit.userId,
+          name: edit.person.name,
+          detail: edit.person.detail,
+        });
+      }
+    } else if (edit.kind === 'warehouse-unbook') {
+      const drop = new Set(edit.days);
+      out = out.filter((w) => !(drop.has(w.day) && w.user_id === edit.userId));
+    }
+  }
+
+  out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.name.localeCompare(b.name)));
+  return out;
 }
 
 /** The fields of a phase an edit writes, as a patch over the row. */

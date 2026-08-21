@@ -417,6 +417,26 @@ export type ScheduleTaskRow = ScheduleTask & {
 };
 
 /**
+ * One person in the warehouse for one day — the unit the standing warehouse
+ * card is booked in.
+ *
+ * The mirror of `CrewDay`, deliberately thinner. Warehouse work has no
+ * customer, no phase and no crew budget: it is always there, it never fills
+ * up, and it is only ever our own people, so there is no `kind` to switch on
+ * and no window to check a day against. `name` and `detail` are joined for
+ * display, exactly as `CrewDay` carries them.
+ */
+export interface WarehouseDay {
+  id: number;
+  /** The day worked, 'YYYY-MM-DD'. */
+  day: string;
+  user_id: number;
+  name: string;
+  /** The person's role, for the crew week's row label. */
+  detail: string | null;
+}
+
+/**
  * A message written for the people working a job — gate codes, parking, who to
  * ask for on site. Shown on every assignee's own schedule, unlike the internal
  * job notes in `Note`.
