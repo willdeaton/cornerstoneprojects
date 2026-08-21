@@ -69,7 +69,7 @@ export async function uploadProjectFileAction(
     uploaded.push(file.name || 'upload');
   }
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, 'layout');
 
   if (uploaded.length === 0) {
     return { error: `Each file must be under 10 MB — skipped ${tooBig.join(', ')}.` };
@@ -87,7 +87,7 @@ export async function deleteProjectFileAction(fileId: number, projectId: number)
   if (file && file.project_id === projectId) {
     await deleteProjectFile(fileId);
   }
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, 'layout');
 }
 
 /* ------------------------------------------- Quote supporting documentation */
