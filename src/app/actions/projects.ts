@@ -27,9 +27,9 @@ async function requireUser() {
 }
 
 /**
- * Billing is an admin/manager concern — what a customer owes is not a worker's
- * view, which is the line the Billing page, the nav and the project list all
- * already draw. Invoices are the numbers behind it, so they draw it too.
+ * Billing is an admin/manager concern — what a customer owes is not an
+ * employee's view, which is the line the Billing page, the nav and the project
+ * list all already draw. Invoices are the numbers behind it, so they draw it too.
  */
 async function requireBiller() {
   const user = await requireUser();

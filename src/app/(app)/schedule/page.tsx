@@ -19,8 +19,8 @@ export const dynamic = 'force-dynamic';
 
 /**
  * The schedule reads two ways: managers and admins get the editable timeline
- * and crew week across every live job, workers get a read-only week of their own
- * work they can step through a week at a time. Phase windows are derived, not
+ * and crew week across every live job, employees get a read-only week of their
+ * own work they can step through a week at a time. Phase windows are derived, not
  * stored, so every view computes them from the same rows via schedule-math.
  */
 export default async function SchedulePage() {

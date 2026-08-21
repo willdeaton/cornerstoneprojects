@@ -43,9 +43,8 @@ export function AddUserButton({
             </div>
             <div>
               <label className="label">Role</label>
-              <select name="role" className="input" defaultValue="worker">
+              <select name="role" className="input" defaultValue="employee">
                 <option value="employee">Employee</option>
-                <option value="worker">Worker</option>
                 <option value="manager">Manager</option>
                 {canGrantAdmin && <option value="admin">Admin</option>}
               </select>
@@ -77,8 +76,8 @@ export function AddUserButton({
             </div>
           </div>
           <p className="text-xs text-brand-gray">
-            Employees can only use the time clock and see their own time. Workers can also view
-            projects and add notes. Managers &amp; admins can manage users.
+            Employees can only use the time clock and see the work they&apos;re booked on.
+            Managers &amp; admins get the rest of the tracker and can manage users.
           </p>
           <div className="border-t border-black/5 pt-4">
             <SubscriptionFields />

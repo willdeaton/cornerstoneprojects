@@ -32,8 +32,12 @@ export async function requireJobUser(): Promise<User> {
 }
 
 /**
- * The same gate the Billing tab and the invoice action use. A worker who types
- * the URL lands back on the job rather than on a page of somebody's A/R.
+ * The same gate the Billing tab and the invoice action use. With the role set at
+ * admin / manager / employee this is defence in depth rather than a live filter
+ * — `requireJobUser` has already turned employees away, so everybody still here
+ * can bill. It stays because hiding the tab's link is not access control: any
+ * role added between manager and employee gets sent back to the job rather than
+ * onto a page of somebody's A/R.
  */
 export async function requireJobBiller(projectId: number): Promise<User> {
   const user = await requireJobUser();

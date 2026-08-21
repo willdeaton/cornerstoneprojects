@@ -9,7 +9,7 @@ export const SESSION_COOKIE = 'cs_session';
 export const VIEW_AS_COOKIE = 'cs_view_as';
 const SESSION_DAYS = 30;
 
-export type Role = 'admin' | 'manager' | 'worker' | 'employee';
+export type Role = 'admin' | 'manager' | 'employee';
 
 export interface User {
   id: number;
@@ -97,13 +97,13 @@ export async function getCurrentUser(): Promise<User | null> {
   user.viewingAs = null;
 
   // Only an admin may preview the app as a lower-privileged role, and only ever
-  // *downgrade* to 'manager', 'worker' or 'employee'. The effective `role` is
+  // *downgrade* to 'manager' or 'employee'. The effective `role` is
   // swapped so every existing access gate (nav, page redirects, server actions)
   // honours the preview automatically, while `realRole` keeps the true identity
   // so the admin can always switch back.
   if (user.role === 'admin') {
     const previewed = jar.get(VIEW_AS_COOKIE)?.value;
-    if (previewed === 'manager' || previewed === 'worker' || previewed === 'employee') {
+    if (previewed === 'manager' || previewed === 'employee') {
       user.viewingAs = previewed;
       user.role = previewed;
     }
