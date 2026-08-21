@@ -764,6 +764,18 @@ Your City, ST 00000',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_sched_changes_project ON schedule_changes(project_id, created_at DESC);
+
+    -- Jobs whose schedule has been edited since it was last published, i.e.
+    -- whose crew has not been told the dates that are now on the board. One
+    -- row per job, written by every schedule edit and deleted when the job is
+    -- published, so the schedule's Publish button knows what is outstanding
+    -- without having to guess from timestamps (a booking that was taken off
+    -- again leaves nothing behind to compare).
+    CREATE TABLE IF NOT EXISTS schedule_draft_state (
+      project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
   `);
 
   /* ==================================================================

@@ -4,6 +4,9 @@ import { useState } from 'react';
 import type { ScheduleTaskRow } from '@/lib/types';
 import { ScheduleBoard, type BoardProject } from './ScheduleBoard';
 import { CrewWeek } from './CrewWeek';
+import { ScheduleSaveBar } from './ScheduleSaveBar';
+import { useScheduleDraft } from './useScheduleDraft';
+import type { DraftJob } from './PublishModal';
 import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
@@ -23,12 +26,18 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
 ];
 
 /**
- * The two halves of scheduling, over one load of the same rows.
+ * The two halves of scheduling, over one load of the same rows — and the draft
+ * both of them edit.
  *
  * The timeline plans WORK — durations, dependencies, and the headcount each
  * phase needs. The crew week staffs it — the actual people, a day at a time,
  * plus the start times and notes they'll read. Both derive their dates from
  * schedule-math, so switching never shows two different answers.
+ *
+ * The draft is held here rather than in either view, so an edit made on the
+ * timeline is already there when you switch to the crew week, and one Save
+ * writes the lot. Nothing either view does emails anybody: only the Publish
+ * button on the bar above them does that.
  */
 export function ScheduleViews({
   tasks,
@@ -39,6 +48,7 @@ export function ScheduleViews({
   published,
   changeCounts,
   canUnpublish,
+  drafts,
 }: {
   tasks: ScheduleTaskRow[];
   /** Every live job, so the timeline can list the unplanned ones too. */
@@ -50,11 +60,16 @@ export function ScheduleViews({
   /** Logged schedule changes per job id. */
   changeCounts: Record<number, number>;
   canUnpublish: boolean;
+  /** Jobs whose schedule has moved since the crew was last sent it. */
+  drafts: DraftJob[];
 }) {
   const [view, setView] = useState<View>('timeline');
+  const draft = useScheduleDraft(tasks, holidays);
 
   return (
     <div className="space-y-4">
+      <ScheduleSaveBar draft={draft} drafts={drafts} holidays={holidays} canPublish />
+
       <div className="flex overflow-hidden rounded-lg border border-black/10">
         {VIEWS.map((v) => (
           <button
@@ -72,21 +87,23 @@ export function ScheduleViews({
 
       {view === 'timeline' ? (
         <ScheduleBoard
-          tasks={tasks}
+          tasks={draft.tasks}
           projects={projects}
           subs={subs}
           holidays={holidays}
           published={published}
           changeCounts={changeCounts}
           canUnpublish={canUnpublish}
+          draft={draft}
         />
       ) : (
         <CrewWeek
-          tasks={tasks}
+          tasks={draft.tasks}
           workers={workers}
           subs={subs}
           holidays={holidays}
           published={published}
+          draft={draft}
         />
       )}
     </div>

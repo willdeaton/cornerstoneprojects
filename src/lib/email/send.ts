@@ -30,6 +30,7 @@ import {
   computeSchedule,
   rangesOverlap,
   timeLabel,
+  today as todayISO,
 } from '../schedule-math';
 import { issueApprovalToken } from '../time-approval-tokens';
 import { appOrigin } from '../app-origin';
@@ -181,6 +182,19 @@ export interface SendScheduleResult extends SendResult {
   skipped: { name: string; reason: string }[];
   /** Jobs the send covered — the ones worth marking published. */
   projectIds?: number[];
+  /** The range actually sent, which publishing works out for itself. */
+  range?: { from: string; to: string };
+}
+
+/** Who to email, and about which days. */
+export interface SendScheduleOptions {
+  /** First day to cover. Omitted, it starts at the earliest day still ahead. */
+  from?: string | null;
+  /** Last day to cover. Omitted, it runs to the last day booked. */
+  to?: string | null;
+  includeSubs?: boolean;
+  /** Only these jobs, which is how publishing scopes a send. */
+  projectIds?: number[] | null;
 }
 
 /** "Mon, Mar 3" — compact enough for a table cell, unambiguous about the day. */
@@ -199,20 +213,27 @@ function scheduleSpan(start: string, end: string): string {
 }
 
 /**
- * ON DEMAND: a manager sends out the schedule for a date range. Each assignee
- * gets one email covering only their own work, so recipients come from the
- * assignments themselves rather than the flag-based subscription lists (the
- * same way the password-reset and welcome sends address a known person).
+ * ON PUBLISH: the crew is told the dates. Each assignee gets one email covering
+ * only their own work, so recipients come from the bookings themselves rather
+ * than the flag-based subscription lists (the same way the password-reset and
+ * welcome sends address a known person).
+ *
+ * This is the only schedule send in the app, and publishing is the only thing
+ * that calls it — editing and saving the schedule never emails anybody.
+ *
+ * Scope comes from the jobs being published: pass `projectIds` and the range
+ * works itself out from what those jobs have booked, from today forward, since
+ * days already worked aren't news. An explicit `from`/`to` overrides that.
  *
  * Best-effort per recipient, like every other send here: one unreachable
  * address never aborts the batch. Assignees with no address on file are
  * returned in `skipped` rather than silently dropped.
  */
 export async function sendScheduleEmails(
-  from: string,
-  to: string,
-  includeSubs: boolean
+  opts: SendScheduleOptions
 ): Promise<SendScheduleResult> {
+  const includeSubs = opts.includeSubs ?? true;
+  const onlyProjects = opts.projectIds?.length ? new Set(opts.projectIds) : null;
   const skipped: { name: string; reason: string }[] = [];
   try {
     const loaded = await loadConfigOrReason();
@@ -239,9 +260,32 @@ export async function sendScheduleEmails(
     // stretch: a two-week phase arrives as one line per week rather than one
     // that reads as if the weekend were a work day, and someone booked Mon and
     // Wed gets a line per day.
-    const booked = assigneeBookings(tasks, windows, calendar).filter(
-      (w) => rangesOverlap(w.start, w.end, from, to) && (includeSubs || w.kind === 'user')
+    const inScope = assigneeBookings(tasks, windows, calendar).filter(
+      (w) => (includeSubs || w.kind === 'user') && (!onlyProjects || onlyProjects.has(w.projectId))
     );
+
+    // The days to cover. Publishing doesn't name a range, so it takes the one
+    // the work itself implies: everything these jobs still have ahead of them.
+    const now = todayISO();
+    const from =
+      opts.from ??
+      inScope.map((w) => w.start).sort().find((d) => d >= now) ??
+      now;
+    const to =
+      opts.to ?? inScope.map((w) => w.end).sort().at(-1) ?? from;
+    if (to < from) {
+      return {
+        status: 'sent',
+        count: 0,
+        attempted: 0,
+        reason: 'Nothing is scheduled ahead for those jobs.',
+        skipped,
+        projectIds: [...new Set(inScope.map((w) => w.projectId))],
+        range: { from, to },
+      };
+    }
+
+    const booked = inScope.filter((w) => rangesOverlap(w.start, w.end, from, to));
 
     // Group each assignee's work, earliest first.
     const perAssignee = new Map<string, { name: string; lines: ScheduleLine[] }>();
@@ -263,7 +307,15 @@ export async function sendScheduleEmails(
     const projectIds = [...new Set(booked.map((w) => w.projectId))];
 
     if (perAssignee.size === 0) {
-      return { status: 'sent', count: 0, attempted: 0, reason: 'No one is scheduled in that range.', skipped, projectIds };
+      return {
+        status: 'sent',
+        count: 0,
+        attempted: 0,
+        reason: 'No one is booked on that work yet, so there was nobody to email.',
+        skipped,
+        projectIds,
+        range: { from, to },
+      };
     }
 
     const byKey = new Map(contacts.map((c) => [c.key, c]));
@@ -289,7 +341,7 @@ export async function sendScheduleEmails(
       }
     }
 
-    return { status: 'sent', count: sent, attempted, skipped, projectIds };
+    return { status: 'sent', count: sent, attempted, skipped, projectIds, range: { from, to } };
   } catch (err) {
     console.error('[email] schedule send failed:', err);
     return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message, skipped };

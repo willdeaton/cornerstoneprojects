@@ -19,7 +19,9 @@ import {
 import { diffTask, movesTimeline, needsReason, summarizeChanges } from '@/lib/schedule-diff';
 import type { DependsType, ScheduleTaskRow, TaskStatus } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
+import { isDraftId, type DraftTaskFields } from '@/lib/schedule-draft';
 import { saveTaskAction, deleteTaskAction } from '@/app/actions/schedule';
+import type { ScheduleDraft } from './useScheduleDraft';
 
 export interface ProjectOption {
   id: number;
@@ -80,6 +82,7 @@ export function TaskModal({
   defaultProjectId,
   initialProjectId,
   publishedVersions,
+  draft,
   onClose,
   onSaved,
 }: {
@@ -97,6 +100,13 @@ export function TaskModal({
   initialProjectId?: number;
   /** Published version per job id — jobs listed here need change reasons. */
   publishedVersions?: Record<number, number>;
+  /**
+   * The schedule's draft, on the schedule page. With it, saving queues the
+   * phase into the draft and the board redraws at once; without it — the job
+   * page, which has no draft of its own — the phase is written immediately.
+   * Either way nothing is emailed: only publishing does that.
+   */
+  draft?: ScheduleDraft;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -251,13 +261,11 @@ export function TaskModal({
     : publishedVersion != null;
   const timelineMoved = !!changes && movesTimeline(changes);
 
-  async function submit() {
-    setError(null);
-    setSaving(true);
-    const res = await saveTaskAction({
-      id: task?.id,
+  /** The phase as it stands in the editor. */
+  function fields(): DraftTaskFields {
+    return {
       project_id: projectId,
-      name,
+      name: name.trim(),
       start_date: startDate,
       duration_days: durationDays,
       crew_size: crew,
@@ -266,14 +274,82 @@ export function TaskModal({
       depends_type: dependsType,
       lag_days: Math.max(0, Math.round(Number(lag) || 0)),
       status,
-      notes,
-      reason,
-    });
+      notes: notes.trim() === '' ? null : notes.trim(),
+      reason: reason.trim() === '' ? null : reason.trim(),
+    };
+  }
+
+  async function submit() {
+    setError(null);
+    if (name.trim() === '') {
+      setError('Give the phase a name.');
+      return;
+    }
+    setSaving(true);
+
+    if (draft) {
+      // Into the draft, where the board picks it up immediately. A phase that
+      // doesn't exist yet gets a placeholder id it can be booked against; the
+      // real one arrives when the draft is saved.
+      const id = task?.id ?? draft.newTaskId();
+      draft.queue({
+        kind: 'task-save',
+        projectId,
+        taskId: id,
+        label: `${name.trim()} (${projects.find((p) => p.id === projectId)?.name ?? 'job'})`,
+        fields: fields(),
+        preview: task ? undefined : previewRow(id),
+      });
+      onSaved();
+      return;
+    }
+
+    const f = fields();
+    const res = await saveTaskAction({ id: task?.id, ...f, notes: f.notes, reason: f.reason });
     if (res.ok) onSaved();
     else {
       setError(res.error ?? 'Could not save.');
       setSaving(false);
     }
+  }
+
+  /**
+   * The row the board draws for a phase that hasn't been saved yet. Job details
+   * come from the picked job, so a brand-new phase reads the same as a saved
+   * one on the timeline and in the crew week.
+   */
+  function previewRow(id: number): ScheduleTaskRow {
+    const job = projects.find((p) => p.id === projectId);
+    const f = fields();
+    const now = new Date().toISOString();
+    return {
+      id,
+      project_id: projectId,
+      name: f.name,
+      start_date: f.start_date,
+      duration_days: f.duration_days,
+      crew_size: f.crew_size,
+      subcontractor_id: f.subcontractor_id,
+      depends_on_id: f.depends_on_id,
+      depends_type: f.depends_type,
+      lag_days: f.lag_days,
+      status: f.status,
+      start_time: null,
+      notes: f.notes,
+      position: 0,
+      created_at: now,
+      updated_at: now,
+      project_name: job?.name ?? 'This job',
+      customer: job?.customer ?? '',
+      location: null,
+      site_address: null,
+      project_status: 'in_progress',
+      project_due_date: job?.due_date ?? null,
+      project_hard_finish_date: job?.hard_finish_date ?? null,
+      subcontractor_name: subs.find((s) => s.id === f.subcontractor_id)?.name ?? null,
+      crew_days: [],
+      day_times: [],
+    };
   }
 
   async function remove() {
@@ -302,6 +378,24 @@ export function TaskModal({
     }
 
     setSaving(true);
+
+    if (draft) {
+      // A phase that only ever existed in the draft just leaves it, together
+      // with anything queued against it — nothing was written to undo.
+      if (isDraftId(task.id)) draft.dropTask(task.id);
+      else {
+        draft.queue({
+          kind: 'task-delete',
+          projectId: task.project_id,
+          taskId: task.id,
+          label: `Remove ${task.name} (${task.project_name})`,
+          reason: why,
+        });
+      }
+      onSaved();
+      return;
+    }
+
     const res = await deleteTaskAction(task.id, why);
     if (res.ok) onSaved();
     else {

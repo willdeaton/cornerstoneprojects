@@ -8,6 +8,7 @@ import {
   listPublishedVersions,
   listCrewNotesForProjects,
   countScheduleChanges,
+  listScheduleDrafts,
 } from '@/lib/schedule-data';
 import { PageHeader } from '@/components/ui';
 import { ScheduleViews } from './ScheduleViews';
@@ -55,12 +56,13 @@ export default async function SchedulePage() {
     );
   }
 
-  const [projects, workers, subs, publications, changeCounts] = await Promise.all([
+  const [projects, workers, subs, publications, changeCounts, draftJobs] = await Promise.all([
     listProjects(),
     listActiveWorkers(),
     listSubcontractors({ activeOnly: true }),
     listPublishedVersions(),
     countScheduleChanges(),
+    listScheduleDrafts(),
   ]);
 
   // Publish state per job: which version went out, and how many changes have
@@ -79,11 +81,22 @@ export default async function SchedulePage() {
   const changes: Record<number, number> = {};
   for (const [projectId, n] of changeCounts) changes[projectId] = n;
 
+  // Jobs whose dates have moved since the crew was last told, with the version
+  // they still have — what the Publish button offers to send.
+  const drafts = draftJobs.map((d) => ({
+    project_id: d.project_id,
+    project_name: d.project_name,
+    customer: d.customer,
+    changed_at: d.changed_at,
+    changed_by_name: d.changed_by_name ?? null,
+    version: publications.get(d.project_id)?.version ?? null,
+  }));
+
   return (
     <div>
       <PageHeader
         title="Schedule"
-        subtitle="Plan the work on the timeline, staff it two weeks at a time in the crew week, and send crews their dates"
+        subtitle="Plan and save the work as a draft, then publish it to send every crew their own dates"
       />
       <ScheduleViews
         tasks={tasks}
@@ -112,6 +125,7 @@ export default async function SchedulePage() {
         published={published}
         changeCounts={changes}
         canUnpublish={me.role === 'admin'}
+        drafts={drafts}
       />
     </div>
   );

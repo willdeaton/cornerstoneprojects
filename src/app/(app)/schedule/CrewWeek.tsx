@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition, type DragEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { shortDate } from '@/lib/format';
 import {
   DAY_LABELS,
@@ -26,11 +25,8 @@ import {
   type ComputedWindow,
 } from '@/lib/schedule-math';
 import type { ScheduleTaskRow } from '@/lib/types';
-import {
-  assignCrewDayAction,
-  assignCrewSpanAction,
-  unassignCrewDayAction,
-} from '@/app/actions/schedule';
+import type { DraftPerson } from '@/lib/schedule-draft';
+import type { ScheduleDraft } from './useScheduleDraft';
 import { CrewJobCard } from './CrewJobCard';
 import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
@@ -120,6 +116,7 @@ export function CrewWeek({
   subs,
   holidays,
   published = {},
+  draft,
 }: {
   tasks: ScheduleTaskRow[];
   workers: WorkerOption[];
@@ -127,8 +124,13 @@ export function CrewWeek({
   holidays: string[];
   /** Publish state per job id, so a card can say a change needs a reason. */
   published?: Record<number, PublishedInfo>;
+  /**
+   * The draft every booking goes into. Bookings are queued rather than written,
+   * so the grid answers instantly and the save happens on its own ten seconds
+   * later — and nobody is emailed until the schedule is published.
+   */
+  draft: ScheduleDraft;
 }) {
-  const router = useRouter();
   /** How many weeks are on screen — the nav steps by exactly this much. */
   const [weeks, setWeeks] = useState<number>(DEFAULT_WEEKS);
   const [anchor, setAnchor] = useState<string>(() => weekStart(today()));
@@ -151,7 +153,6 @@ export function CrewWeek({
   /** The phase whose card is open. */
   const [opened, setOpened] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
   const now = today();
@@ -343,10 +344,6 @@ export function CrewWeek({
       [...byPerson.values()].some((days) => (days.get(d)?.length ?? 0) > 0)
   );
 
-  function refresh() {
-    startTransition(() => router.refresh());
-  }
-
   /** Is this person already on this phase that day? */
   function isBooked(card: PhaseCard, day: string, person: Person): boolean {
     return (card.byDay.get(day) ?? []).some(
@@ -385,47 +382,68 @@ export function CrewWeek({
     return isBooked(card, day, person) || hasRoom(card, day);
   }
 
+  /** The person, as the draft records a booking against them. */
+  function draftPerson(person: Person): DraftPerson {
+    return {
+      kind: person.kind,
+      ref_id: person.refId,
+      name: person.name,
+      detail: person.detail || null,
+    };
+  }
+
   /** Book the picked phase onto one person's day, or take them back off it. */
   function toggleCell(person: Person, day: string) {
     if (!activeCard) return;
     setError(null);
-    const already = isBooked(activeCard, day, person);
-    startTransition(async () => {
-      const args = { task_id: activeCard.task.id, day, kind: person.kind, ref_id: person.refId };
-      const res = already ? await unassignCrewDayAction(args) : await assignCrewDayAction(args);
-      if (res.ok) router.refresh();
-      else setError(res.error ?? 'Could not change that booking.');
-    });
+    if (isBooked(activeCard, day, person)) unbook(activeCard.task, person, [day]);
+    else bookSpan(activeCard, person, [day]);
   }
 
   /** A card dropped on one day cell books that one day. */
   function dropOnDay(card: PhaseCard, person: Person, day: string) {
     setError(null);
     if (isBooked(card, day, person)) return; // Dropping where they already are is a no-op.
-    startTransition(async () => {
-      const res = await assignCrewDayAction({
-        task_id: card.task.id,
-        day,
-        kind: person.kind,
-        ref_id: person.refId,
-      });
-      if (res.ok) router.refresh();
-      else setError(res.error ?? 'Could not book that day.');
+    bookSpan(card, person, [day]);
+  }
+
+  /**
+   * Book one person across a run of days of one phase. The phase's own rules are
+   * checked here, against the draft, before the booking joins it — the same
+   * checks the server runs again when the draft is saved.
+   */
+  function bookSpan(card: PhaseCard, person: Person, days: string[]) {
+    setError(null);
+    const bookable = days.filter((d) => canTake(card, d, person) && !isBooked(card, d, person));
+    if (bookable.length === 0) {
+      setError(
+        card.budget.full
+          ? `${card.task.name} is fully staffed — ${card.budget.capacity} crew ${
+              card.budget.capacity === 1 ? 'day' : 'days'
+            } planned. Take somebody off a day, or raise the crew it needs on the timeline.`
+          : `Nothing to book there — ${person.name} is already on those days of ${card.task.name}, or the phase doesn't run then.`
+      );
+      return;
+    }
+    draft.queue({
+      kind: 'crew-book',
+      projectId: card.task.project_id,
+      taskId: card.task.id,
+      label: `${person.name} on ${card.task.name} (${card.task.project_name})`,
+      person: draftPerson(person),
+      days: bookable,
     });
   }
 
-  /** Book one person across a run of days of one phase in a single pass. */
-  function bookSpan(card: PhaseCard, person: Person, days: string[]) {
-    setError(null);
-    startTransition(async () => {
-      const res = await assignCrewSpanAction({
-        task_id: card.task.id,
-        days,
-        kind: person.kind,
-        ref_id: person.refId,
-      });
-      if (res.ok) router.refresh();
-      else setError(res.error ?? 'Could not book those days.');
+  /** Take one person off given days of a phase. */
+  function unbook(task: ScheduleTaskRow, person: Person, days: string[]) {
+    draft.queue({
+      kind: 'crew-unbook',
+      projectId: task.project_id,
+      taskId: task.id,
+      label: `${person.name} off ${task.name} (${task.project_name})`,
+      person: draftPerson(person),
+      days,
     });
   }
 
@@ -444,18 +462,10 @@ export function CrewWeek({
     bookSpan(card, person, days);
   }
 
-  async function removeFrom(taskId: number, day: string, person: Person) {
+  function removeFrom(taskId: number, day: string, person: Person) {
     setError(null);
-    startTransition(async () => {
-      const res = await unassignCrewDayAction({
-        task_id: taskId,
-        day,
-        kind: person.kind,
-        ref_id: person.refId,
-      });
-      if (res.ok) router.refresh();
-      else setError(res.error ?? 'Could not remove that booking.');
-    });
+    const task = tasks.find((t) => t.id === taskId);
+    if (task) unbook(task, person, [day]);
   }
 
   function startDrag(e: DragEvent<HTMLDivElement>, card: PhaseCard) {
@@ -639,7 +649,7 @@ export function CrewWeek({
         </p>
       )}
 
-      <div className={`card min-w-0 overflow-hidden ${pending ? 'opacity-70' : ''}`}>
+      <div className={`card min-w-0 overflow-hidden ${draft.saving ? 'opacity-90' : ''}`}>
         <div className="overflow-x-auto">
           <div style={{ minWidth: `${gridMinWidth}px` }}>
             {/* The work to be staffed, sitting over the weeks it belongs to: a
@@ -1006,11 +1016,9 @@ export function CrewWeek({
           window={openedCard.window}
           holidays={holidays}
           publishedVersion={published[openedCard.task.project_id]?.version ?? null}
+          draft={draft}
           onClose={() => setOpened(null)}
-          onSaved={() => {
-            setOpened(null);
-            refresh();
-          }}
+          onSaved={() => setOpened(null)}
         />
       )}
     </div>
