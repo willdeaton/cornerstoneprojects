@@ -64,6 +64,11 @@ export interface BackupSchedulePhase {
   status: TaskStatus;
   /** The daily start time as the crew sees it ("7:00 AM"), blank when unset. */
   start_time: string;
+  /**
+   * The daily shift as the crew sees it — "All day" unless the job was given
+   * hours, then "8:00 AM – 12:00 PM · 4h".
+   */
+  shift: string;
   /** Name of the phase this one follows, blank when it stands alone. */
   follows: string;
   /** The subcontractor carrying the phase, blank when it's our crew's work. */

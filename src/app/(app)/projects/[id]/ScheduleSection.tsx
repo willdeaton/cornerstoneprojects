@@ -9,7 +9,7 @@ import {
   crewBudget,
   crewRoster,
   projectedEnd,
-  timeLabel,
+  shiftLabel,
   workedSegments,
 } from '@/lib/schedule-math';
 import type { ScheduleChange, ScheduleTaskRow } from '@/lib/types';
@@ -259,15 +259,20 @@ export function ScheduleSection({
                           )}
                         </p>
                       )}
-                      {(task.start_time || (task.day_times ?? []).length > 0) && (
+                      {(task.start_time ||
+                        task.hours != null ||
+                        (task.day_times ?? []).length > 0) && (
                         <p className="mt-0.5 text-sm text-brand-ink">
-                          {task.start_time
-                            ? `Starts ${timeLabel(task.start_time)} daily`
-                            : 'Start time set on some days'}
+                          {task.start_time || task.hours != null
+                            ? `${shiftLabel({
+                                startTime: task.start_time,
+                                hours: task.hours,
+                              })} daily`
+                            : 'Shift set on some days'}
                           {(task.day_times ?? []).length > 0 &&
                             ` · ${task.day_times.length} day${
                               task.day_times.length === 1 ? '' : 's'
-                            } with their own time`}
+                            } with their own shift`}
                         </p>
                       )}
                       {roster.length > 0 && (

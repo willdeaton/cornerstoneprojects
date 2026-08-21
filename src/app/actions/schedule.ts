@@ -108,21 +108,37 @@ function cleanTime(v: unknown): string | null {
 }
 
 /**
- * The per-day start times as stored: one row per day, latest wins on duplicates,
+ * Hours on site as stored: a positive number of hours up to 24, or null for ALL
+ * DAY — which is what a job books for unless somebody says otherwise, so
+ * anything blank, zero, negative or unparseable lands back on all day rather
+ * than becoming an error to decode.
+ */
+function cleanHours(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(String(v).trim());
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // Quarter-hours: enough for a half day or a 7.5-hour shift, and it keeps the
+  // stored number the same one the box showed.
+  const rounded = Math.round(n * 4) / 4;
+  return rounded > 24 ? 24 : rounded;
+}
+
+/**
+ * The per-day shifts as stored: one row per day, latest wins on duplicates,
  * sorted so the change log reads in date order. A day whose time is null keeps
- * its row on purpose — it's how one day opts out of the phase's daily time.
+ * its row on purpose — it's how one day opts out of the phase's daily shift.
  */
 function cleanDayTimes(days: TaskDayTime[] | undefined): DayTimeInput[] {
   if (!days) return [];
-  const byDay = new Map<string, string | null>();
+  const byDay = new Map<string, { start_time: string | null; hours: number | null }>();
   for (const d of days) {
     const day = clean(d.day);
     if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
-    byDay.set(day, cleanTime(d.start_time));
+    byDay.set(day, { start_time: cleanTime(d.start_time), hours: cleanHours(d.hours) });
   }
   return [...byDay.entries()]
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-    .map(([day, start_time]) => ({ day, start_time }));
+    .map(([day, shift]) => ({ day, ...shift }));
 }
 
 /** Postgres unique-violation (duplicate subcontractor name). */
@@ -322,6 +338,7 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
     const draft: TaskDraft = {
       ...fields,
       start_time: before.start_time ?? null,
+      hours: before.hours ?? null,
       day_times: before.day_times ?? [],
     };
     const changes = diffTask(
@@ -335,6 +352,7 @@ export async function saveTaskAction(input: TaskFields): Promise<ActionResult> {
         crew_size: before.crew_size,
         subcontractor_id: before.subcontractor_id,
         start_time: before.start_time ?? null,
+        hours: before.hours ?? null,
         day_times: before.day_times ?? [],
         notes: before.notes,
         status: before.status,
@@ -658,7 +676,13 @@ export interface CrewCardFields {
   task_id: number;
   /** Daily start time as 'HH:MM'; null or '' for the crew's normal hours. */
   start_time?: string | null;
-  /** Per-day start-time overrides, replacing whatever the phase had. */
+  /**
+   * Hours on site each day. Null or blank is ALL DAY, which is what a job
+   * books for unless somebody says otherwise; a length is how a day gets
+   * shared with another job.
+   */
+  hours?: number | null;
+  /** Per-day shift overrides, replacing whatever the phase had. */
   day_times?: TaskDayTime[];
   /** What the crew should know about this job — shown on their own schedule. */
   notes?: string | null;
@@ -671,6 +695,7 @@ export async function saveCrewCardAction(input: CrewCardFields): Promise<ActionR
   if (!task) return { ok: false, error: 'That phase no longer exists.' };
 
   const startTime = cleanTime(input.start_time);
+  const hours = cleanHours(input.hours);
   const dayTimes = cleanDayTimes(input.day_times);
   const notes = clean(input.notes);
 
@@ -684,13 +709,14 @@ export async function saveCrewCardAction(input: CrewCardFields): Promise<ActionR
     crew_size: task.crew_size,
     subcontractor_id: task.subcontractor_id,
     start_time: task.start_time ?? null,
+    hours: task.hours ?? null,
     day_times: task.day_times ?? [],
     notes: task.notes,
     status: task.status,
   };
   const changes = diffTask(
     before,
-    { ...before, start_time: startTime, day_times: dayTimes, notes },
+    { ...before, start_time: startTime, hours, day_times: dayTimes, notes },
     await diffNames(task.project_id)
   );
   if (changes.length === 0) return { ok: true };
@@ -705,7 +731,7 @@ export async function saveCrewCardAction(input: CrewCardFields): Promise<ActionR
     };
   }
 
-  await updateScheduleTask(task.id, { start_time: startTime, notes });
+  await updateScheduleTask(task.id, { start_time: startTime, hours, notes });
   await setTaskDayTimes(task.id, dayTimes);
 
   if (reason) {
@@ -1128,6 +1154,7 @@ export async function saveScheduleDraftAction(edits: DraftEdit[]): Promise<Draft
         const res = await saveCrewCardAction({
           task_id: taskId,
           start_time: edit.start_time,
+          hours: edit.hours,
           day_times: edit.day_times,
           notes: edit.notes,
           reason: edit.reason,

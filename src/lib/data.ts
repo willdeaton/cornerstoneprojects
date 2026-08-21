@@ -34,7 +34,7 @@ import type {
 } from './backup-types';
 import type { InvoiceTally } from './billing';
 import { hoursBetween } from './format';
-import { computeSchedule, timeLabel, workingDaySpan } from './schedule-math';
+import { computeSchedule, shiftLabel, timeLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
@@ -1851,6 +1851,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     subcontractor_name: string | null;
     status: TaskStatus;
     start_time: string | null;
+    hours: number | null;
     notes: string | null;
     position: number;
     crew: { name: string; days: number }[] | null;
@@ -1862,7 +1863,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
     `SELECT t.id, t.project_id, p.name AS project_name, t.name,
             t.start_date, t.duration_days, t.depends_on_id, t.depends_type, t.lag_days,
             t.crew_size, sub.name AS subcontractor_name,
-            t.status, t.start_time, t.notes, t.position,
+            t.status, t.start_time, t.hours, t.notes, t.position,
             (SELECT json_agg(json_build_object('name', person, 'days', days)
                              ORDER BY person)
                FROM (SELECT COALESCE(u.name, s.name) AS person, COUNT(*)::int AS days
@@ -1898,6 +1899,7 @@ async function backupSchedule(projectIds: number[]): Promise<BackupSchedulePhase
       working_days: workingDaySpan(dates.start, dates.end, calendar),
       status: r.status,
       start_time: r.start_time ? timeLabel(r.start_time) : '',
+      shift: shiftLabel({ startTime: r.start_time, hours: r.hours }),
       follows: (r.depends_on_id != null ? nameById.get(r.depends_on_id) : '') ?? '',
       subcontractor: r.subcontractor_name ?? '',
       crew_needed: r.crew_size,

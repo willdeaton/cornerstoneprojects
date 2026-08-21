@@ -121,8 +121,12 @@ export function buildJobCompletedEmail(recipient: Recipient, project: Project): 
 export interface ScheduleLine {
   /** Pre-formatted, e.g. "Mon, Mar 3 – Fri, Mar 7". */
   dates: string;
-  /** Pre-formatted start time ("7:00 AM"), or null when none is set. */
-  startTime: string | null;
+  /**
+   * Pre-formatted shift — "All day", "Starts 7:00 AM", or "8:00 AM – 12:00 PM
+   * · 4h" for a day shared with another job. Never null: a job the crew is on
+   * for the whole day should say so rather than say nothing.
+   */
+  shift: string;
   project: string;
   phase: string;
   location: string | null;
@@ -156,7 +160,7 @@ function scheduleTable(lines: ScheduleLine[]): string {
         <tr>
           <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top;white-space:nowrap;font-weight:bold">
             ${esc(l.dates)}
-            ${l.startTime ? `<br /><span style="color:#4a7a2b">Start ${esc(l.startTime)}</span>` : ''}
+            ${l.shift ? `<br /><span style="color:#4a7a2b">${esc(l.shift)}</span>` : ''}
           </td>
           <td style="padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top">
             ${esc(l.project)}

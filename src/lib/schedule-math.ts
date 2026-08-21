@@ -89,12 +89,149 @@ export function timeLabel(time: string | null | undefined): string {
   return `${hour}:${String(m).padStart(2, '0')} ${suffix}`;
 }
 
-/** A phase's per-day start-time overrides, as the solver wants them. */
-export type DayTimes = Map<string, string | null>;
+/** Minutes past midnight for an 'HH:MM' clock time; null when unparseable. */
+export function timeMinutes(time: string | null | undefined): number | null {
+  if (!time || !isValidTime(time)) return null;
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
 
-/** Overrides keyed by day. An entry set to null clears the time for that day. */
-export function dayTimeMap(rows: { day: string; start_time: string | null }[] = []): DayTimes {
-  return new Map(rows.map((r) => [r.day, r.start_time]));
+/** Minutes past midnight back to 'HH:MM', clamped inside the day. */
+export function minutesTime(mins: number): string {
+  const capped = Math.max(0, Math.min(24 * 60, Math.round(mins)));
+  if (capped >= 24 * 60) return '23:59';
+  return `${String(Math.floor(capped / 60)).padStart(2, '0')}:${String(capped % 60).padStart(2, '0')}`;
+}
+
+/**
+ * A length of shift as stored: hours, or null for ALL DAY.
+ *
+ * Null is the default and the answer to "how long is this job booked for?"
+ * almost every time — a job takes the day it takes. Hours are for the day
+ * somebody is deliberately splitting between two places.
+ */
+export function isValidHours(hours: number | null | undefined): boolean {
+  return typeof hours === 'number' && Number.isFinite(hours) && hours > 0 && hours <= 24;
+}
+
+/** "4h" / "4.5h" / "All day" — how a shift length reads on its own. */
+export function hoursLabel(hours: number | null | undefined): string {
+  if (!isValidHours(hours)) return 'All day';
+  const h = hours as number;
+  return `${Number.isInteger(h) ? h : h.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}h`;
+}
+
+/**
+ * What time a shift that starts at `start` and runs `hours` finishes, as
+ * 'HH:MM'. Null when either end is unknown — an unbounded shift has no finish.
+ */
+export function shiftEnd(
+  startTime: string | null | undefined,
+  hours: number | null | undefined
+): string | null {
+  const from = timeMinutes(startTime);
+  if (from == null || !isValidHours(hours)) return null;
+  return minutesTime(from + (hours as number) * 60);
+}
+
+/**
+ * One day's shift on a phase: when the crew starts, and how long they're there.
+ *
+ * Both halves are optional and mean different things missing. No start time is
+ * "their normal hours"; no `hours` is ALL DAY, which is what a job books for
+ * unless somebody says otherwise. Only when BOTH are set is the shift bounded
+ * on the clock — and only a bounded shift can share a day with another one.
+ */
+export interface DayShift {
+  startTime: string | null;
+  hours: number | null;
+}
+
+/** True when a shift is pinned to the clock at both ends. */
+export function isBoundedShift(shift: DayShift): boolean {
+  return timeMinutes(shift.startTime) != null && isValidHours(shift.hours);
+}
+
+/**
+ * "All day" / "Starts 8:00 AM" / "8:00 AM – 12:00 PM · 4h" — a shift in words.
+ * The one string every crew-facing view says it with, so a half day reads the
+ * same on the grid, on somebody's own schedule and in the email.
+ */
+export function shiftLabel(shift: DayShift): string {
+  const start = shift.startTime && isValidTime(shift.startTime) ? shift.startTime : null;
+  const end = shiftEnd(start, shift.hours);
+  if (start && end) return `${timeLabel(start)} – ${timeLabel(end)} · ${hoursLabel(shift.hours)}`;
+  if (start) return `Starts ${timeLabel(start)}`;
+  if (isValidHours(shift.hours)) return hoursLabel(shift.hours);
+  return 'All day';
+}
+
+/** "8–12" / "8a" / "all day" — the same shift at chip width. */
+export function shiftShort(shift: DayShift): string {
+  const start = shift.startTime && isValidTime(shift.startTime) ? shift.startTime : null;
+  const end = shiftEnd(start, shift.hours);
+  if (start && end) return `${clockShort(start)}–${clockShort(end)}`;
+  if (start) return clockShort(start);
+  if (isValidHours(shift.hours)) return hoursLabel(shift.hours);
+  return '';
+}
+
+/** '13:30' -> "1:30p"; '08:00' -> "8a". Chip-width clock. */
+function clockShort(time: string): string {
+  const [h, m] = time.split(':').map(Number);
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  const suffix = h < 12 ? 'a' : 'p';
+  return m === 0 ? `${hour}${suffix}` : `${hour}:${String(m).padStart(2, '0')}${suffix}`;
+}
+
+/**
+ * Do two shifts on the same day collide?
+ *
+ * Two bounded shifts collide only where their clock windows actually overlap —
+ * that's what lets somebody work 8:00–12:00 on one job and 12:00–4:00 on
+ * another without either being wrong. Anything unbounded (an all-day job, or a
+ * length with no start time to hang it on) is treated as taking the whole day,
+ * because nothing here can prove it doesn't.
+ */
+export function shiftsOverlap(a: DayShift, b: DayShift): boolean {
+  if (!isBoundedShift(a) || !isBoundedShift(b)) return true;
+  const aFrom = timeMinutes(a.startTime)!;
+  const bFrom = timeMinutes(b.startTime)!;
+  const aTo = aFrom + (a.hours as number) * 60;
+  const bTo = bFrom + (b.hours as number) * 60;
+  // Touching ends don't overlap: a shift ending at noon and one starting at
+  // noon is exactly the split this is here to allow.
+  return aFrom < bTo && bFrom < aTo;
+}
+
+/** A phase's per-day shift overrides, as the solver wants them. */
+export type DayTimes = Map<string, DayShift>;
+
+/**
+ * Overrides keyed by day. A row is the whole day's shift, so an entry with a
+ * null start time clears the time for that day and null hours makes it all day
+ * however long the phase's own shift is.
+ */
+export function dayTimeMap(
+  rows: { day: string; start_time: string | null; hours?: number | null }[] = []
+): DayTimes {
+  return new Map(
+    rows.map((r) => [r.day, { startTime: r.start_time ?? null, hours: r.hours ?? null }])
+  );
+}
+
+/**
+ * The shift worked on one day of a phase: the day's own override if it has one,
+ * otherwise the phase's daily shift.
+ */
+export function shiftOn(
+  day: string,
+  phase: { start_time?: string | null; hours?: number | null },
+  overrides?: DayTimes
+): DayShift {
+  const override = overrides?.get(day);
+  if (overrides?.has(day) && override) return override;
+  return { startTime: phase.start_time ?? null, hours: phase.hours ?? null };
 }
 
 /**
@@ -107,7 +244,7 @@ export function startTimeOn(
   phaseTime: string | null | undefined,
   overrides?: DayTimes
 ): string | null {
-  if (overrides?.has(day)) return overrides.get(day) ?? null;
+  if (overrides?.has(day)) return overrides.get(day)?.startTime ?? null;
   return phaseTime ?? null;
 }
 
@@ -471,9 +608,15 @@ export interface AssigneeBooking {
   siteAddress: string | null;
   /**
    * What time work starts on every day of this stretch. A stretch breaks
-   * wherever the time changes, so one booking always means one start time.
+   * wherever the shift changes, so one booking always means one start time.
    */
   startTime: string | null;
+  /**
+   * How long they're there each day of the stretch; null is all day. With
+   * `startTime` this is the bounded shift that lets somebody hold two jobs in
+   * one day — see `shiftsOverlap`.
+   */
+  hours: number | null;
   /** The phase's whole window, for context. */
   windowStart: string;
   windowEnd: string;
@@ -540,10 +683,10 @@ export function assigneeBookings(
     for (const [key, { person, days }] of byPerson) {
       const sorted = [...days].sort();
       for (const seg of mergeDays(sorted)) {
-        // A day that starts at a different time is its own stretch, so every
-        // booking carries exactly one start time and the crew views never have
-        // to say "7 AM (except Wednesday)".
-        for (const run of splitByStartTime(seg, task.start_time, overrides)) {
+        // A day worked on a different shift is its own stretch, so every
+        // booking carries exactly one shift and the crew views never have to
+        // say "7 AM (except Wednesday)".
+        for (const run of splitByShift(seg, task, overrides)) {
           out.push({
             key,
             kind: person.kind,
@@ -560,6 +703,7 @@ export function assigneeBookings(
             location: task.location,
             siteAddress: task.site_address ?? null,
             startTime: run.startTime,
+            hours: run.hours,
             windowStart: w.start,
             windowEnd: w.end,
             start: run.start,
@@ -572,18 +716,18 @@ export function assigneeBookings(
   return out;
 }
 
-/** Break one worked stretch wherever its start time changes. */
-function splitByStartTime(
+/** Break one worked stretch wherever its shift changes — time or length. */
+function splitByShift(
   seg: DaySegment,
-  phaseTime: string | null | undefined,
+  phase: { start_time?: string | null; hours?: number | null },
   overrides: DayTimes
-): (DaySegment & { startTime: string | null })[] {
-  const out: (DaySegment & { startTime: string | null })[] = [];
+): (DaySegment & DayShift)[] {
+  const out: (DaySegment & DayShift)[] = [];
   for (const day of eachDay(seg.start, seg.end)) {
-    const startTime = startTimeOn(day, phaseTime, overrides);
+    const { startTime, hours } = shiftOn(day, phase, overrides);
     const open = out[out.length - 1];
-    if (open && open.startTime === startTime) open.end = day;
-    else out.push({ start: day, end: day, startTime });
+    if (open && open.startTime === startTime && open.hours === hours) open.end = day;
+    else out.push({ start: day, end: day, startTime, hours });
   }
   return out;
 }
@@ -602,11 +746,17 @@ export interface Conflict {
 }
 
 /**
- * Every pair of overlapping bookings per person. Because bookings are the days
- * actually booked, someone running one job Mon/Wed and another Tuesday is NOT a
- * conflict — only genuinely shared days are. Two phases on the SAME job are
- * allowed to overlap (a crew can run two phases of one job), so only cross-job
- * overlaps count.
+ * Every pair of genuinely clashing bookings per person.
+ *
+ * Three things have to be true before two bookings are a double-booking:
+ *
+ *  · They share a day. Bookings are the days actually booked, so someone on one
+ *    job Mon/Wed and another Tuesday is not a conflict.
+ *  · They're different jobs. A crew can run two phases of one job at once.
+ *  · Their shifts collide on the clock. Two bounded shifts that don't overlap —
+ *    8:00 for 4 hours here, noon for 4 hours there — are one person split
+ *    across two sites in a day, which is a plan, not a mistake. Anything all
+ *    day (the default) takes the whole day and still clashes with everything.
  */
 export function findConflicts(windows: AssigneeBooking[]): Conflict[] {
   const byKey = new Map<string, AssigneeBooking[]>();
@@ -627,6 +777,8 @@ export function findConflicts(windows: AssigneeBooking[]): Conflict[] {
         if (b.start > a.end) break;
         if (a.projectId === b.projectId) continue;
         if (!rangesOverlap(a.start, a.end, b.start, b.end)) continue;
+        // Same days, different jobs — a clash only if the hours collide too.
+        if (!shiftsOverlap(a, b)) continue;
         out.push({
           key,
           name: a.name,
@@ -742,6 +894,33 @@ export function bookingsByDay(
     }
   }
   return out;
+}
+
+/**
+ * Is one person's day actually double-booked?
+ *
+ * The crew week asks this a cell at a time, where all it has is what somebody
+ * is on that day. Same rules as `findConflicts`: two phases of one job are
+ * fine, and two jobs are fine as long as their shifts don't collide.
+ */
+export function dayIsClashing(items: { projectId: number; shift: DayShift }[]): boolean {
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      if (items[i].projectId === items[j].projectId) continue;
+      if (shiftsOverlap(items[i].shift, items[j].shift)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Is this day one person deliberately split between two jobs — two or more
+ * jobs whose shifts all clear each other? Worth showing differently from a
+ * clash: it's the plan working, not a warning.
+ */
+export function dayIsSplit(items: { projectId: number; shift: DayShift }[]): boolean {
+  const jobs = new Set(items.map((i) => i.projectId));
+  return jobs.size > 1 && !dayIsClashing(items);
 }
 
 /** Task ids involved in at least one conflict — for outlining bars. */

@@ -178,7 +178,7 @@ whole design.
 **Job Timeline — plans the *work*.** A job is an ordered set of **phases**
 (`schedule_tasks`), each carrying: an *earliest* start, a duration in **working
 days**, an optional link to a predecessor (`finish_to_start` or
-`start_to_start`, plus a lag), a status, notes, a daily start time, and either a
+`start_to_start`, plus a lag), a status, notes, a daily shift, and either a
 **headcount** (`crew_size`) of our own people or a named **subcontractor**.
 
 The timeline never names our own people. A phase says *"2 people for 4 days"* —
@@ -206,9 +206,19 @@ Rules that fall out of this model:
   when the work is contracted. Their days are derived from the phase window, so
   a phase that slips takes them with it and there's nothing to re-book. A
   subcontracted phase can still carry a headcount for the supervisor we send.
+- **All day by default** — a job books for the whole day unless somebody gives
+  it **hours** on its crew-week job card (`schedule_tasks.hours`, null = all
+  day; per-day overrides in `schedule_task_day_times`). A start time plus hours
+  is a *bounded shift*: 8:00 for 4 hours ends at noon.
+- **Split days** — one person at two places in a day is a plan, not a mistake:
+  book them 8:00–12:00 on one job and 12:00–4:00 on another and the grid tints
+  the cell amber and calls it a split day. All day (the default) still takes the
+  whole day, so two of those clash as they always did.
 - **Double-bookings** — crew is booked a day at a time, so one job Monday and
-  Wednesday plus another on Tuesday is *not* a clash. Only genuinely shared days
-  across *different* jobs are flagged (two phases of the same job may overlap).
+  Wednesday plus another on Tuesday is *not* a clash. A shared day across
+  *different* jobs is only flagged when the **hours actually collide** (two
+  phases of the same job may overlap freely). Touching ends don't: a shift
+  ending at noon and one starting at noon is exactly the split above.
 - **Moved work drops stale bookings** — shortening or moving a phase releases
   anyone booked on days it no longer covers, across the whole job.
 - **Change reasons** — moving a phase's dates, duration or link *always* needs a
@@ -216,7 +226,7 @@ Rules that fall out of this model:
   auto-generated summary ("Start Mar 3 → Mar 5; Duration 5 → 7 working days").
   Marking a phase in progress or complete is *progress*, not a schedule change,
   and needs none. Booking crew never needs one. **Publishing** marks the dates
-  the crew has; after that, changes to headcount, subcontractor, start times and
+  the crew has; after that, changes to headcount, subcontractor, shifts and
   phase notes need a reason too.
 - **Hard finish date** — a date the job *must* hit, separate from the due date
   it aims at. The schedule warns whenever derived work runs past it.
@@ -225,8 +235,9 @@ Views run in whole Monday-to-Sunday weeks (Week / 2-Week / 6-Week, defaulting to
 2), so the same weekday is always in the same column.
 
 **My Schedule** is what a worker or employee gets instead: a read-only week of
-their own bookings — one card per day, with the start time, job, address, phase
-notes and crew notes, and arrows to step weeks.
+their own bookings — one card per day, with the shift ("All day", or
+"8:00 AM – 12:00 PM · 4h" on a split day), job, address, phase notes and crew
+notes, and arrows to step weeks.
 
 **Send Schedule** emails each assignee their own dates only.
 
@@ -465,7 +476,7 @@ want.
 > - **Job Timeline plans the *work*.** A job is an ordered set of phases, each
 >   with an *earliest* start, a duration in **working days**, an optional link to
 >   a predecessor (finish-to-start or start-to-start, with a lag, so phases can
->   overlap), a status, notes, a daily start time, and either a **headcount** of
+>   overlap), a status, notes, a daily shift, and either a **headcount** of
 >   our own people or a named **subcontractor**. The timeline never names our own
 >   people — a phase says "2 people for 4 days", a budget of 8 crew-days.
 > - **Crew Week staffs it.** One row per employee, one column per day, with
@@ -484,17 +495,22 @@ want.
 > - A subcontractor is picked on the **timeline**, because that's when the work is
 >   contracted — not booked day by day. A subcontracted phase can still carry a
 >   headcount for the supervisor we send.
+> - A job books for the **whole day unless it's given hours**. A start time plus
+>   hours is a bounded shift, and that's how one person covers two sites in a
+>   day: 8:00–12:00 on one job, 12:00–4:00 on another. The grid calls that a
+>   *split day* rather than a clash.
 > - Crew is booked a day at a time, so someone on one job Monday and Wednesday
->   and another job Tuesday is **not** a double-booking. Only genuinely shared
->   days across *different* jobs are flagged.
+>   and another job Tuesday is **not** a double-booking. A shared day across
+>   *different* jobs is only flagged when the **hours actually collide** — which
+>   two all-day bookings always do.
 > - Shortening or moving a phase **releases anyone booked on days it no longer
 >   covers**, across the whole job.
 > - Moving a phase's dates, duration or link **always** requires a typed reason,
 >   published or not, logged with an auto-generated summary of what moved.
 >   Marking a phase in progress or complete is *progress*, not a schedule change,
 >   and needs none. Booking crew never needs one. **Publishing** marks the dates
->   the crew has; after that, changes to headcount, subcontractor, start times
->   and phase notes need a reason too.
+>   the crew has; after that, changes to headcount, subcontractor, shifts and
+>   phase notes need a reason too.
 > - A **hard finish date** — a date the job must hit — is separate from the due
 >   date it aims at, and the schedule warns when planned work runs past it.
 > - Views run in whole Monday-to-Sunday weeks (1, 2 or 6), so the same weekday is
