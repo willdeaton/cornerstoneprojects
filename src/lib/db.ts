@@ -72,7 +72,7 @@ async function migrate(pool: Pool) {
       name          TEXT NOT NULL,
       email         TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
-      role          TEXT NOT NULL DEFAULT 'worker' CHECK (role IN ('admin','manager','worker','employee')),
+      role          TEXT NOT NULL DEFAULT 'employee' CHECK (role IN ('admin','manager','employee')),
       active        INTEGER NOT NULL DEFAULT 1,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -347,16 +347,23 @@ Your City, ST 00000',
   `);
 
   // ---- Incremental migrations (safe to run repeatedly) ------------------
-  // New 'employee' role (time-clock-only access). The CHECK constraint above
-  // lives inside CREATE TABLE IF NOT EXISTS, so existing databases never pick
-  // up the new value — rebuild the constraint idempotently instead.
+  // The role set is admin / manager / employee. The CHECK constraint above lives
+  // inside CREATE TABLE IF NOT EXISTS, so existing databases never pick up
+  // changes to it — rebuild the constraint idempotently instead.
+  //
+  // The retired 'worker' role folded into 'employee' (time clock plus their own
+  // schedule): the rows are rewritten BEFORE the narrower constraint goes on, so
+  // the migration can't fail on data it is about to fix. The default is reset
+  // too, since existing installs still carry DEFAULT 'worker'.
   await pool.query(`
+    UPDATE users SET role = 'employee' WHERE role = 'worker';
+    ALTER TABLE users ALTER COLUMN role SET DEFAULT 'employee';
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin','manager','worker','employee'));
+      CHECK (role IN ('admin','manager','employee'));
   `);
 
-  // Workers can now clock in without picking a specific job, and admins can
+  // Crew can now clock in without picking a specific job, and admins can
   // mark each shift as paid, so time_entries needs a nullable project and a
   // few payroll columns.
   await pool.query(`

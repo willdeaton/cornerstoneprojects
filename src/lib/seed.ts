@@ -30,8 +30,8 @@ export async function ensureSeed(pool: Pool) {
 
     // ---- Users ------------------------------------------------------------
     const adminId = await insertUser('Will Deaton', 'wdeaton@dlomgroup.com', 'cornerstone2026', 'admin');
-    const mikeId = await insertUser('Mike Johnson', 'mike@dlomgroup.com', 'welcome123', 'worker');
-    const daveId = await insertUser('Dave Smith', 'dave@dlomgroup.com', 'welcome123', 'worker');
+    const mikeId = await insertUser('Mike Johnson', 'mike@dlomgroup.com', 'welcome123', 'employee');
+    const daveId = await insertUser('Dave Smith', 'dave@dlomgroup.com', 'welcome123', 'employee');
 
     // ---- Open quotes (pipeline) — matches "Pipeline by Customer/Category" -
     const weekOf = daysAgo(3);

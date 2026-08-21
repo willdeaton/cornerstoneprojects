@@ -167,7 +167,7 @@ export async function addTimeEntryAction(input: TimeEntryInput & { userId?: numb
   return res;
 }
 
-/** Edit an existing entry's times, job, note and break. Workers may only edit
+/** Edit an existing entry's times, job, note and break. Employees may only edit
  *  their own shifts, and not once they've been marked paid. */
 export async function updateTimeEntryAction(input: TimeEntryInput & { entryId: number }) {
   const user = await requireUser();

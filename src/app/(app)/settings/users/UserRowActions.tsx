@@ -45,8 +45,8 @@ export function UserRowActions({
   const router = useRouter();
 
   const roles: Role[] = canGrantAdmin
-    ? ['employee', 'worker', 'manager', 'admin']
-    : ['employee', 'worker', 'manager'];
+    ? ['employee', 'manager', 'admin']
+    : ['employee', 'manager'];
 
   function run(fn: () => Promise<unknown>) {
     start(async () => {

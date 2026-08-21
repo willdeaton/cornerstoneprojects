@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import Link from 'next/link';
 import { shortDate } from '@/lib/format';
 import {
@@ -82,9 +82,13 @@ export function ScheduleBoard({
   changeCounts = {},
   canUnpublish = false,
   draft,
+  finishedProjects = [],
 }: {
   tasks: ScheduleTaskRow[];
-  /** Every live job, including ones with nothing scheduled yet. */
+  /**
+   * Every live job, including ones with nothing scheduled yet, plus the finished
+   * ones whose work falls in the history that was loaded.
+   */
   projects: BoardProject[];
   /** The subcontractor catalog, for phases that get contracted out. */
   subs: SubOption[];
@@ -100,9 +104,21 @@ export function ScheduleBoard({
    * only ever hears about them when the schedule is published.
    */
   draft: ScheduleDraft;
+  /**
+   * Jobs that are finished. Their phases are drawn on the weeks they ran and
+   * nothing else: not editable, not counted as work still to plan or staff, and
+   * only listed at all on a range their work actually touches.
+   */
+  finishedProjects?: number[];
 }) {
+  const finished = useMemo(() => new Set(finishedProjects), [finishedProjects]);
+  // Work still being planned. Finished jobs are drawn but never counted: their
+  // crew days aren't outstanding, and a clash between two jobs that are both
+  // over is nothing anybody can act on.
+  const liveTasks = useMemo(() => tasks.filter((t) => !finished.has(t.project_id)), [tasks, finished]);
+
   const [spanDays, setSpanDays] = useState<number>(DEFAULT_SPAN);
-  const [anchor, setAnchor] = useState<string>(() => initialAnchor(tasks, holidays));
+  const [anchor, setAnchor] = useState<string>(() => initialAnchor(liveTasks, holidays));
   const [projectFilter, setProjectFilter] = useState<number | 'all'>('all');
   /** 'short' narrows the board to phases the crew week hasn't filled yet. */
   const [staffing, setStaffing] = useState<'all' | 'short'>('all');
@@ -124,8 +140,8 @@ export function ScheduleBoard({
   // week between two jobs (Mon/Wed here, Tue there) isn't flagged — only days
   // genuinely booked twice are.
   const conflicts = useMemo(
-    () => findConflicts(assigneeBookings(tasks, windows, calendar)),
-    [tasks, windows, calendar]
+    () => findConflicts(assigneeBookings(liveTasks, windows, calendar)),
+    [liveTasks, windows, calendar]
   );
   const conflictedTasks = useMemo(() => conflictedTaskIds(conflicts), [conflicts]);
 
@@ -150,10 +166,14 @@ export function ScheduleBoard({
     () =>
       tasks.filter((t) => {
         if (projectFilter !== 'all' && t.project_id !== projectFilter) return false;
-        if (staffing === 'short' && (budgets.get(t.id)?.remaining ?? 0) === 0) return false;
+        if (staffing === 'short') {
+          // Crew days left on a job that is over aren't days anybody can book.
+          if (finished.has(t.project_id)) return false;
+          if ((budgets.get(t.id)?.remaining ?? 0) === 0) return false;
+        }
         return true;
       }),
-    [tasks, projectFilter, staffing, budgets]
+    [tasks, projectFilter, staffing, budgets, finished]
   );
 
   /**
@@ -196,8 +216,12 @@ export function ScheduleBoard({
           hardFinish: p.hard_finish_date ?? null,
           projected: end,
           start,
-          slipping: !!(end && p.due_date && end > p.due_date),
-          missingHardFinish: !!(end && p.hard_finish_date && end > p.hard_finish_date),
+          // A finished job is never late here. "Past due date" is a warning about
+          // a plan, and this plan is over — the job's own page is where a finish
+          // that missed its date is worth reading about.
+          slipping: !finished.has(p.id) && !!(end && p.due_date && end > p.due_date),
+          missingHardFinish:
+            !finished.has(p.id) && !!(end && p.hard_finish_date && end > p.hard_finish_date),
           // Whether any of its work lands in the window on screen — the board
           // opens these expanded and leaves the rest folded away.
           inRange: sorted.some((t) => {
@@ -207,6 +231,9 @@ export function ScheduleBoard({
           tasks: sorted,
         };
       })
+      // A finished job is history, so it only earns a row on the ranges its work
+      // actually covers — otherwise every job ever done would sit on this week.
+      .filter((g) => !finished.has(g.projectId) || g.inRange)
       .sort((a, b) => {
         // Jobs with work planned come first, in the order that work starts;
         // unscheduled jobs sit together at the bottom, alphabetically.
@@ -215,9 +242,11 @@ export function ScheduleBoard({
         if (b.start) return 1;
         return a.projectName.localeCompare(b.projectName);
       });
-  }, [projects, visible, windows, projectFilter, staffing, rangeStart, rangeEnd]);
+  }, [projects, visible, windows, projectFilter, staffing, rangeStart, rangeEnd, finished]);
 
   const unplanned = groups.filter((g) => g.tasks.length === 0).length;
+  // Rows that are only on screen because their work ran in this range.
+  const history = groups.filter((g) => finished.has(g.projectId)).length;
 
   // Just the version numbers, which is all the phase editor needs to decide
   // whether a change requires a reason.
@@ -230,8 +259,11 @@ export function ScheduleBoard({
   // Crew-days still to be booked across everything on the board — the one
   // number that says whether the plan has been staffed yet.
   const shortfall = useMemo(
-    () => visible.reduce((n, t) => n + (budgets.get(t.id)?.remaining ?? 0), 0),
-    [visible, budgets]
+    () =>
+      visible
+        .filter((t) => !finished.has(t.project_id))
+        .reduce((n, t) => n + (budgets.get(t.id)?.remaining ?? 0), 0),
+    [visible, budgets, finished]
   );
 
   function isOpen(g: { projectId: number; inRange: boolean }): boolean {
@@ -299,7 +331,7 @@ export function ScheduleBoard({
           <option value="all">All jobs</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.name}
+              {finished.has(p.id) ? `${p.name} · finished` : p.name}
             </option>
           ))}
         </select>
@@ -341,6 +373,7 @@ export function ScheduleBoard({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-brand-gray">
             <span>
               {groups.length} {groups.length === 1 ? 'job' : 'jobs'}
+              {history > 0 && ` · ${history} finished`}
               {unplanned > 0 && ` · ${unplanned} with nothing scheduled yet`}
               {shortfall > 0 && (
                 <span className="font-medium text-amber-700">
@@ -416,6 +449,9 @@ export function ScheduleBoard({
 
                 {groups.map((g) => {
                   const open = isOpen(g);
+                  // A job that is over keeps its dates on screen and loses every
+                  // control that would change them: nothing here is still a plan.
+                  const over = finished.has(g.projectId);
                   return (
                     <div key={g.projectId} className="border-b border-black/10 last:border-0">
                       {/* Job header row — click the name row to fold the job away. */}
@@ -493,19 +529,30 @@ export function ScheduleBoard({
                                       : ''}
                                 </p>
                               )}
-                              <HardFinishControl
-                                projectId={g.projectId}
-                                projectName={g.projectName}
-                                hardFinishDate={g.hardFinish}
-                                projectedEnd={g.projected}
-                              />
-                              <PublishBar
-                                projectId={g.projectId}
-                                projectName={g.projectName}
-                                published={published[g.projectId] ?? null}
-                                changeCount={changeCounts[g.projectId] ?? 0}
-                                canUnpublish={canUnpublish}
-                              />
+                              {over ? (
+                                <p
+                                  className="text-[11px] font-medium text-brand-gray"
+                                  title="Marked complete — its dates are kept so a week that has been worked reads true. Change them from the job itself."
+                                >
+                                  Finished job · shown for the weeks it ran
+                                </p>
+                              ) : (
+                                <>
+                                  <HardFinishControl
+                                    projectId={g.projectId}
+                                    projectName={g.projectName}
+                                    hardFinishDate={g.hardFinish}
+                                    projectedEnd={g.projected}
+                                  />
+                                  <PublishBar
+                                    projectId={g.projectId}
+                                    projectName={g.projectName}
+                                    published={published[g.projectId] ?? null}
+                                    changeCount={changeCounts[g.projectId] ?? 0}
+                                    canUnpublish={canUnpublish}
+                                  />
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -560,6 +607,7 @@ export function ScheduleBoard({
                               conflicted={conflictedTasks.has(t.id)}
                               onEdit={() => setEditing({ task: t })}
                               published={!!published[t.project_id]}
+                              readOnly={over}
                             />
                           ))
                         ))}
@@ -579,7 +627,9 @@ export function ScheduleBoard({
         weeks from Monday, with each week&apos;s Monday held above its days; weekends and
         non-working days are shaded and never count toward a phase&apos;s duration. A phase marked
         &ldquo;starts after&rdquo; another moves automatically when the one before it slips, and
-        moving any phase&apos;s dates asks for a reason that&apos;s kept with the job.
+        moving any phase&apos;s dates asks for a reason that&apos;s kept with the job. Page back and
+        finished jobs appear on the weeks they ran, greyed and not editable — the record of what
+        was worked, kept out of every count of what is still to plan.
       </p>
 
       {editing && (
@@ -653,6 +703,7 @@ function PhaseRow({
   gridTemplate,
   conflicted,
   published,
+  readOnly = false,
   onEdit,
 }: {
   task: ScheduleTaskRow;
@@ -665,6 +716,8 @@ function PhaseRow({
   gridTemplate: string;
   conflicted: boolean;
   published: boolean;
+  /** The job is finished: the row is a record of what ran, not a plan to edit. */
+  readOnly?: boolean;
   onEdit: () => void;
 }) {
   const budget = useMemo(
@@ -706,12 +759,16 @@ function PhaseRow({
       ? subName
       : `${subName} + ${ownCrew}`
     : ownCrew;
+  // "3 crew days to book" is a job of work; on a job that is over it's just how
+  // the week was staffed, so the finished row reports the count and stops there.
   const staffedNote =
     budget.capacity === 0
       ? ''
       : budget.remaining === 0
         ? 'fully staffed'
-        : `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} to book`;
+        : readOnly
+          ? `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} never booked`
+          : `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} to book`;
 
   const tooltip = `${task.name} — ${dates ? `${shortDate(dates.start)} to ${shortDate(dates.end)}` : 'unscheduled'}${
     subName ? `\nSubcontracted to ${subName}` : ''
@@ -723,17 +780,22 @@ function PhaseRow({
       : ''
   }${task.site_address ? `\n${task.site_address}` : ''}${
     conflicted ? '\nSomeone on this phase is double-booked' : ''
-  }${published ? '\nPublished — changes need a reason' : ''}`;
+  }${published ? '\nPublished — changes need a reason' : ''}${
+    readOnly ? '\nFinished job — kept as a record of the weeks it ran' : ''
+  }`;
 
   return (
     <div className="grid" style={{ gridTemplateColumns: gridTemplate }}>
       {/* Everything in this row is pinned to grid row 1 on purpose: the bars are
           explicitly placed, and auto-placed cells would be bumped into a second
           row wherever a bar already occupies a column. */}
-      <button
-        onClick={onEdit}
+      <Cell
+        onEdit={readOnly ? null : onEdit}
         style={{ gridRow: 1, gridColumn: 1 }}
-        className="sticky left-0 z-20 bg-white px-4 py-2 pl-9 text-left hover:bg-black/[.03]"
+        title={readOnly ? tooltip : undefined}
+        className={`sticky left-0 z-20 bg-white px-4 py-2 pl-9 text-left ${
+          readOnly ? 'text-brand-gray' : 'hover:bg-black/[.03]'
+        }`}
       >
         <span className="flex items-center gap-1.5">
           {dates?.driven && <LinkGlyph />}
@@ -755,7 +817,7 @@ function PhaseRow({
             {budget.filled}/{budget.capacity} booked · {staffedNote}
           </span>
         )}
-      </button>
+      </Cell>
 
       {days.map((d, i) => (
         <div
@@ -766,16 +828,16 @@ function PhaseRow({
       ))}
 
       {segments.map((s, i) => (
-        <button
+        <Cell
           key={s.key}
-          onClick={onEdit}
+          onEdit={readOnly ? null : onEdit}
           title={tooltip}
           style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
-          className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white transition-opacity hover:opacity-90 ${
+          className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white ${
             BAR_TINT[task.status]
-          } ${conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''} ${
-            s.clippedLeft ? 'rounded-l-none' : ''
-          } ${s.clippedRight ? 'rounded-r-none' : ''}`}
+          } ${readOnly ? 'opacity-60' : 'transition-opacity hover:opacity-90'} ${
+            conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''
+          } ${s.clippedLeft ? 'rounded-l-none' : ''} ${s.clippedRight ? 'rounded-r-none' : ''}`}
         >
           {/* Only the first visible stretch carries the label; the rest are the
               continuation of the same phase and stay clean. */}
@@ -783,14 +845,39 @@ function PhaseRow({
             <span className="truncate">
               {task.name}
               <span className="opacity-80"> · {crewNote}</span>
-              {budget.remaining > 0 && (
+              {budget.remaining > 0 && !readOnly && (
                 <span className="opacity-80"> · {budget.remaining} to book</span>
               )}
             </span>
           )}
-        </button>
+        </Cell>
       ))}
     </div>
+  );
+}
+
+/**
+ * A phase row's label or bar. A phase that can still be planned is a button on
+ * to its editor; one on a finished job is the same thing to look at and nothing
+ * to click, rather than a button that opens an editor for work that is over.
+ */
+function Cell({
+  onEdit,
+  children,
+  ...rest
+}: {
+  /** null when the phase is read-only. */
+  onEdit: (() => void) | null;
+  children: ReactNode;
+  style?: CSSProperties;
+  className?: string;
+  title?: string;
+}) {
+  if (!onEdit) return <div {...rest}>{children}</div>;
+  return (
+    <button onClick={onEdit} {...rest}>
+      {children}
+    </button>
   );
 }
 

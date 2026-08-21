@@ -10,7 +10,6 @@ export const dynamic = 'force-dynamic';
 const ROLE_BADGE: Record<string, string> = {
   admin: 'bg-brand-green/20 text-brand-green-dark',
   manager: 'bg-blue-100 text-blue-800',
-  worker: 'bg-gray-100 text-gray-700',
   employee: 'bg-purple-100 text-purple-800',
 };
 

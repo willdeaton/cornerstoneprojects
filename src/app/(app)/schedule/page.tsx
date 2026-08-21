@@ -3,13 +3,16 @@ import { getCurrentUser } from '@/lib/auth';
 import { listProjects, listActiveWorkers } from '@/lib/data';
 import {
   listScheduleTasks,
+  listCompletedJobTasks,
   listSubcontractors,
   listHolidays,
   listPublishedVersions,
   listCrewNotesForProjects,
   countScheduleChanges,
   listScheduleDrafts,
+  HISTORY_WEEKS,
 } from '@/lib/schedule-data';
+import { addDays, today, weekStart } from '@/lib/schedule-math';
 import { PageHeader } from '@/components/ui';
 import { ScheduleViews } from './ScheduleViews';
 import { MySchedule } from './MySchedule';
@@ -19,16 +22,32 @@ export const dynamic = 'force-dynamic';
 
 /**
  * The schedule reads two ways: managers and admins get the editable timeline
- * and crew week across every live job, workers get a read-only week of their own
- * work they can step through a week at a time. Phase windows are derived, not
+ * and crew week across every live job, employees get a read-only week of their
+ * own work they can step through a week at a time. Phase windows are derived, not
  * stored, so every view computes them from the same rows via schedule-math.
+ *
+ * Finished jobs are loaded alongside the live ones, back as far as HISTORY_WEEKS,
+ * so paging back to a previous week shows the work that actually ran that week
+ * instead of a gap where a job has since been marked complete. They come in as
+ * history: read-only in every view, and out of every count of work still to
+ * plan or staff.
  */
 export default async function SchedulePage() {
   const me = await getCurrentUser();
   if (!me) redirect('/login');
 
-  const [tasks, holidays] = await Promise.all([listScheduleTasks(), listHolidays()]);
+  // Back to the Monday that opens the oldest week worth keeping on screen, so
+  // the history a manager can page into is the history that was loaded.
+  const historyFrom = weekStart(addDays(today(), -7 * HISTORY_WEEKS));
+  const [liveTasks, finishedTasks, holidays] = await Promise.all([
+    listScheduleTasks(),
+    listCompletedJobTasks(historyFrom),
+    listHolidays(),
+  ]);
+  const tasks = [...liveTasks, ...finishedTasks];
   const holidayDays = holidays.map((h) => h.day);
+  /** Jobs in `tasks` that are finished — history, and read-only wherever shown. */
+  const finishedProjects = [...new Set(finishedTasks.map((t) => t.project_id))];
 
   if (me.role !== 'admin' && me.role !== 'manager') {
     // Crew notes for the jobs they could be booked on, so the week view can show
@@ -100,8 +119,10 @@ export default async function SchedulePage() {
       />
       <ScheduleViews
         tasks={tasks}
+        // Live jobs, plus the finished ones whose work is in the history that
+        // was loaded — a finished job's phases need its row to hang off.
         projects={projects
-          .filter((p) => p.status !== 'completed')
+          .filter((p) => p.status !== 'completed' || finishedProjects.includes(p.id))
           .map((p) => ({
             id: p.id,
             name: p.name,
@@ -126,6 +147,7 @@ export default async function SchedulePage() {
         changeCounts={changes}
         canUnpublish={me.role === 'admin'}
         drafts={drafts}
+        finishedProjects={finishedProjects}
       />
     </div>
   );

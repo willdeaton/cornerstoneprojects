@@ -24,7 +24,7 @@ import {
   USER_EMAIL_FLAGS,
 } from '@/lib/data';
 
-const ROLES: Role[] = ['admin', 'manager', 'worker', 'employee'];
+const ROLES: Role[] = ['admin', 'manager', 'employee'];
 
 /** Pull the per-user email fields + subscription flags out of a form payload.
  *  Checkbox names map 1:1 to the DB boolean column names. */
@@ -97,7 +97,7 @@ export async function createUserAction(
   const name = String(formData.get('name') ?? '').trim();
   const email = String(formData.get('email') ?? '').trim().toLowerCase();
   const password = String(formData.get('password') ?? '');
-  const role = String(formData.get('role') ?? 'worker') as Role;
+  const role = String(formData.get('role') ?? 'employee') as Role;
 
   if (!name || !email || !password) return { error: 'All fields are required.' };
   if (password.length < 6) return { error: 'Password must be at least 6 characters.' };

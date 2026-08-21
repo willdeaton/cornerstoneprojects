@@ -9,7 +9,7 @@ import { getCurrentUser, VIEW_AS_COOKIE, type Role } from '@/lib/auth';
  * own view). Passing 'admin' — the caller's real role — clears the preview.
  *
  * Security: the choice is gated on `realRole`, never the effective role, so an
- * admin who has previewed down to 'worker' can still switch back, and no
+ * admin who has previewed down to 'employee' can still switch back, and no
  * non-admin can ever use this to escalate.
  */
 export async function setViewAsAction(role: Role) {
@@ -17,7 +17,7 @@ export async function setViewAsAction(role: Role) {
   if (!user || user.realRole !== 'admin') redirect('/dashboard');
 
   const jar = await cookies();
-  if (role === 'manager' || role === 'worker' || role === 'employee') {
+  if (role === 'manager' || role === 'employee') {
     jar.set(VIEW_AS_COOKIE, role, {
       httpOnly: true,
       sameSite: 'lax',

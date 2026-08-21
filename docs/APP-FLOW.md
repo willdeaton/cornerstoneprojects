@@ -56,21 +56,24 @@ server-side *and* in the client-side live previews.
 
 ## Roles — the access spine
 
-Four roles, checked everywhere off one **effective** role.
+Three roles, checked everywhere off one **effective** role.
 
 | Role | Sees |
 | --- | --- |
 | **admin** | Everything. Only role that can unpublish a schedule, delete users, or promote to admin. |
 | **manager** | Everything except the admin-only actions above. Billing, Timesheets, Settings all included. |
-| **worker** | Dashboard, Quotes, Projects, Schedule (read-only, own week), Time Clock. **No** Billing, Timesheets, or Settings. |
 | **employee** | Time Clock and their own Schedule. Nothing else — no dashboard, quotes, projects, timesheets, settings, and never who else is on the clock. |
+
+A `worker` role used to sit between manager and employee (the dashboard, quotes
+and projects, but no billing, timesheets or settings). It was retired and folded
+into `employee`; `db.ts` migrates any remaining rows on boot.
 
 **`View as` (admins only)** — `src/lib/auth.ts` `getCurrentUser()` swaps the
 user's effective `role` for a previewed one from the `cs_view_as` cookie, while
 keeping `realRole` intact. Because every gate in the app reads `role`, the
 preview applies to nav, page redirects, and server actions automatically with no
 per-feature work. It can only ever *lower* access — the cookie is honoured only
-when the real role is `admin`, and only for `manager`/`worker`/`employee`.
+when the real role is `admin`, and only for `manager`/`employee`.
 
 Auth itself is a plain httpOnly session cookie (`cs_session`) → `sessions` row →
 user, 30-day expiry, bcrypt password hashes.
@@ -234,10 +237,10 @@ Rules that fall out of this model:
 Views run in whole Monday-to-Sunday weeks (Week / 2-Week / 6-Week, defaulting to
 2), so the same weekday is always in the same column.
 
-**My Schedule** is what a worker or employee gets instead: a read-only week of
-their own bookings — one card per day, with the shift ("All day", or
-"8:00 AM – 12:00 PM · 4h" on a split day), job, address, phase notes and crew
-notes, and arrows to step weeks.
+**My Schedule** is what an employee gets instead: a read-only week of their own
+bookings — one card per day, with the shift ("All day", or "8:00 AM – 12:00 PM ·
+4h" on a split day), job, address, phase notes and crew notes, and arrows to
+step weeks.
 
 **Send Schedule** emails each assignee their own dates only.
 
@@ -410,8 +413,6 @@ want.
 > - **admin** — everything; only role that can unpublish a schedule, delete
 >   users, or promote to admin.
 > - **manager** — everything else, including Billing, Timesheets and Settings.
-> - **worker** — Dashboard, Quotes, Projects, own read-only Schedule week, Time
->   Clock. No Billing, Timesheets or Settings.
 > - **employee** — Time Clock and own Schedule only.
 >
 > Admins have a **View as** switcher that swaps their effective role while
@@ -516,8 +517,8 @@ want.
 > - Views run in whole Monday-to-Sunday weeks (1, 2 or 6), so the same weekday is
 >   always in the same column.
 >
-> Workers and employees get **My Schedule** instead: a read-only week of their
-> own bookings, one card per day, with start time, job, address, phase notes and
+> Employees get **My Schedule** instead: a read-only week of their own
+> bookings, one card per day, with start time, job, address, phase notes and
 > crew notes. Managers can also email each assignee their own dates.
 >
 > **Time Clock** — clock in against a job or as general work, a live timer, lunch

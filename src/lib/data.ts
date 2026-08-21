@@ -1919,7 +1919,7 @@ export interface UserRow {
   id: number;
   name: string;
   email: string;
-  role: 'admin' | 'manager' | 'worker' | 'employee';
+  role: 'admin' | 'manager' | 'employee';
   active: number;
   created_at: string;
   // Optional email-resolution chain (personal_email -> work_email -> email).
@@ -1946,7 +1946,7 @@ export const USER_EMAIL_FLAGS = [
 export type UserEmailFlag = (typeof USER_EMAIL_FLAGS)[number];
 
 // NOTE: includes hourly_rate, so this select must only feed manager/admin-facing
-// surfaces (the Settings -> Users listing). Never expose it to worker roles.
+// surfaces (the Settings -> Users listing). Never expose it to lower roles.
 const USER_SELECT =
   `u.id, u.name, u.email, u.role, u.active, u.created_at,
    u.personal_email, u.work_email,
@@ -1997,7 +1997,7 @@ export async function createUserRow(u: {
   name: string;
   email: string;
   password_hash: string;
-  role: 'admin' | 'manager' | 'worker' | 'employee';
+  role: 'admin' | 'manager' | 'employee';
   manager_id?: number | null;
   hourly_rate?: number | null;
 } & UserEmailFields): Promise<number> {
@@ -2061,7 +2061,7 @@ export async function updateUserEmailFields(id: number, fields: Required<UserEma
 
 export async function setUserRole(
   id: number,
-  role: 'admin' | 'manager' | 'worker' | 'employee'
+  role: 'admin' | 'manager' | 'employee'
 ): Promise<void> {
   await q('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
 }
