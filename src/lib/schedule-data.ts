@@ -108,7 +108,7 @@ const TASK_SELECT = `
     LEFT JOIN (
       SELECT d.task_id,
              json_agg(
-               json_build_object('day', d.day, 'start_time', d.start_time)
+               json_build_object('day', d.day, 'start_time', d.start_time, 'hours', d.hours)
                ORDER BY d.day
              ) AS day_times
         FROM schedule_task_day_times d
@@ -154,6 +154,45 @@ export async function getScheduleTask(id: number): Promise<ScheduleTaskRow | und
 }
 
 /**
+ * How far back the schedule keeps finished jobs on screen: paging back through
+ * the weeks shows the work that actually ran, not just the jobs still open.
+ */
+export const HISTORY_WEEKS = 26;
+
+/**
+ * A finished job is loaded whole or not at all, so the prefilter has to work off
+ * the stored start dates alone — the real windows are derived, and a phase can
+ * land well after its own earliest start once the chain in front of it has been
+ * resolved. `duration_days * 2` covers the weekends a working-day duration
+ * spans, and the slack covers that push. Being generous only means a job is
+ * loaded and never drawn: every view clips to the weeks on screen anyway.
+ */
+const HISTORY_SLACK_DAYS = 30;
+
+/**
+ * Phases of jobs that are finished, for the weeks the schedule can page back
+ * to. Kept apart from `listScheduleTasks` on purpose: this is history, and
+ * nothing that plans or emails work should pick it up by accident.
+ *
+ * A job comes back with every one of its phases, whether or not that phase is
+ * itself inside the window — the dependency chain is what turns a stored start
+ * date into a real one, and a chain missing a link resolves to the wrong dates.
+ */
+export async function listCompletedJobTasks(since: string): Promise<ScheduleTaskRow[]> {
+  return q<ScheduleTaskRow>(
+    `${TASK_SELECT}
+      WHERE p.status = 'completed'
+        AND EXISTS (
+          SELECT 1 FROM schedule_tasks h
+           WHERE h.project_id = t.project_id
+             AND h.start_date + (h.duration_days * 2) + ${HISTORY_SLACK_DAYS} >= $1::date
+        )
+      ORDER BY p.name, t.position, t.start_date, t.id`,
+    [since]
+  );
+}
+
+/**
  * The bare fields the dependency solver needs, for every phase on a job. Used
  * when validating a proposed dependency link without loading the full rows.
  */
@@ -180,12 +219,14 @@ export async function createScheduleTask(t: {
   status?: TaskStatus;
   /** Daily start time as 'HH:MM', or null for the crew's normal hours. */
   start_time?: string | null;
+  /** Hours on site each day; null (the default) is all day. */
+  hours?: number | null;
   notes?: string | null;
 }): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO schedule_tasks
-       (project_id, name, start_date, duration_days, crew_size, subcontractor_id, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+       (project_id, name, start_date, duration_days, crew_size, subcontractor_id, depends_on_id, depends_type, lag_days, status, start_time, hours, notes, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM schedule_tasks WHERE project_id = $1))
      RETURNING id`,
     [
@@ -200,6 +241,7 @@ export async function createScheduleTask(t: {
       t.lag_days ?? 0,
       t.status ?? 'not_started',
       t.start_time ?? null,
+      t.hours ?? null,
       t.notes ?? null,
     ]
   );
@@ -221,6 +263,7 @@ export async function updateScheduleTask(
       | 'lag_days'
       | 'status'
       | 'start_time'
+      | 'hours'
       | 'notes'
       | 'position'
     >
@@ -403,16 +446,20 @@ export async function countCrewDays(taskId: number): Promise<number> {
 
 /* ------------------------------------------------------- Day start times */
 
-/** One day of a phase given its own start time (null clears the day's time). */
+/**
+ * One day of a phase given its own shift. A null start time clears the day's
+ * time; null hours make it all day, whatever the phase's own length is.
+ */
 export interface DayTimeInput {
   day: string;
   start_time: string | null;
+  hours: number | null;
 }
 
 /**
- * Replace a phase's per-day start times wholesale: the crew-week job card sends
- * the full list and anything missing from it goes back to the phase's own daily
- * start time.
+ * Replace a phase's per-day shifts wholesale: the crew-week job card sends the
+ * full list and anything missing from it goes back to the phase's own daily
+ * start time and length.
  */
 export async function setTaskDayTimes(taskId: number, days: DayTimeInput[]): Promise<void> {
   const db = await getDb();
@@ -422,8 +469,8 @@ export async function setTaskDayTimes(taskId: number, days: DayTimeInput[]): Pro
     await client.query('DELETE FROM schedule_task_day_times WHERE task_id = $1', [taskId]);
     for (const d of days) {
       await client.query(
-        'INSERT INTO schedule_task_day_times (task_id, day, start_time) VALUES ($1,$2,$3)',
-        [taskId, d.day, d.start_time]
+        'INSERT INTO schedule_task_day_times (task_id, day, start_time, hours) VALUES ($1,$2,$3,$4)',
+        [taskId, d.day, d.start_time, d.hours ?? null]
       );
     }
     await client.query('COMMIT');

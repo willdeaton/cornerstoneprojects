@@ -29,7 +29,7 @@ import {
   assigneeBookings,
   computeSchedule,
   rangesOverlap,
-  timeLabel,
+  shiftLabel,
   today as todayISO,
 } from '../schedule-math';
 import { issueApprovalToken } from '../time-approval-tokens';
@@ -293,7 +293,7 @@ export async function sendScheduleEmails(
       const entry = perAssignee.get(w.key) ?? { name: w.name, lines: [] };
       entry.lines.push({
         dates: scheduleSpan(w.start, w.end),
-        startTime: w.startTime ? timeLabel(w.startTime) : null,
+        shift: shiftLabel(w),
         project: w.projectName,
         phase: w.taskName,
         location: w.location,

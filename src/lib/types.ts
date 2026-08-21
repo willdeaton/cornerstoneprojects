@@ -362,6 +362,18 @@ export interface ScheduleTask {
    * crew week, where the days are in front of you, not from the timeline.
    */
   start_time: string | null;
+  /**
+   * How long the crew is on this job each day, in hours — the other half of
+   * the shift `start_time` opens. Null means ALL DAY, which is what a job
+   * books for unless somebody says otherwise: most work takes the day it
+   * takes, and only a job deliberately split with another needs a length.
+   *
+   * A phase with a start time AND hours is a bounded shift (8:00 for 4 hours
+   * ends at noon), which is what lets one person be booked at two places on
+   * one day — mornings here, afternoons there — without the two reading as a
+   * double-booking. Individual days can override it, same as the start time.
+   */
+  hours: number | null;
   notes: string | null;
   position: number;
   created_at: string;
@@ -369,12 +381,15 @@ export interface ScheduleTask {
 }
 
 /**
- * A start time set on one specific day of a phase, overriding the phase's own
- * `start_time`. A row whose `start_time` is null clears the time for that day.
+ * The shift set on one specific day of a phase, overriding the phase's own
+ * `start_time` and `hours`. A row is the whole day's shift, so a `start_time`
+ * of null clears the time for that day and `hours` of null makes it all day.
  */
 export interface TaskDayTime {
   day: string;
   start_time: string | null;
+  /** Hours worked that day; null is all day, whatever the phase says. */
+  hours: number | null;
 }
 
 /**

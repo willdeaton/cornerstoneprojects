@@ -112,11 +112,13 @@ export interface CrewUnbookEdit extends JobEditBase {
   days: string[];
 }
 
-/** The crew-facing half of a phase: start times and the notes they read. */
+/** The crew-facing half of a phase: the shift, and the notes they read. */
 export interface CrewCardEdit extends JobEditBase {
   kind: 'crew-card';
   taskId: number;
   start_time: string | null;
+  /** Hours on site each day; null is all day. */
+  hours: number | null;
   day_times: TaskDayTime[];
   notes: string | null;
   reason: string | null;
@@ -268,6 +270,7 @@ export function applyDraft(
         byId.set(edit.taskId, {
           ...task,
           start_time: edit.start_time,
+          hours: edit.hours,
           notes: edit.notes,
           day_times: [...edit.day_times],
         });

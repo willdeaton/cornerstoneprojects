@@ -10,8 +10,9 @@ import {
   eachDay,
   fromDay,
   isWorkingDay,
-  timeLabel,
+  shiftLabel,
   type ComputedWindow,
+  type DayShift,
 } from '@/lib/schedule-math';
 import { diffTask, needsReason, summarizeChanges } from '@/lib/schedule-diff';
 import type { ScheduleTaskRow, TaskDayTime } from '@/lib/types';
@@ -20,11 +21,16 @@ import type { ScheduleDraft } from './useScheduleDraft';
 /**
  * One job's card, opened from the crew week.
  *
- * This is the crew-facing half of a phase: what time they start, which single
- * days start at a different time, and what they need to know before they turn
+ * This is the crew-facing half of a phase: when they start, how long they're
+ * there, which single days differ, and what they need to know before they turn
  * up. All of it belongs here rather than on the timeline because none of it
  * makes sense without the days in front of you — a 6 AM delivery is a fact
  * about a Tuesday, not about a bar on a Gantt chart.
+ *
+ * A job is booked for the WHOLE DAY unless somebody puts hours on it. Hours are
+ * how a day gets shared: 8:00 for 4 hours here and noon for 4 hours there is
+ * one person at two sites in a day, and the crew week stops calling that a
+ * double-booking once both shifts are bounded.
  *
  * Who is booked shows here too, day by day, so a card is one place to read
  * "this is the job, this is the crew, this is when they start". On a
@@ -53,10 +59,20 @@ export function CrewJobCard({
   onSaved: () => void;
 }) {
   const [startTime, setStartTime] = useState(task.start_time ?? '');
-  // Presence in the map is an override for that day; a null value is an
-  // override that says "no set time on this day".
-  const [dayTimes, setDayTimes] = useState<Map<string, string | null>>(
-    () => new Map((task.day_times ?? []).map((d) => [d.day, d.start_time]))
+  // Blank is all day — the default a job books for. Kept as the typed string so
+  // a half-finished "4." doesn't get rewritten under the cursor.
+  const [hours, setHours] = useState(task.hours != null ? String(task.hours) : '');
+  // Presence in the map is an override for that day; an entry with no start
+  // time is an override that says "no set time on this day", and one with no
+  // hours is that day worked all day.
+  const [dayTimes, setDayTimes] = useState<Map<string, DayShift>>(
+    () =>
+      new Map(
+        (task.day_times ?? []).map((d) => [
+          d.day,
+          { startTime: d.start_time, hours: d.hours ?? null },
+        ])
+      )
   );
   const [notes, setNotes] = useState(task.notes ?? '');
   const [reason, setReason] = useState('');
@@ -81,6 +97,8 @@ export function CrewJobCard({
   const byDay = useMemo(() => crewByDay(task), [task]);
 
   const draftStartTime = startTime.trim() === '' ? null : startTime.trim();
+  const draftHours = parseHours(hours);
+  const draftShift: DayShift = { startTime: draftStartTime, hours: draftHours };
 
   /**
    * The overrides worth saving: days still inside the phase's window. A phase
@@ -92,7 +110,7 @@ export function CrewJobCard({
     return [...dayTimes.entries()]
       .filter(([day]) => inWindow.has(day))
       .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-      .map(([day, start_time]) => ({ day, start_time }));
+      .map(([day, shift]) => ({ day, start_time: shift.startTime, hours: shift.hours }));
   }, [dayTimes, workingDays]);
 
   // The same wording the server will log, so nothing is a surprise after saving.
@@ -109,25 +127,45 @@ export function CrewJobCard({
       status: task.status,
     };
     return diffTask(
-      { ...base, start_time: task.start_time ?? null, day_times: task.day_times ?? [], notes: task.notes },
+      {
+        ...base,
+        start_time: task.start_time ?? null,
+        hours: task.hours ?? null,
+        day_times: task.day_times ?? [],
+        notes: task.notes,
+      },
       {
         ...base,
         start_time: draftStartTime,
+        hours: draftHours,
         day_times: draftDayTimes,
         notes: notes.trim() === '' ? null : notes.trim(),
       },
       { phase: () => task.name, sub: () => task.subcontractor_name ?? 'a subcontractor' }
     );
-  }, [task, draftStartTime, draftDayTimes, notes]);
+  }, [task, draftStartTime, draftHours, draftDayTimes, notes]);
 
   const reasonRequired = needsReason(changes, publishedVersion != null);
 
-  /** Give one day its own start time; an empty value means "no time that day". */
-  function setDayTime(day: string, value: string) {
-    setDayTimes((prev) => new Map(prev).set(day, value.trim() === '' ? null : value.trim()));
+  /** Patch one day's shift, starting from whatever it inherits today. */
+  function setDayShift(day: string, patch: Partial<DayShift>) {
+    setDayTimes((prev) => {
+      const current = prev.get(day) ?? { startTime: draftStartTime, hours: draftHours };
+      return new Map(prev).set(day, { ...current, ...patch });
+    });
   }
 
-  /** Drop a day's override so it follows the phase's daily start time again. */
+  /** Give one day its own start time; an empty value means "no time that day". */
+  function setDayTime(day: string, value: string) {
+    setDayShift(day, { startTime: value.trim() === '' ? null : value.trim() });
+  }
+
+  /** Give one day its own length; blank goes back to all day for that day. */
+  function setDayHours(day: string, value: string) {
+    setDayShift(day, { hours: parseHours(value) });
+  }
+
+  /** Drop a day's override so it follows the phase's daily shift again. */
   function clearDayTime(day: string) {
     setDayTimes((prev) => {
       const next = new Map(prev);
@@ -165,8 +203,9 @@ export function CrewJobCard({
       kind: 'crew-card',
       projectId: task.project_id,
       taskId: task.id,
-      label: `${task.name} start times and notes (${task.project_name})`,
+      label: `${task.name} shift and notes (${task.project_name})`,
       start_time: draftStartTime,
+      hours: draftHours,
       day_times: draftDayTimes,
       notes: notes.trim() === '' ? null : notes.trim(),
       reason: reason.trim() === '' ? null : reason.trim(),
@@ -222,26 +261,71 @@ export function CrewJobCard({
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <p className="font-semibold">Published schedule (v{publishedVersion})</p>
             <p>
-              The crew already has these details. Changing a start time or the notes needs a
+              The crew already has these details. Changing the shift or the notes needs a
               reason, kept in this job&apos;s change history.
             </p>
           </div>
         )}
 
-        {/* Start times. The phase time covers every day; any single day can be
-            given its own, for the 6 AM delivery or the late inspection. */}
+        {/* The shift. The phase's covers every day; any single day can be given
+            its own, for the 6 AM delivery or the half day before a holiday. */}
         <div className="rounded-lg border border-black/10 p-3">
-          <label className="label">Daily Start Time</label>
-          <input
-            className="input w-40"
-            type="time"
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-          />
-          <p className="mt-1 text-xs text-brand-gray">
-            {draftStartTime
-              ? `The crew starts at ${timeLabel(draftStartTime)} on every day of this phase.`
-              : 'Leave empty and the crew works their normal hours.'}
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="label">Daily Start Time</label>
+              <input
+                className="input w-36"
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Hours On Site</label>
+              <input
+                className="input w-28"
+                type="number"
+                min="0"
+                max="24"
+                step="0.25"
+                placeholder="all day"
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+              />
+            </div>
+            {/* The two shapes a day usually takes, so splitting one between two
+                jobs is two clicks rather than four fields. */}
+            <div className="flex flex-wrap gap-1 pb-1">
+              {SHIFT_PRESETS.map((preset) => {
+                const on = draftStartTime === preset.startTime && draftHours === preset.hours;
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setStartTime(preset.startTime ?? '');
+                      setHours(preset.hours == null ? '' : String(preset.hours));
+                    }}
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                      on
+                        ? 'border-brand-green bg-brand-green/15 text-brand-green-dark'
+                        : 'border-black/15 text-brand-gray hover:border-brand-green/50 hover:text-brand-ink'
+                    }`}
+                    title={preset.hint}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <p className="mt-1.5 text-xs text-brand-gray">
+            <span className="font-semibold text-brand-ink">{shiftLabel(draftShift)}</span>{' '}
+            {draftHours == null
+              ? draftStartTime
+                ? '— on site the whole day from then. Put hours on it only to free the rest of the day up for another job.'
+                : '— every day of this phase, on the crew\u2019s normal hours. Jobs book all day unless you give them hours.'
+              : '— every day of this phase. Anybody on it can take a second job outside those hours without being double-booked.'}
           </p>
 
           {workingDays.length > 0 && (
@@ -251,7 +335,7 @@ export function CrewJobCard({
               </p>
               {workingDays.map((day) => {
                 const overridden = dayTimes.has(day);
-                const value = overridden ? dayTimes.get(day) ?? '' : '';
+                const shift = overridden ? dayTimes.get(day)! : draftShift;
                 const crew = byDay.get(day) ?? [];
                 return (
                   <div key={day} className="flex flex-wrap items-center gap-2 py-0.5 text-sm">
@@ -263,26 +347,34 @@ export function CrewJobCard({
                       })}
                     </span>
                     <input
-                      className="input w-32"
+                      className="input w-28"
                       type="time"
-                      value={value}
+                      value={overridden ? shift.startTime ?? '' : ''}
                       // A blank box on a day that already has an override means
                       // "no set time that day", which is how one day opts out.
                       onChange={(e) => setDayTime(day, e.target.value)}
+                    />
+                    <input
+                      className="input w-20"
+                      type="number"
+                      min="0"
+                      max="24"
+                      step="0.25"
+                      placeholder="all day"
+                      value={overridden && shift.hours != null ? String(shift.hours) : ''}
+                      onChange={(e) => setDayHours(day, e.target.value)}
                     />
                     {overridden ? (
                       <button
                         type="button"
                         className="text-xs font-medium text-brand-green-dark hover:underline"
                         onClick={() => clearDayTime(day)}
-                        title="Follow the phase's daily start time again"
+                        title="Follow the phase's daily shift again"
                       >
-                        {value === '' ? 'no set time · use phase time' : 'use phase time'}
+                        {shiftLabel(shift)} · use phase shift
                       </button>
                     ) : (
-                      <span className="text-xs text-brand-gray">
-                        {draftStartTime ? timeLabel(draftStartTime) : 'no set time'}
-                      </span>
+                      <span className="text-xs text-brand-gray">{shiftLabel(shift)}</span>
                     )}
                     <span className="flex flex-wrap items-center gap-1">
                       {crew.length === 0 ? (
@@ -373,6 +465,29 @@ export function CrewJobCard({
       </div>
     </Modal>
   );
+}
+
+/**
+ * The shifts a split day is actually made of. A morning and an afternoon at
+ * eight-to-noon and noon-to-four cover the case this exists for; All day is the
+ * default a job books for and the way back to it.
+ */
+const SHIFT_PRESETS: { label: string; startTime: string | null; hours: number | null; hint: string }[] =
+  [
+    { label: 'All day', startTime: null, hours: null, hint: 'On site the whole day — the default' },
+    { label: 'Morning', startTime: '08:00', hours: 4, hint: '8:00 AM – 12:00 PM' },
+    { label: 'Afternoon', startTime: '12:00', hours: 4, hint: '12:00 PM – 4:00 PM' },
+  ];
+
+/**
+ * The hours box as a number: blank, zero or nonsense is all day, which is what
+ * a job books for unless somebody says otherwise. Quarter-hours, matching what
+ * the server stores, so the box never shows a number it didn't keep.
+ */
+function parseHours(value: string): number | null {
+  const n = Number(value.trim());
+  if (value.trim() === '' || !Number.isFinite(n) || n <= 0) return null;
+  return Math.min(24, Math.round(n * 4) / 4);
 }
 
 /** A tappable directions link for an address typed by hand. */

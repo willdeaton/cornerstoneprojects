@@ -14,8 +14,11 @@ import {
   isWorkingDay,
   mondayLabel,
   rangeLabel,
-  startTimeOn,
-  timeLabel,
+  dayIsClashing,
+  dayIsSplit,
+  shiftLabel,
+  shiftOn,
+  shiftShort,
   today,
   weekAlignedRange,
   weekBands,
@@ -23,6 +26,7 @@ import {
   weekStart,
   dayTimeMap,
   type ComputedWindow,
+  type DayShift,
 } from '@/lib/schedule-math';
 import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import type { DraftPerson } from '@/lib/schedule-draft';
@@ -33,23 +37,28 @@ import type { PublishedInfo } from './PublishBar';
 
 /**
  * One thing a person is on for one day: a phase of a job, or a day in the
- * warehouse. `contracted` phase days come from the phase being subcontracted
- * rather than from a crew-day booking, and are read-only.
+ * warehouse.
+ *
+ * On a phase, `shift` is when they're there and for how long — all day unless
+ * the job card put hours on it, which is what lets two of these share a day —
+ * and `contracted` days come from the phase being subcontracted rather than
+ * from a crew-day booking, so they're read-only. A warehouse day carries none
+ * of that: it is standing work, all day, never contracted and never history.
  */
 type DayEntry =
-  | { kind: 'phase'; task: ScheduleTaskRow; startTime: string | null; contracted: boolean }
+  | {
+      kind: 'phase';
+      task: ScheduleTaskRow;
+      shift: DayShift;
+      contracted: boolean;
+      /** The job is finished: the day is a record of what was worked, not a booking. */
+      finished: boolean;
+    }
   | { kind: 'warehouse' };
 
 /** Which of the two a day entry is, for de-duplicating a cell's contents. */
 function entryKey(e: DayEntry): string {
   return e.kind === 'warehouse' ? 'warehouse' : `task:${e.task.id}`;
-}
-
-/** The jobs a day's entries belong to — what a double-booking is counted over. */
-function jobsOn(entries: DayEntry[]): Set<number> {
-  return new Set(
-    entries.filter((e) => e.kind === 'phase').map((e) => (e as { task: ScheduleTaskRow }).task.project_id)
-  );
 }
 
 /** Widths the crew grid opens at, in whole weeks — two by default. */
@@ -85,6 +94,8 @@ interface PhaseCard {
   byDay: Map<string, { kind: 'user' | 'sub'; ref_id: number }[]>;
   /** The phase's working days that are on screen — the default days to book. */
   days: string[];
+  /** Its job is finished: on screen as history, with nothing left to staff. */
+  finished: boolean;
 }
 
 interface Person {
@@ -133,6 +144,11 @@ interface RangeDrag {
  * there's no budget to spend, so its card can't be dragged or picked. Only the
  * crew we send alongside them, if any, is booked here.
  *
+ * A finished job's phases show on the weeks they ran, dimmed and read-only, so
+ * paging back to a previous week shows who actually worked it rather than a gap
+ * where the job used to be. There is nothing to staff on work that is over, so
+ * those cards can't be dragged or picked and their days can't be clicked away.
+ *
  * The timeline says a phase needs three people for four days; this is where
  * those twelve crew-days get spent. The budget is a total rather than a per-day
  * quota, so four people Monday and one Friday is a legitimate way to cover a
@@ -147,6 +163,7 @@ export function CrewWeek({
   holidays,
   published = {},
   draft,
+  finishedProjects = [],
 }: {
   tasks: ScheduleTaskRow[];
   /** Who is in the warehouse on which day — the standing card's bookings. */
@@ -162,6 +179,12 @@ export function CrewWeek({
    * later — and nobody is emailed until the schedule is published.
    */
   draft: ScheduleDraft;
+  /**
+   * Jobs that are finished. Their days still show on the weeks they were worked
+   * — that's what a previous week is for — but nothing about them can be booked,
+   * moved or taken away here, and they count towards no shortfall.
+   */
+  finishedProjects?: number[];
 }) {
   /** How many weeks are on screen — the nav steps by exactly this much. */
   const [weeks, setWeeks] = useState<number>(DEFAULT_WEEKS);
@@ -187,6 +210,7 @@ export function CrewWeek({
   const [error, setError] = useState<string | null>(null);
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
+  const finished = useMemo(() => new Set(finishedProjects), [finishedProjects]);
   const now = today();
 
   const { windows } = useMemo(() => computeSchedule(tasks, calendar), [tasks, calendar]);
@@ -215,6 +239,7 @@ export function CrewWeek({
         days: rangeDays.filter(
           (d) => d >= window.start && d <= window.end && isWorkingDay(d, calendar)
         ),
+        finished: finished.has(task.project_id),
       }))
       .sort((a, b) =>
         a.window.start === b.window.start
@@ -224,7 +249,7 @@ export function CrewWeek({
             ? -1
             : 1
       );
-  }, [tasks, windows, calendar, rangeDays, rangeFrom, rangeTo]);
+  }, [tasks, windows, calendar, rangeDays, rangeFrom, rangeTo, finished]);
 
   const cardByTask = useMemo(() => new Map(cards.map((c) => [c.task.id, c])), [cards]);
   // Dragging takes over from clicking, so the grid highlights whichever phase
@@ -266,8 +291,9 @@ export function CrewWeek({
           add(`sub:${task.subcontractor_id}`, day, {
             kind: 'phase',
             task,
-            startTime: startTimeOn(day, task.start_time, times),
+            shift: shiftOn(day, task, times),
             contracted: true,
+            finished: card.finished,
           });
         }
       }
@@ -276,8 +302,9 @@ export function CrewWeek({
         add(`${c.kind}:${c.ref_id}`, c.day, {
           kind: 'phase',
           task,
-          startTime: startTimeOn(c.day, task.start_time, times),
+          shift: shiftOn(c.day, task, times),
           contracted: false,
+          finished: card.finished,
         });
       }
     }
@@ -333,12 +360,17 @@ export function CrewWeek({
       .map((p) => {
         const days = byPerson.get(p.key) ?? new Map<string, DayEntry[]>();
         const booked = columns.filter((d) => (days.get(d)?.length ?? 0) > 0);
-        // Two different jobs on one day is a real double-booking; two phases of
-        // the same job is just one crew doing two things there. A warehouse day
-        // alongside a job isn't one either — loading out in the morning and
-        // driving to site after is an ordinary day, not a clash.
-        const clashes = columns.filter((d) => jobsOn(days.get(d) ?? []).size > 1);
-        return { ...p, days, bookedCount: booked.length, clashes };
+        // Two different jobs on one day is only a double-booking if the hours
+        // actually collide: all day here and all day there does, but 8-till-noon
+        // and noon-till-four is one person covering two sites. Two phases of the
+        // same job never clash — that's one crew doing two things in one place —
+        // and a finished job never counts either: the day has been worked, so
+        // there's nothing left to resolve.
+        const clashes = columns.filter((d) => clashing(days.get(d) ?? []));
+        // A day deliberately shared between jobs, hours and all — worth showing,
+        // but as a plan rather than a warning.
+        const splits = columns.filter((d) => splitting(days.get(d) ?? []));
+        return { ...p, days, bookedCount: booked.length, clashes, splits };
       })
       // Somebody taken out of scheduling under Settings -> Users isn't offered
       // here at all — unless they're already booked in view, in which case
@@ -357,12 +389,14 @@ export function CrewWeek({
   const gridTemplate = `minmax(112px, 150px) repeat(${columns.length}, minmax(0, 1fr))`;
   const gridMinWidth = columns.length > 7 ? 880 : 660;
   const bookedPeople = people.filter((p) => p.bookedCount > 0).length;
-  const understaffed = cards.filter((c) => c.budget.remaining > 0).length;
+  const understaffed = cards.filter((c) => !c.finished && c.budget.remaining > 0).length;
   /** Warehouse days booked inside the weeks on screen, for the standing card. */
   const warehouseInView = warehouse.filter((w) => w.day >= rangeFrom && w.day <= rangeTo).length;
   const needle = search.trim().toLowerCase();
   const bandCards = cards
-    .filter((c) => !onlyShort || c.budget.remaining > 0)
+    // "Still needing crew" is a list of work to do, so a job that is over is
+    // never on it — its card is only ever there to say what ran that week.
+    .filter((c) => !onlyShort || (!c.finished && c.budget.remaining > 0))
     .filter(
       (c) =>
         needle === '' ||
@@ -381,6 +415,8 @@ export function CrewWeek({
     }
     return out;
   }, [bandCards, bands]);
+  const bandFinished = bandCards.filter((c) => c.finished).length;
+  const bandLive = bandCards.length - bandFinished;
   const heading = weeks === 1 ? weekLabel(rangeFrom) : rangeLabel(rangeFrom, rangeTo);
   /** Weekend and holiday days somebody is actually booked on, in view. */
   const workedOffDays = columns.filter(
@@ -396,9 +432,13 @@ export function CrewWeek({
     );
   }
 
-  /** A phase with crew of ours to book — a subcontracted one may have none. */
+  /**
+   * A phase with crew of ours to book — a subcontracted one may have none, and a
+   * phase on a job that is finished never has any: it's on screen as a record of
+   * the week, and the week has been worked.
+   */
   function isStaffable(card: PhaseCard): boolean {
-    return card.budget.capacity > 0;
+    return !card.finished && card.budget.capacity > 0;
   }
 
   /**
@@ -800,8 +840,14 @@ export function CrewWeek({
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
                     Work to staff
                   </p>
+                  {/* Finished phases are counted apart: they're on the band to
+                      say what ran that week, not because there's anything to
+                      staff. */}
                   <p className="text-[11px] text-brand-ink">
-                    {bandCards.length} {bandCards.length === 1 ? 'phase' : 'phases'}
+                    {bandLive} {bandLive === 1 ? 'phase' : 'phases'}
+                    {bandFinished > 0 && (
+                      <span className="text-brand-gray"> · {bandFinished} finished</span>
+                    )}
                   </p>
                 </div>
                 {/* The one card that is never filed under a week: the warehouse
@@ -1002,8 +1048,18 @@ export function CrewWeek({
                             · not scheduled
                           </span>
                         )}
-                        {p.clashes.length > 0 && (
+                        {p.clashes.length > 0 ? (
                           <span className="text-red-700"> · double-booked</span>
+                        ) : (
+                          p.splits.length > 0 && (
+                            <span
+                              className="text-amber-700"
+                              title="Two jobs in a day, on hours that clear each other"
+                            >
+                              {' '}
+                              · split {p.splits.length === 1 ? 'day' : 'days'}
+                            </span>
+                          )
                         )}
                       </p>
                     </div>
@@ -1011,7 +1067,8 @@ export function CrewWeek({
                     {columns.map((d) => {
                       const items = p.days.get(d) ?? [];
                       const off = !isWorkingDay(d, calendar);
-                      const clash = jobsOn(items).size > 1;
+                      const clash = clashing(items);
+                      const split = !clash && splitting(items);
                       const cellKey = `${p.key}|${d}`;
                       const on = active != null && isOn(active, d, p);
                       // A cell takes the active card when that phase runs that
@@ -1032,7 +1089,7 @@ export function CrewWeek({
                           key={d}
                           className={`min-h-[42px] space-y-0.5 p-1 ${weekEdge(d)} ${
                             d === now ? 'bg-brand-green/5' : off ? 'bg-black/[.04]' : ''
-                          } ${clash ? 'bg-red-50' : ''} ${
+                          } ${clash ? 'bg-red-50' : split ? 'bg-amber-50/60' : ''} ${
                             takes && !dragging
                               ? 'cursor-pointer ring-1 ring-inset ring-brand-green/40 hover:bg-brand-green/10'
                               : ''
@@ -1122,12 +1179,12 @@ export function CrewWeek({
                               key={b.task.id}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (!b.contracted) removeFrom(b.task.id, d, p);
+                                if (!b.contracted && !b.finished) removeFrom(b.task.id, d, p);
                               }}
                               // Grabbing a booking and pulling sideways is how
                               // one day of a job becomes several.
                               onMouseDown={(e) => {
-                                if (b.contracted || e.button !== 0) return;
+                                if (b.contracted || b.finished || e.button !== 0) return;
                                 e.stopPropagation();
                                 setPicked(b.task.id);
                                 setRange({
@@ -1137,26 +1194,32 @@ export function CrewWeek({
                                   to: d,
                                 });
                               }}
-                              disabled={b.contracted}
-                              title={`${b.task.project_name} — ${b.task.name}${
-                                b.startTime ? `\nStarts ${timeLabel(b.startTime)}` : ''
-                              }\n${
-                                b.contracted
-                                  ? 'Subcontracted for this phase — their days follow its dates'
-                                  : `Click to take ${p.name} off this day, or drag sideways to put them on more days of it`
+                              disabled={b.contracted || b.finished}
+                              title={`${b.task.project_name} — ${b.task.name}\n${shiftLabel(
+                                b.shift
+                              )}\n${
+                                b.finished
+                                  ? 'This job is finished — the day is kept as a record of what was worked'
+                                  : b.contracted
+                                    ? 'Subcontracted for this phase — their days follow its dates'
+                                    : `Click to take ${p.name} off this day, or drag sideways to put them on more days of it`
                               }`}
                               className={`block w-full rounded border-l-[3px] px-1 py-0.5 text-left text-[10px] leading-tight ${
-                                b.contracted ? CONTRACTED_CHIP : STATUS_CHIP[b.task.status]
-                              } ${off && !b.contracted ? 'ring-1 ring-amber-300' : ''}`}
+                                b.finished
+                                  ? FINISHED_CHIP
+                                  : b.contracted
+                                    ? CONTRACTED_CHIP
+                                    : STATUS_CHIP[b.task.status]
+                              } ${off && !b.contracted && !b.finished ? 'ring-1 ring-amber-300' : ''}`}
                               style={{ borderLeftColor: jobTint(b.task.project_id) }}
                             >
                               {/* Three short lines rather than two crowded
                                   ones: at a fortnight's column width, a start
                                   time sharing a line with the job or the phase
                                   truncates the other one away entirely. */}
-                              {b.startTime && (
+                              {shiftShort(b.shift) && (
                                 <span className="block truncate text-[9px] font-bold leading-tight text-brand-green-dark">
-                                  {timeLabel(b.startTime)}
+                                  {shiftShort(b.shift)}
                                 </span>
                               )}
                               <span className="block truncate font-semibold">
@@ -1184,7 +1247,7 @@ export function CrewWeek({
 
       {/* Days carrying more people than the phase asked for. Allowed on purpose
           — the budget is a total — but worth seeing before the weeks go out. */}
-      <HeavyDays cards={cards} />
+      <HeavyDays cards={cards.filter((c) => !c.finished)} />
 
       <p className="text-xs text-brand-gray">
         Every phase of every job in view is a card above the grid, in the column of the week it
@@ -1194,16 +1257,20 @@ export function CrewWeek({
         days at once, pick a card (or grab a booking they already have) and drag sideways across
         their row: every day the drag covers gets booked in one pass.{' '}
         {weeks > 1 && 'Both weeks take drops from the same card, so a phase running over a weekend is staffed in one pass. '}
-        Click a booking to take someone off that day. A day shaded red is one where somebody is on
-        two different jobs. Weekends stay off the grid until you show them or somebody is booked on
+        Click a booking to take someone off that day. A job books for the whole day unless you give
+        it hours on its card, so a day shaded red is one where somebody is on two jobs whose hours
+        collide — put one on 8:00 for 4 hours and the other on noon for 4 hours and the day turns
+        amber as a split day instead, one person at two sites. Weekends stay off the grid until you show them or somebody is booked on
         one; a weekend or holiday worked is ringed amber and adds a day of crew budget to the
         phase rather than spending the weekdays&apos;. A subcontracted phase shows its sub on every
         day it runs, dashed and not clickable — they were engaged on the timeline, so their days
-        follow its dates and its card can&apos;t be dragged. Open a card&apos;s ⋯ to set start times
-        day by day and write what the crew needs to know. The <strong>Warehouse</strong> card
-        beside the heading is always there and never fills up — it&apos;s standing work rather
-        than a job, so it takes any day of any of our own people, and a warehouse day alongside
-        a job isn&apos;t counted as a double-booking.
+        follow its dates and its card can&apos;t be dragged. Page back and finished jobs appear on
+        the weeks they were worked, greyed and read-only: the record of who was on site, kept out
+        of the crew days still to book. Open a card&apos;s ⋯ to set its shift — start time and
+        hours, day by day if they differ — and write what the crew needs to know. The{' '}
+        <strong>Warehouse</strong> card beside the heading is always there and never fills up —
+        it&apos;s standing work rather than a job, so it takes any day of any of our own people,
+        and a warehouse day never collides with one: it has no hours of its own to clash.
       </p>
 
       {openedCard && (
@@ -1247,9 +1314,10 @@ function PhaseTile({
   onDragEnd: () => void;
 }) {
   const { task, window, budget } = card;
-  // A phase a sub covers outright asks for none of our crew: nothing to drag
-  // onto anybody, so the card reports who's on it instead.
-  const staffable = budget.capacity > 0;
+  // A phase a sub covers outright asks for none of our crew, and one on a job
+  // that is over asks for nobody at all: nothing to drag onto anybody, so the
+  // card reports who was on it instead.
+  const staffable = !card.finished && budget.capacity > 0;
   const subName = task.subcontractor_name;
   return (
     <div
@@ -1273,32 +1341,42 @@ function PhaseTile({
       title={`${task.project_name} — ${task.name}\n${task.customer}\n${shortDate(window.start)} – ${shortDate(
         window.end
       )}\n${
-        staffable
-          ? `${budget.filled} of ${budget.capacity} crew days booked\nDrag onto a day, or onto a name for the whole phase`
-          : `${subName ?? 'A subcontractor'} covers this phase — nothing of ours to book`
+        card.finished
+          ? `This job is finished — ${budget.filled} crew ${
+              budget.filled === 1 ? 'day' : 'days'
+            } were worked. Shown as a record of the week.`
+          : staffable
+            ? `${budget.filled} of ${budget.capacity} crew days booked\nDrag onto a day, or onto a name for the whole phase`
+            : `${subName ?? 'A subcontractor'} covers this phase — nothing of ours to book`
       }`}
       className={`min-w-0 grow basis-[148px] rounded-md border border-l-[3px] bg-white p-1.5 text-left transition-shadow ${
         staffable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default border-dashed'
       } ${picked ? 'border-brand-green ring-1 ring-brand-green' : 'border-black/10 hover:shadow-sm'} ${
         dragging ? 'opacity-50' : ''
-      } ${staffable && budget.full ? 'bg-brand-green/[.04]' : ''}`}
+      } ${staffable && budget.full ? 'bg-brand-green/[.04]' : ''} ${
+        card.finished ? 'bg-black/[.02] opacity-75' : ''
+      }`}
       style={{ borderLeftColor: picked ? undefined : jobTint(task.project_id) }}
     >
       <div className="flex items-start justify-between gap-1">
         <p className="min-w-0 flex-1 truncate text-[11px] font-semibold leading-tight text-brand-ink">
           {task.project_name}
         </p>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen();
-          }}
-          title="Start times &amp; notes"
-          aria-label={`Start times and notes for ${task.name}`}
-          className="-mt-0.5 shrink-0 rounded px-1 text-[11px] leading-none text-brand-gray hover:bg-black/5 hover:text-brand-ink"
-        >
-          ⋯
-        </button>
+        {/* Start times and notes are things to set, so a finished job doesn't
+            offer them — its times are on the day chips, where they were worked. */}
+        {!card.finished && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+            title="Start times &amp; notes"
+            aria-label={`Start times and notes for ${task.name}`}
+            className="-mt-0.5 shrink-0 rounded px-1 text-[11px] leading-none text-brand-gray hover:bg-black/5 hover:text-brand-ink"
+          >
+            ⋯
+          </button>
+        )}
       </div>
       <p className="truncate text-[10px] leading-tight text-brand-gray">{task.name}</p>
       {subName && (
@@ -1310,14 +1388,17 @@ function PhaseTile({
         <div className="min-w-0">
           <p className="truncate text-[10px] leading-tight text-brand-gray">
             {mondayLabel(window.start)} – {mondayLabel(window.end)}
-            {task.start_time && ` · ${timeLabel(task.start_time)}`}
+            {(task.start_time || task.hours != null) &&
+              ` · ${shiftLabel({ startTime: task.start_time, hours: task.hours })}`}
           </p>
           <p className="truncate text-[10px] leading-tight text-brand-gray/80">
-            {staffable
-              ? `${subName ? 'plus ' : ''}${budget.needed}/day · ${budget.days} ${
-                  budget.days === 1 ? 'day' : 'days'
-                }`
-              : `on site all ${budget.days} ${budget.days === 1 ? 'day' : 'days'}`}
+            {card.finished
+              ? `finished · ${budget.filled} crew ${budget.filled === 1 ? 'day' : 'days'} worked`
+              : staffable
+                ? `${subName ? 'plus ' : ''}${budget.needed}/day · ${budget.days} ${
+                    budget.days === 1 ? 'day' : 'days'
+                  }`
+                : `on site all ${budget.days} ${budget.days === 1 ? 'day' : 'days'}`}
           </p>
         </div>
         {staffable && (
@@ -1338,7 +1419,11 @@ function PhaseTile({
       {/* Filed under the first week on screen because it began before it — said
           out loud, so its card isn't read as work starting this week. */}
       {startedEarlier && (
-        <p className="truncate text-[9px] font-medium leading-tight text-amber-700">
+        <p
+          className={`truncate text-[9px] font-medium leading-tight ${
+            card.finished ? 'text-brand-gray' : 'text-amber-700'
+          }`}
+        >
           Started {mondayLabel(window.start)}
         </p>
       )}
@@ -1402,6 +1487,37 @@ function WarehouseTile({
       </p>
     </div>
   );
+}
+
+/**
+ * A day's live entries as the clash rules want them: a job id and a shift.
+ *
+ * Days on a finished job are dropped: they're a record of a week already
+ * worked, and flagging them would paint history red with nothing anybody can do
+ * about it. Warehouse days are dropped too — standing work has no hours of its
+ * own, so it can't collide with the job somebody drives to afterwards.
+ */
+function shiftItems(items: DayEntry[]): { projectId: number; shift: DayShift }[] {
+  return items
+    .filter((b) => b.kind === 'phase' && !b.finished)
+    .map((b) => {
+      const phase = b as Extract<DayEntry, { kind: 'phase' }>;
+      return { projectId: phase.task.project_id, shift: phase.shift };
+    });
+}
+
+/**
+ * Is this day double-booked — the same person on two different live jobs whose
+ * HOURS collide? Two all-day bookings always do; a morning on one job and an
+ * afternoon on another doesn't, and reads as a split day instead.
+ */
+function clashing(items: DayEntry[]): boolean {
+  return dayIsClashing(shiftItems(items));
+}
+
+/** Is this day one person deliberately split between jobs, on hours that clear? */
+function splitting(items: DayEntry[]): boolean {
+  return dayIsSplit(shiftItems(items));
 }
 
 /** Monday reads as the start of a week, so its column carries a heavier rule. */
@@ -1482,6 +1598,13 @@ const WAREHOUSE_TINT = '#475569';
 
 const WAREHOUSE_CHIP =
   'bg-slate-100 text-slate-700 hover:bg-red-100 hover:text-red-700';
+
+/**
+ * A day on a job that is over. Muted rather than tinted by status: it's on
+ * screen to say the week was worked, and there's nothing here to act on.
+ */
+const FINISHED_CHIP =
+  'cursor-default border border-black/10 bg-black/[.03] text-brand-gray opacity-90';
 
 /** A sub's day that comes from holding the phase, not from being booked on it. */
 const CONTRACTED_CHIP =

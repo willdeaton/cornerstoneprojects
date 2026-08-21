@@ -21,7 +21,7 @@
  */
 
 import { shortDate } from './format';
-import { timeLabel } from './schedule-math';
+import { hoursLabel, shiftLabel, timeLabel } from './schedule-math';
 import type { DependsType, TaskDayTime, TaskStatus } from './types';
 import { TASK_STATUS_LABELS } from './types';
 
@@ -39,7 +39,9 @@ export interface TaskDraft {
   subcontractor_id: number | null;
   /** Daily start time as 'HH:MM', or null for the crew's normal hours. */
   start_time: string | null;
-  /** Per-day start-time overrides. */
+  /** Hours on site each day; null is all day, which is the default. */
+  hours: number | null;
+  /** Per-day shift overrides. */
   day_times: TaskDayTime[];
   notes: string | null;
   status: TaskStatus;
@@ -56,6 +58,7 @@ export interface TaskBefore {
   crew_size: number;
   subcontractor_id: number | null;
   start_time: string | null;
+  hours: number | null;
   day_times: TaskDayTime[];
   notes: string | null;
   status: TaskStatus;
@@ -94,16 +97,21 @@ export function describeLink(
   return `${names.phase(dependsOnId)} — ${DEPENDS_LABEL[type]}${wait}`;
 }
 
-/** "Mar 4 at 6:00 AM, Mar 5 (no set time)" — the per-day start-time overrides. */
+/**
+ * "Mar 4 6:00 AM – 10:00 AM · 4h, Mar 5 all day" — the per-day shift
+ * overrides, each day with whatever it was given.
+ */
 function dayTimesLabel(days: TaskDayTime[]): string {
   if (days.length === 0) return 'None';
   return [...days]
     .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
-    .map((d) =>
-      d.start_time
-        ? `${shortDate(d.day)} at ${timeLabel(d.start_time)}`
-        : `${shortDate(d.day)} (no set time)`
-    )
+    .map((d) => {
+      const shift = shiftLabel({ startTime: d.start_time, hours: d.hours ?? null });
+      // "Mar 5 no set time" reads better than "Mar 5 All day" for a day that
+      // was deliberately exempted from the phase's own start time.
+      if (!d.start_time && d.hours == null) return `${shortDate(d.day)} (no set time)`;
+      return `${shortDate(d.day)} ${shift}`;
+    })
     .join(', ');
 }
 
@@ -152,7 +160,8 @@ export function diffTask(before: TaskBefore, draft: TaskDraft, names: DiffNames)
     before.start_time ? timeLabel(before.start_time) : 'Not set',
     draft.start_time ? timeLabel(draft.start_time) : 'Not set'
   );
-  push('Day start times', dayTimesLabel(before.day_times), dayTimesLabel(draft.day_times));
+  push('Hours on site', hoursLabel(before.hours), hoursLabel(draft.hours));
+  push('Day shifts', dayTimesLabel(before.day_times), dayTimesLabel(draft.day_times));
   push('Notes', before.notes ?? '—', draft.notes ?? '—');
   push(
     'Status',
