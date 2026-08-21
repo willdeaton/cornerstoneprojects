@@ -450,6 +450,12 @@ export interface CrewDay {
 export type ScheduleTaskRow = ScheduleTask & {
   project_name: string;
   customer: string;
+  /** The job's quote number — the proposal the work was sold on. */
+  quote_number: string | null;
+  /** The job's category — the service being delivered. */
+  project_category: string | null;
+  /** The job's contract value, so a card can say what the work is worth. */
+  project_value: number;
   location: string | null;
   /** The job's site address, so the crew views never need a second query. */
   site_address: string | null;

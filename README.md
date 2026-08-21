@@ -87,9 +87,10 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     the same days is flagged as a double-booking exactly like an employee.
   - **Staffing a week** — pick a job card, then click the day cells of the
     people working it; the card counts its crew-days down as you go, and cells
-    stop offering to book once the phase is full. Click a booking to take
-    someone off that day. Drag a card onto a day to book that day, or onto
-    somebody's name to put them on every working day of the phase on screen.
+    stop offering to book once the phase is full. Drag a card onto a day to book
+    that day, or onto somebody's name to put them on every working day of the
+    phase on screen. Taking somebody back off is the **×** in the corner of
+    their booking — clicking the booking itself opens the job.
   - **A job across several days at once** — with a card picked (or by grabbing a
     booking somebody already has), press and drag sideways along their row: every
     day the drag covers is booked in one pass, as far as the phase's budget goes.
@@ -105,11 +106,25 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     their day count and the stretches they worked, then the phase day by day with
     the names on each. Days an edit in progress would push outside the phase are
     called out, because those are the bookings about to be dropped.
-  - **Job cards** — open a card for the crew-facing half of a phase: the time
-    the crew starts, a different time on any individual day (a 6 AM delivery, a
-    late inspection), the notes they read before turning up, and who is booked
-    on each day. These live here rather than on the timeline because none of
-    them make sense without the days in front of you.
+  - **One booking, one card** — a run of days somebody works on the same job at
+    the same time is drawn as a *single* card across those columns, because it is
+    one visit rather than one chip per day: two days on a job that week reads as
+    one two-day card, and the card says how many days it covers. A different
+    start time on one of the days breaks the run into its own card, since a card
+    that spans days is stating one shift for all of them — and so does a week
+    boundary, which the grid bands apart anyway. Cards a person has on
+    overlapping days stack in lanes, so a two-day job and the half day beside it
+    each keep a line of their own.
+  - **Job cards** — click a booking on the grid, or a phase's ⋯ above it, and the
+    job opens: what was sold (proposal number, service, job, phase, location,
+    value), the crew-days it carries and who is on it, the days it runs week by
+    week with that person's days marked, the time the crew starts — a different
+    time on any individual day, for a 6 AM delivery or a late inspection — the
+    notes they read before turning up, and the job's own crew notes. Most of it
+    lives here rather than on the timeline because none of it makes sense without
+    the days in front of you. Clicking never removes anything: taking somebody
+    off a day is the **×** in the corner of the card, and a phase on a finished
+    job opens read-only, as the record of a week that has been worked.
   - **The Warehouse card** — a card that is always there, beside the "Work to
     staff" heading rather than filed under a week, because warehouse work
     doesn't start in one. Somebody has to load out, take the delivery and put

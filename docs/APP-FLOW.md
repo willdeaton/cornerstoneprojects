@@ -210,6 +210,14 @@ nothing can be booked past the total. Staff by clicking day cells, dragging a
 card onto a day, dragging it onto a name (books every working day of the phase
 on screen), or press-and-drag sideways along a row to book a span in one pass.
 
+A booking is drawn as **one card across the days it covers**: consecutive
+columns of the same phase, on the same shift, in the same week are one card
+rather than one chip per day (`buildSpans` in `CrewWeek.tsx`, with a lane per
+stacked card so overlapping bookings each keep a line). Clicking a card **opens
+the job** — details, days, shift, crew notes, read-only on a finished job —
+and taking somebody off a day is the **×** in the card's corner, so the
+destructive action is the deliberate one.
+
 The **Warehouse** card is the one card that isn't a phase: `warehouse_days` is
 one row per person per day, with no window, no budget and no project, so the
 card sits beside the band's heading instead of under a week and is always
