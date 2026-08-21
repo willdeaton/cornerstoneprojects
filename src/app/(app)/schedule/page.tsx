@@ -80,7 +80,7 @@ export default async function SchedulePage() {
     );
   }
 
-  const [projects, workers, subs, publications, changeCounts, draftJobs, warehouse] =
+  const [projects, workers, subs, publications, changeCounts, draftJobs, warehouse, crewNotes] =
     await Promise.all([
       listProjects(),
       listActiveWorkers(),
@@ -89,6 +89,9 @@ export default async function SchedulePage() {
       countScheduleChanges(),
       listScheduleDrafts(),
       listWarehouseDays(),
+      // The crew-facing notes for every job with work on screen, so a job card
+      // opened off the crew week reads the same instructions the crew will.
+      listCrewNotesForProjects([...new Set(tasks.map((t) => t.project_id))]),
     ]);
 
   // Publish state per job: which version went out, and how many changes have
@@ -152,6 +155,7 @@ export default async function SchedulePage() {
         subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
         holidays={holidayDays}
         published={published}
+        crewNotes={crewNotes}
         changeCounts={changes}
         canUnpublish={me.role === 'admin'}
         drafts={drafts}

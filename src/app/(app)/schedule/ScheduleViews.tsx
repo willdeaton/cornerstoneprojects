@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
+import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import { ScheduleBoard, type BoardProject } from './ScheduleBoard';
 import { CrewWeek } from './CrewWeek';
 import { ScheduleSaveBar } from './ScheduleSaveBar';
@@ -52,6 +52,7 @@ export function ScheduleViews({
   subs,
   holidays,
   published,
+  crewNotes = [],
   changeCounts,
   canUnpublish,
   drafts,
@@ -69,6 +70,11 @@ export function ScheduleViews({
   subs: SubOption[];
   holidays: string[];
   published: Record<number, PublishedInfo>;
+  /**
+   * The notes written on each job for whoever works it, so a job card opened
+   * from the crew week can show them beside the day being looked at.
+   */
+  crewNotes?: CrewNote[];
   /** Logged schedule changes per job id. */
   changeCounts: Record<number, number>;
   canUnpublish: boolean;
@@ -122,6 +128,7 @@ export function ScheduleViews({
           subs={subs}
           holidays={holidays}
           published={published}
+          crewNotes={crewNotes}
           draft={draft}
           finishedProjects={finishedProjects}
         />
