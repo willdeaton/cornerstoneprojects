@@ -8,9 +8,8 @@ import { billingVariance, BILLING_SLA, type BillingSummary } from '@/lib/billing
 import { setBillingHoldAction, setBillingClosedAction } from '@/app/actions/billing';
 
 /**
- * Where this job stands on the billing desk, and the two decisions only a
- * person can make about it: parking billing (with a reason) and signing the
- * job off.
+ * Where this job stands on the billing desk, and the decision only a person can
+ * make about it: parking billing, with a reason.
  *
  * Everything else on this card is read-only on purpose — the stage and the
  * money come out of the invoice rows in the card below, so this one never
@@ -87,14 +86,18 @@ export function BillingSection({
                 {holdOpen ? 'Cancel' : 'Put on Hold'}
               </button>
             ))}
-          <button
-            type="button"
-            className={`px-3 py-1 text-xs ${closed ? 'btn-secondary' : 'btn-primary'}`}
-            disabled={pending}
-            onClick={() => run(() => setBillingClosedAction(projectId, !closed))}
-          >
-            {closed ? 'Reopen Billing' : 'Close Out'}
-          </button>
+          {/* Closing a job out isn't offered here. Reopening still is, so a job
+              already closed out isn't stuck that way. */}
+          {closed && (
+            <button
+              type="button"
+              className="btn-secondary px-3 py-1 text-xs"
+              disabled={pending}
+              onClick={() => run(() => setBillingClosedAction(projectId, false))}
+            >
+              Reopen Billing
+            </button>
+          )}
         </div>
       </div>
 

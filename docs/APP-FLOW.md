@@ -139,8 +139,10 @@ hangs off:
   sent clears the date). This is where billing is actually *edited*; the Billing
   page only points at it.
 - **Billing card** — the derived stage, aging, what's **left to bill** (contract
-  less what has gone out) and the contract-vs-invoiced variance, plus the two
-  deliberate acts: put billing **on hold** (reason required) and **close out**.
+  less what has gone out) and the contract-vs-invoiced variance, plus the one
+  deliberate act still offered here: put billing **on hold** (reason required).
+  Closing a job out is no longer a button on this card; a job already closed out
+  can still be reopened from it.
 - **Job notes** — internal, staff-facing.
 - **Crew notes** — separate table, written *to be read by the crew*: gate codes,
   parking, who to ask for. Pinned notes stay on top. These surface on every
