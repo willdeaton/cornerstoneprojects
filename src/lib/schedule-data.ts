@@ -107,7 +107,7 @@ const TASK_SELECT = `
     LEFT JOIN (
       SELECT d.task_id,
              json_agg(
-               json_build_object('day', d.day, 'start_time', d.start_time)
+               json_build_object('day', d.day, 'start_time', d.start_time, 'hours', d.hours)
                ORDER BY d.day
              ) AS day_times
         FROM schedule_task_day_times d
@@ -218,12 +218,14 @@ export async function createScheduleTask(t: {
   status?: TaskStatus;
   /** Daily start time as 'HH:MM', or null for the crew's normal hours. */
   start_time?: string | null;
+  /** Hours on site each day; null (the default) is all day. */
+  hours?: number | null;
   notes?: string | null;
 }): Promise<number> {
   const row = await one<{ id: number }>(
     `INSERT INTO schedule_tasks
-       (project_id, name, start_date, duration_days, crew_size, subcontractor_id, depends_on_id, depends_type, lag_days, status, start_time, notes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+       (project_id, name, start_date, duration_days, crew_size, subcontractor_id, depends_on_id, depends_type, lag_days, status, start_time, hours, notes, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM schedule_tasks WHERE project_id = $1))
      RETURNING id`,
     [
@@ -238,6 +240,7 @@ export async function createScheduleTask(t: {
       t.lag_days ?? 0,
       t.status ?? 'not_started',
       t.start_time ?? null,
+      t.hours ?? null,
       t.notes ?? null,
     ]
   );
@@ -259,6 +262,7 @@ export async function updateScheduleTask(
       | 'lag_days'
       | 'status'
       | 'start_time'
+      | 'hours'
       | 'notes'
       | 'position'
     >
@@ -441,16 +445,20 @@ export async function countCrewDays(taskId: number): Promise<number> {
 
 /* ------------------------------------------------------- Day start times */
 
-/** One day of a phase given its own start time (null clears the day's time). */
+/**
+ * One day of a phase given its own shift. A null start time clears the day's
+ * time; null hours make it all day, whatever the phase's own length is.
+ */
 export interface DayTimeInput {
   day: string;
   start_time: string | null;
+  hours: number | null;
 }
 
 /**
- * Replace a phase's per-day start times wholesale: the crew-week job card sends
- * the full list and anything missing from it goes back to the phase's own daily
- * start time.
+ * Replace a phase's per-day shifts wholesale: the crew-week job card sends the
+ * full list and anything missing from it goes back to the phase's own daily
+ * start time and length.
  */
 export async function setTaskDayTimes(taskId: number, days: DayTimeInput[]): Promise<void> {
   const db = await getDb();
@@ -460,8 +468,8 @@ export async function setTaskDayTimes(taskId: number, days: DayTimeInput[]): Pro
     await client.query('DELETE FROM schedule_task_day_times WHERE task_id = $1', [taskId]);
     for (const d of days) {
       await client.query(
-        'INSERT INTO schedule_task_day_times (task_id, day, start_time) VALUES ($1,$2,$3)',
-        [taskId, d.day, d.start_time]
+        'INSERT INTO schedule_task_day_times (task_id, day, start_time, hours) VALUES ($1,$2,$3,$4)',
+        [taskId, d.day, d.start_time, d.hours ?? null]
       );
     }
     await client.query('COMMIT');

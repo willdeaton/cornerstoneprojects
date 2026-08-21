@@ -14,8 +14,11 @@ import {
   isWorkingDay,
   mondayLabel,
   rangeLabel,
-  startTimeOn,
-  timeLabel,
+  dayIsClashing,
+  dayIsSplit,
+  shiftLabel,
+  shiftOn,
+  shiftShort,
   today,
   weekAlignedRange,
   weekBands,
@@ -23,6 +26,7 @@ import {
   weekStart,
   dayTimeMap,
   type ComputedWindow,
+  type DayShift,
 } from '@/lib/schedule-math';
 import type { ScheduleTaskRow } from '@/lib/types';
 import type { DraftPerson } from '@/lib/schedule-draft';
@@ -32,12 +36,14 @@ import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
 /**
- * One phase a person is on for one day. `contracted` days come from the phase
- * being subcontracted rather than from a crew-day booking, and are read-only.
+ * One phase a person is on for one day. `shift` is when they're there and for
+ * how long — all day unless the job card put hours on it, which is what lets
+ * two of these share a day. `contracted` days come from the phase being
+ * subcontracted rather than from a crew-day booking, and are read-only.
  */
 type DayEntry = {
   task: ScheduleTaskRow;
-  startTime: string | null;
+  shift: DayShift;
   contracted: boolean;
   /** The job is finished: the day is a record of what was worked, not a booking. */
   finished: boolean;
@@ -252,7 +258,7 @@ export function CrewWeek({
         for (const day of card.days) {
           add(`sub:${task.subcontractor_id}`, day, {
             task,
-            startTime: startTimeOn(day, task.start_time, times),
+            shift: shiftOn(day, task, times),
             contracted: true,
             finished: card.finished,
           });
@@ -262,7 +268,7 @@ export function CrewWeek({
         if (c.day < rangeFrom || c.day > rangeTo) continue;
         add(`${c.kind}:${c.ref_id}`, c.day, {
           task,
-          startTime: startTimeOn(c.day, task.start_time, times),
+          shift: shiftOn(c.day, task, times),
           contracted: false,
           finished: card.finished,
         });
@@ -314,11 +320,17 @@ export function CrewWeek({
       .map((p) => {
         const days = byPerson.get(p.key) ?? new Map<string, DayEntry[]>();
         const booked = columns.filter((d) => (days.get(d)?.length ?? 0) > 0);
-        // Two different jobs on one day is a real double-booking; two phases of
-        // the same job is just one crew doing two things there. A finished job
-        // never counts: the day has been worked, so there's nothing to resolve.
+        // Two different jobs on one day is only a double-booking if the hours
+        // actually collide: all day here and all day there does, but 8-till-noon
+        // and noon-till-four is one person covering two sites. Two phases of the
+        // same job never clash — that's one crew doing two things in one place —
+        // and a finished job never counts either: the day has been worked, so
+        // there's nothing left to resolve.
         const clashes = columns.filter((d) => clashing(days.get(d) ?? []));
-        return { ...p, days, bookedCount: booked.length, clashes };
+        // A day deliberately shared between jobs, hours and all — worth showing,
+        // but as a plan rather than a warning.
+        const splits = columns.filter((d) => splitting(days.get(d) ?? []));
+        return { ...p, days, bookedCount: booked.length, clashes, splits };
       })
       // Somebody taken out of scheduling under Settings -> Users isn't offered
       // here at all — unless they're already booked in view, in which case
@@ -880,8 +892,18 @@ export function CrewWeek({
                             · not scheduled
                           </span>
                         )}
-                        {p.clashes.length > 0 && (
+                        {p.clashes.length > 0 ? (
                           <span className="text-red-700"> · double-booked</span>
+                        ) : (
+                          p.splits.length > 0 && (
+                            <span
+                              className="text-amber-700"
+                              title="Two jobs in a day, on hours that clear each other"
+                            >
+                              {' '}
+                              · split {p.splits.length === 1 ? 'day' : 'days'}
+                            </span>
+                          )
                         )}
                       </p>
                     </div>
@@ -890,6 +912,7 @@ export function CrewWeek({
                       const items = p.days.get(d) ?? [];
                       const off = !isWorkingDay(d, calendar);
                       const clash = clashing(items);
+                      const split = !clash && splitting(items);
                       const cellKey = `${p.key}|${d}`;
                       const on = !!activeCard && isBooked(activeCard, d, p);
                       // A cell takes the active phase when that phase runs that
@@ -909,7 +932,7 @@ export function CrewWeek({
                           key={d}
                           className={`min-h-[42px] space-y-0.5 p-1 ${weekEdge(d)} ${
                             d === now ? 'bg-brand-green/5' : off ? 'bg-black/[.04]' : ''
-                          } ${clash ? 'bg-red-50' : ''} ${
+                          } ${clash ? 'bg-red-50' : split ? 'bg-amber-50/60' : ''} ${
                             takes && !dragging
                               ? 'cursor-pointer ring-1 ring-inset ring-brand-green/40 hover:bg-brand-green/10'
                               : ''
@@ -982,9 +1005,9 @@ export function CrewWeek({
                                 });
                               }}
                               disabled={b.contracted || b.finished}
-                              title={`${b.task.project_name} — ${b.task.name}${
-                                b.startTime ? `\nStarts ${timeLabel(b.startTime)}` : ''
-                              }\n${
+                              title={`${b.task.project_name} — ${b.task.name}\n${shiftLabel(
+                                b.shift
+                              )}\n${
                                 b.finished
                                   ? 'This job is finished — the day is kept as a record of what was worked'
                                   : b.contracted
@@ -1004,9 +1027,9 @@ export function CrewWeek({
                                   ones: at a fortnight's column width, a start
                                   time sharing a line with the job or the phase
                                   truncates the other one away entirely. */}
-                              {b.startTime && (
+                              {shiftShort(b.shift) && (
                                 <span className="block truncate text-[9px] font-bold leading-tight text-brand-green-dark">
-                                  {timeLabel(b.startTime)}
+                                  {shiftShort(b.shift)}
                                 </span>
                               )}
                               <span className="block truncate font-semibold">
@@ -1043,15 +1066,17 @@ export function CrewWeek({
         days at once, pick a card (or grab a booking they already have) and drag sideways across
         their row: every day the drag covers gets booked in one pass.{' '}
         {weeks > 1 && 'Both weeks take drops from the same card, so a phase running over a weekend is staffed in one pass. '}
-        Click a booking to take someone off that day. A day shaded red is one where somebody is on
-        two different jobs. Weekends stay off the grid until you show them or somebody is booked on
+        Click a booking to take someone off that day. A job books for the whole day unless you give
+        it hours on its card, so a day shaded red is one where somebody is on two jobs whose hours
+        collide — put one on 8:00 for 4 hours and the other on noon for 4 hours and the day turns
+        amber as a split day instead, one person at two sites. Weekends stay off the grid until you show them or somebody is booked on
         one; a weekend or holiday worked is ringed amber and adds a day of crew budget to the
         phase rather than spending the weekdays&apos;. A subcontracted phase shows its sub on every
         day it runs, dashed and not clickable — they were engaged on the timeline, so their days
         follow its dates and its card can&apos;t be dragged. Page back and finished jobs appear on
         the weeks they were worked, greyed and read-only: the record of who was on site, kept out
-        of the crew days still to book. Open a card&apos;s ⋯ to set start times day by day and
-        write what the crew needs to know.
+        of the crew days still to book. Open a card&apos;s ⋯ to set its shift — start time and
+        hours, day by day if they differ — and write what the crew needs to know.
       </p>
 
       {openedCard && (
@@ -1169,7 +1194,8 @@ function PhaseTile({
         <div className="min-w-0">
           <p className="truncate text-[10px] leading-tight text-brand-gray">
             {mondayLabel(window.start)} – {mondayLabel(window.end)}
-            {task.start_time && ` · ${timeLabel(task.start_time)}`}
+            {(task.start_time || task.hours != null) &&
+              ` · ${shiftLabel({ startTime: task.start_time, hours: task.hours })}`}
           </p>
           <p className="truncate text-[10px] leading-tight text-brand-gray/80">
             {card.finished
@@ -1213,12 +1239,28 @@ function PhaseTile({
 }
 
 /**
- * Is this day double-booked — the same person on two different live jobs? Days
- * on a finished job are excluded: they're a record of a week already worked, and
- * flagging them would paint history red with nothing anybody can do about it.
+ * A day's live entries as the clash rules want them: a job id and a shift.
+ *
+ * Days on a finished job are dropped: they're a record of a week already
+ * worked, and flagging them would paint history red with nothing anybody can do
+ * about it.
+ */
+function shiftItems(items: DayEntry[]): { projectId: number; shift: DayShift }[] {
+  return items.filter((b) => !b.finished).map((b) => ({ projectId: b.task.project_id, shift: b.shift }));
+}
+
+/**
+ * Is this day double-booked — the same person on two different live jobs whose
+ * HOURS collide? Two all-day bookings always do; a morning on one job and an
+ * afternoon on another doesn't, and reads as a split day instead.
  */
 function clashing(items: DayEntry[]): boolean {
-  return new Set(items.filter((b) => !b.finished).map((b) => b.task.project_id)).size > 1;
+  return dayIsClashing(shiftItems(items));
+}
+
+/** Is this day one person deliberately split between jobs, on hours that clear? */
+function splitting(items: DayEntry[]): boolean {
+  return dayIsSplit(shiftItems(items));
 }
 
 /** Monday reads as the start of a week, so its column carries a heavier rule. */

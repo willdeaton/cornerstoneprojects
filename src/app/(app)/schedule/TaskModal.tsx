@@ -207,6 +207,7 @@ export function TaskModal({
       // Set from the crew week, never here — carried through so they can't read
       // as a change.
       start_time: task.start_time ?? null,
+      hours: task.hours ?? null,
       day_times: task.day_times ?? [],
     };
     return diffTask(
@@ -334,7 +335,10 @@ export function TaskModal({
       depends_type: f.depends_type,
       lag_days: f.lag_days,
       status: f.status,
+      // A brand-new phase books all day, like every job does until somebody
+      // splits the day on its card in the crew week.
       start_time: null,
+      hours: null,
       notes: f.notes,
       position: 0,
       created_at: now,

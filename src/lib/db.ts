@@ -871,6 +871,37 @@ Your City, ST 00000',
       CHECK (kind IN ('added','updated','deleted','job'));
   `);
 
+  /* ==================================================================
+   * Shift lengths: a job books for ALL DAY unless told otherwise.
+   *
+   * schedule_tasks.hours is how long the crew is on the job each day,
+   * paired with start_time to make a bounded shift. NULL — the default,
+   * and what every existing phase keeps — means all day: most work takes
+   * the day it takes, and only a job deliberately split with another
+   * needs a length put on it.
+   *
+   * schedule_task_day_times.hours does the same for one day, so a row
+   * there is the whole day's shift (start time AND length) rather than
+   * just its time. That pairing is what lets one person be booked at two
+   * places on one day — 8:00 for 4 hours here, noon for 4 hours there —
+   * without the two reading as a double-booking.
+   *
+   * Bounded above by 24 rather than by a working day: a 12-hour shutdown
+   * shift is real work, and nothing here should have an opinion about
+   * how long a day is allowed to be.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS hours DOUBLE PRECISION;
+    ALTER TABLE schedule_tasks DROP CONSTRAINT IF EXISTS schedule_tasks_hours_check;
+    ALTER TABLE schedule_tasks ADD CONSTRAINT schedule_tasks_hours_check
+      CHECK (hours IS NULL OR (hours > 0 AND hours <= 24));
+
+    ALTER TABLE schedule_task_day_times ADD COLUMN IF NOT EXISTS hours DOUBLE PRECISION;
+    ALTER TABLE schedule_task_day_times DROP CONSTRAINT IF EXISTS schedule_task_day_times_hours_check;
+    ALTER TABLE schedule_task_day_times ADD CONSTRAINT schedule_task_day_times_hours_check
+      CHECK (hours IS NULL OR (hours > 0 AND hours <= 24));
+  `);
+
   await migrateCrewDays(pool);
   await migrateSubcontractedPhases(pool);
 }

@@ -11,6 +11,7 @@ import {
   crewBudget,
   eachDay,
   findConflicts,
+  shiftLabel,
   fromDay,
   isWeekend,
   projectedEnd,
@@ -135,7 +136,7 @@ export function ScheduleBoard({
   // live preview — one set of rules, one place.
   const { windows } = useMemo(() => computeSchedule(tasks, calendar), [tasks, calendar]);
 
-  // Conflicts compare the days people actually work, so someone splitting a
+  // Conflicts compare the days AND hours people actually work, so someone splitting a
   // week between two jobs (Mon/Wed here, Tue there) isn't flagged — only days
   // genuinely booked twice are.
   const conflicts = useMemo(
@@ -903,7 +904,12 @@ function ConflictStrip({
   const byPerson = new Map<string, { name: string; spans: string[] }>();
   for (const c of conflicts) {
     const entry = byPerson.get(c.key) ?? { name: c.name, spans: [] };
-    const span = `${shortDate(c.start)} – ${shortDate(c.end)} (${c.a.projectName} / ${c.b.projectName})`;
+    // The hours are the reason it's a clash rather than a split day, so they
+    // belong on the line: "all day / all day" is a different fix from "8–12 /
+    // 10–2", which somebody can settle by moving one shift an hour.
+    const span = `${shortDate(c.start)} – ${shortDate(c.end)} (${c.a.projectName} ${shiftLabel(
+      c.a
+    )} / ${c.b.projectName} ${shiftLabel(c.b)})`;
     if (!entry.spans.includes(span)) entry.spans.push(span);
     byPerson.set(c.key, entry);
   }

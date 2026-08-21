@@ -13,7 +13,7 @@ import {
   eachDay,
   fromDay,
   isWorkingDay,
-  timeLabel,
+  shiftLabel,
   today,
   weekLabel,
   weekStart,
@@ -168,7 +168,7 @@ export function MySchedule({
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                           <div className="min-w-0">
                             <p className="text-sm font-bold text-brand-ink">
-                              {b.startTime ? `Start ${timeLabel(b.startTime)}` : 'No set start time'}
+                              {shiftLabel(b)}
                             </p>
                             <h4 className="mt-0.5 font-semibold text-brand-ink">
                               {b.taskName}

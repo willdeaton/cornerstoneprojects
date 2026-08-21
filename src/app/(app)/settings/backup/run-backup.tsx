@@ -212,6 +212,7 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
       Start: s.start_date,
       End: s.end_date,
       'Daily Start Time': s.start_time,
+      'Daily Shift': s.shift,
       'Working Days': s.working_days,
       Status: s.status,
       Follows: s.follows,
