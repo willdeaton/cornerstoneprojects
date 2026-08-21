@@ -49,7 +49,7 @@ export async function clockInAction(projectId: number | null) {
   const user = await requireUser();
   const res = await clockIn(user.id, projectId);
   revalidatePath('/time');
-  if (projectId) revalidatePath(`/projects/${projectId}`);
+  if (projectId) revalidatePath(`/projects/${projectId}`, 'layout');
   revalidatePath('/', 'layout');
   return res;
 }
@@ -75,7 +75,7 @@ export async function switchJobAction(projectId: number | null, note?: string) {
   const res = await switchJob(user.id, projectId, note);
   revalidatePath('/time');
   revalidatePath('/projects');
-  if (projectId) revalidatePath(`/projects/${projectId}`);
+  if (projectId) revalidatePath(`/projects/${projectId}`, 'layout');
   revalidatePath('/', 'layout');
   return res;
 }
@@ -162,7 +162,7 @@ export async function addTimeEntryAction(input: TimeEntryInput & { userId?: numb
 
   revalidatePath('/time');
   revalidatePath('/timesheets');
-  if (input.projectId) revalidatePath(`/projects/${input.projectId}`);
+  if (input.projectId) revalidatePath(`/projects/${input.projectId}`, 'layout');
   revalidatePath('/', 'layout');
   return res;
 }
@@ -193,8 +193,8 @@ export async function updateTimeEntryAction(input: TimeEntryInput & { entryId: n
 
   revalidatePath('/time');
   revalidatePath('/timesheets');
-  if (entry.project_id) revalidatePath(`/projects/${entry.project_id}`);
-  if (input.projectId) revalidatePath(`/projects/${input.projectId}`);
+  if (entry.project_id) revalidatePath(`/projects/${entry.project_id}`, 'layout');
+  if (input.projectId) revalidatePath(`/projects/${input.projectId}`, 'layout');
   revalidatePath('/', 'layout');
   return res;
 }
@@ -217,7 +217,7 @@ export async function deleteTimeEntryAction(entryId: number) {
 
   revalidatePath('/time');
   revalidatePath('/timesheets');
-  if (entry.project_id) revalidatePath(`/projects/${entry.project_id}`);
+  if (entry.project_id) revalidatePath(`/projects/${entry.project_id}`, 'layout');
   revalidatePath('/', 'layout');
   return { ok: true };
 }

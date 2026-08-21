@@ -462,6 +462,53 @@ export async function updateProject(
   );
 }
 
+/**
+ * How much sits behind each tab of a job's page, in one round trip.
+ *
+ * The job page is a set of tabs over one project, and each tab loads only its
+ * own rows. The overview still wants to say what's waiting on the others
+ * ("3 invoices", "12 phases"), and fetching six lists just to call `.length`
+ * on them would undo the point of splitting the page up — so the counts come
+ * back as scalars from a single query instead.
+ */
+export interface ProjectHubCounts {
+  phases: number;
+  invoices: number;
+  notes: number;
+  crewNotes: number;
+  files: number;
+  timeEntries: number;
+}
+
+export async function getProjectHubCounts(projectId: number): Promise<ProjectHubCounts> {
+  const row = await one<{
+    phases: string;
+    invoices: string;
+    notes: string;
+    crew_notes: string;
+    files: string;
+    time_entries: string;
+  }>(
+    `SELECT
+       (SELECT COUNT(*) FROM schedule_tasks  WHERE project_id = $1) AS phases,
+       (SELECT COUNT(*) FROM project_invoices WHERE project_id = $1) AS invoices,
+       (SELECT COUNT(*) FROM notes           WHERE project_id = $1) AS notes,
+       (SELECT COUNT(*) FROM crew_notes      WHERE project_id = $1) AS crew_notes,
+       (SELECT COUNT(*) FROM project_files   WHERE project_id = $1) AS files,
+       (SELECT COUNT(*) FROM time_entries    WHERE project_id = $1) AS time_entries`,
+    [projectId]
+  );
+  // COUNT(*) arrives as a string from pg (bigint), so every one is parsed.
+  return {
+    phases: Number(row?.phases ?? 0),
+    invoices: Number(row?.invoices ?? 0),
+    notes: Number(row?.notes ?? 0),
+    crewNotes: Number(row?.crew_notes ?? 0),
+    files: Number(row?.files ?? 0),
+    timeEntries: Number(row?.time_entries ?? 0),
+  };
+}
+
 /* -------------------------------------------------------- Billing workflow */
 
 /**

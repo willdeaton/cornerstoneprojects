@@ -1,236 +1,228 @@
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
-import { getCurrentUser } from '@/lib/auth';
 import {
-  getProject,
-  listNotes,
-  listProjectTime,
+  getProjectHubCounts,
+  listInvoiceTallies,
   projectHours,
-  listProjectFiles,
-  listProjectInvoices,
-  getUserName,
 } from '@/lib/data';
-import { billingSummary, tallyInvoices } from '@/lib/billing';
-import {
-  listScheduleTasks,
-  listHolidays,
-  listSubcontractors,
-  getPublishedVersion,
-  listScheduleChanges,
-  listCrewNotes,
-} from '@/lib/schedule-data';
+import { listScheduleTasks, listHolidays } from '@/lib/schedule-data';
 import { computeSchedule, projectedEnd } from '@/lib/schedule-math';
+import { billingSummary, EMPTY_TALLY, BILLING_STAGE_LABELS } from '@/lib/billing';
 import { money, shortDate } from '@/lib/format';
-import { ProjectStatusBadge } from '@/components/ui';
+import { BillingStageBadge } from '@/components/ui';
+import { loadProject, requireJobUser, canBill } from './job';
 import { StatusProgress } from './StatusProgress';
-import { NotesSection } from './NotesSection';
-import { ProjectTime } from './ProjectTime';
-import { ProjectHeaderActions } from './ProjectHeaderActions';
-import { ProjectFiles } from './ProjectFiles';
-import { InvoiceSection } from './InvoiceSection';
-import { BillingSection } from './BillingSection';
-import { ScheduleSection } from './ScheduleSection';
-import { CrewNotesSection } from './CrewNotesSection';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ProjectDetail({ params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser();
-  if (!user) redirect('/login');
-  if (user.role === 'employee') redirect('/time');
+/**
+ * The job at a glance: where it stands, the four dates and how they relate,
+ * and one line per tab saying what's waiting there.
+ *
+ * The dates are the reason this page exists in its own right. A job carries
+ * four of them and they are not interchangeable — two are typed by a person,
+ * one is computed from the phases, and one is a promise to the customer — so
+ * they are grouped and labelled by what they *are* rather than lined up as four
+ * identical tiles.
+ */
+export default async function ProjectOverview({ params }: { params: Promise<{ id: string }> }) {
+  const user = await requireJobUser();
+  const { id: idParam } = await params;
+  const project = await loadProject(idParam);
+  const id = project.id;
 
-  const { id: idStr } = await params;
-  const id = Number(idStr);
-  const project = await getProject(id);
-  if (!project) notFound();
+  const [hours, counts, tasks, holidays, tallies] = await Promise.all([
+    projectHours(id),
+    getProjectHubCounts(id),
+    listScheduleTasks({ projectId: id }),
+    listHolidays(),
+    canBill(user) ? listInvoiceTallies([id]) : Promise.resolve(new Map()),
+  ]);
 
-  const notes = await listNotes(id);
-  const timeEntries = await listProjectTime(id);
-  const hours = await projectHours(id);
-  const files = await listProjectFiles(id);
-  const invoices = await listProjectInvoices(id);
-  // Where the job stands on the billing desk — derived from the invoice rows
-  // above, so the card can never disagree with the ledger under it.
-  const billing = billingSummary(project, tallyInvoices(invoices));
-  const closedByName = project.billing_closed_by
-    ? await getUserName(project.billing_closed_by)
-    : null;
-  // Billing is an admin/manager view: the A/R on every job isn't an employee's
-  // business, which is the same line Settings draws.
-  const canBill = user.role === 'admin' || user.role === 'manager';
-  const [scheduleTasks, holidays, subs, publication, scheduleChanges, crewNotes] =
-    await Promise.all([
-      listScheduleTasks({ projectId: id }),
-      listHolidays(),
-      listSubcontractors({ activeOnly: true }),
-      getPublishedVersion(id),
-      listScheduleChanges(id),
-      listCrewNotes(id),
-    ]);
-  const holidayDays = holidays.map((h) => h.day);
-  // Projected finish = the latest end across the scheduled phases, chains resolved.
+  // Projected finish = the latest end across the phases, dependency chains resolved.
   const projectedFinish = projectedEnd(
-    scheduleTasks.map((t) => t.id),
-    computeSchedule(scheduleTasks, { holidays: new Set(holidayDays) }).windows
+    tasks.map((t) => t.id),
+    computeSchedule(tasks, { holidays: new Set(holidays.map((h) => h.day)) }).windows
   );
 
+  const pastDue = !!(projectedFinish && project.due_date && projectedFinish > project.due_date);
+  const pastHard = !!(
+    projectedFinish &&
+    project.hard_finish_date &&
+    projectedFinish > project.hard_finish_date
+  );
+
+  const billing = canBill(user)
+    ? billingSummary(project, tallies.get(id) ?? EMPTY_TALLY)
+    : null;
+
   return (
-    <div>
-      <div className="mb-5">
-        <Link href="/projects" className="text-sm font-medium text-brand-gray hover:text-brand-ink">
-          ← Back to Projects
-        </Link>
-      </div>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="space-y-6 lg:col-span-2">
+        <div className="card p-5">
+          <h2 className="brand-heading mb-4 text-sm text-brand-gray">Status &amp; Progress</h2>
+          <StatusProgress id={id} status={project.status} progress={project.progress} />
+        </div>
 
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">
-              {project.customer}
-            </p>
-            <ProjectStatusBadge status={project.status} />
-          </div>
-          <h1 className="brand-heading mt-1 text-2xl text-brand-ink sm:text-3xl">{project.name}</h1>
-          <p className="mt-1 text-sm text-brand-gray">
-            {project.category ?? 'Uncategorized'}
-            {project.location ? ` · ${project.location}` : ''}
-            {project.quote_number ? (
-              <>
-                {' · Quote '}
-                {project.quote_id ? (
-                  <Link
-                    href={`/quotes/${project.quote_id}/edit`}
-                    className="font-medium text-brand-green-dark underline underline-offset-2 hover:text-brand-ink"
-                  >
-                    {project.quote_number}
-                  </Link>
-                ) : (
-                  project.quote_number
-                )}
-              </>
-            ) : (
-              ''
-            )}
+        <div className="card p-5">
+          <h2 className="brand-heading text-sm text-brand-gray">Dates</h2>
+          <p className="mb-4 mt-0.5 text-xs text-brand-gray">
+            What was planned, what the phases now say, and what the job is answerable to
           </p>
-          {project.site_address && (
-            <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                project.site_address
-              )}`}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1 block text-sm font-medium text-brand-green-dark hover:underline"
-              title="Directions to the job site"
-            >
-              {project.site_address}
-            </a>
-          )}
-        </div>
-        <ProjectHeaderActions project={project} />
-      </div>
 
-      {/* Summary strip */}
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-7">
-        <Stat label="Contract Value" value={money(project.value)} />
-        <Stat label="Hours Logged" value={`${hours.toFixed(1)}h`} />
-        <Stat label="Start" value={shortDate(project.start_date)} />
-        <Stat label="End" value={shortDate(project.end_date)} />
-        <Stat
-          label="Projected Finish"
-          value={shortDate(projectedFinish)}
-          alert={
-            !!(
-              projectedFinish &&
-              ((project.due_date && projectedFinish > project.due_date) ||
-                (project.hard_finish_date && projectedFinish > project.hard_finish_date))
-            )
-          }
-        />
-        <Stat label="Due" value={shortDate(project.due_date)} />
-        <Stat
-          label="Must Finish By"
-          value={shortDate(project.hard_finish_date)}
-          alert={
-            !!(
-              projectedFinish &&
-              project.hard_finish_date &&
-              projectedFinish > project.hard_finish_date
-            )
-          }
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Left: status + notes */}
-        <div className="space-y-6 lg:col-span-2">
-          <div className="card p-5">
-            <h2 className="brand-heading mb-4 text-sm text-brand-gray">Status &amp; Progress</h2>
-            <StatusProgress
-              id={project.id}
-              status={project.status}
-              progress={project.progress}
+          <div className="space-y-4">
+            <DateRow
+              label="Planned"
+              detail="Entered by hand for the work"
+              items={[
+                { label: 'Start', value: shortDate(project.start_date) },
+                { label: 'End', value: shortDate(project.end_date) },
+              ]}
+            />
+            <DateRow
+              label="Projected finish"
+              detail={
+                tasks.length === 0
+                  ? 'No phases scheduled yet — nothing to project from'
+                  : `Computed from ${tasks.length} phase${tasks.length === 1 ? '' : 's'}, dependency chains resolved`
+              }
+              items={[{ label: 'Finish', value: shortDate(projectedFinish), alert: pastDue || pastHard }]}
+            />
+            <DateRow
+              label="Answerable to"
+              detail="The target, and the date that can't move"
+              items={[
+                { label: 'Due', value: shortDate(project.due_date), alert: pastDue },
+                {
+                  label: 'Must finish by',
+                  value: shortDate(project.hard_finish_date),
+                  alert: pastHard,
+                },
+              ]}
             />
           </div>
 
-          <ScheduleSection
-            project={{
-              id: project.id,
-              name: project.name,
-              customer: project.customer,
-              due_date: project.due_date,
-              hard_finish_date: project.hard_finish_date,
-            }}
-            tasks={scheduleTasks}
-            subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
-            holidays={holidayDays}
-            published={
-              publication
-                ? {
-                    version: publication.version,
-                    published_at: publication.published_at,
-                    published_by_name: publication.published_by_name ?? null,
-                    changeCount: scheduleChanges.length,
-                  }
-                : null
-            }
-            changes={scheduleChanges}
-            canUnpublish={user.role === 'admin'}
-          />
-
-          <CrewNotesSection projectId={project.id} notes={crewNotes} />
-
-          {canBill && (
-            <BillingSection
-              projectId={project.id}
-              summary={billing}
-              holdReason={project.billing_hold_reason}
-              closedAt={project.billing_closed_at}
-              closedByName={closedByName}
-            />
+          {pastHard && (
+            <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+              The planned work runs past the date this job must be finished by.
+            </p>
           )}
-
-          <InvoiceSection project={project} invoices={invoices} />
-
-          <NotesSection projectId={project.id} notes={notes} currentUserId={user.id} />
+          {pastDue && !pastHard && (
+            <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700">
+              The planned work runs past the due date.
+            </p>
+          )}
         </div>
+      </div>
 
-        {/* Right: time summary + files */}
-        <div className="space-y-6">
-          <ProjectTime entries={timeEntries} totalHours={hours} />
-          <ProjectFiles projectId={project.id} files={files} />
+      <div className="space-y-6">
+        <div className="card p-5">
+          <h2 className="brand-heading mb-1 text-sm text-brand-gray">Elsewhere on this job</h2>
+          <p className="mb-4 text-xs text-brand-gray">Each opens its own tab</p>
+          <ul className="divide-y divide-surface-line">
+            <TabLink
+              href={`/projects/${id}/schedule`}
+              label="Schedule"
+              value={
+                counts.phases === 0
+                  ? 'Not planned yet'
+                  : `${counts.phases} phase${counts.phases === 1 ? '' : 's'}`
+              }
+            />
+            {billing && (
+              <TabLink
+                href={`/projects/${id}/billing`}
+                label="Billing"
+                value={
+                  billing.count === 0
+                    ? BILLING_STAGE_LABELS[billing.stage]
+                    : `${money(billing.outstanding)} outstanding`
+                }
+                badge={<BillingStageBadge stage={billing.stage} />}
+              />
+            )}
+            <TabLink
+              href={`/projects/${id}/time`}
+              label="Time"
+              value={`${hours.toFixed(1)}h logged${
+                counts.timeEntries ? ` · ${counts.timeEntries} entries` : ''
+              }`}
+            />
+            <TabLink
+              href={`/projects/${id}/notes`}
+              label="Notes"
+              value={`${counts.notes} internal · ${counts.crewNotes} for the crew`}
+            />
+            <TabLink
+              href={`/projects/${id}/files`}
+              label="Files"
+              value={
+                counts.files === 0
+                  ? 'None attached'
+                  : `${counts.files} file${counts.files === 1 ? '' : 's'}`
+              }
+            />
+          </ul>
         </div>
       </div>
     </div>
   );
 }
 
-function Stat({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
+/** One labelled group of dates, with what kind of date it is spelled out. */
+function DateRow({
+  label,
+  detail,
+  items,
+}: {
+  label: string;
+  detail: string;
+  items: { label: string; value: string; alert?: boolean }[];
+}) {
   return (
-    <div className="card p-4">
+    <div className="rounded-lg border border-surface-line p-3">
       <p className="text-xs font-semibold uppercase tracking-wide text-brand-gray">{label}</p>
-      <p className={`mt-1 text-lg font-bold ${alert ? 'text-amber-700' : 'text-brand-ink'}`}>
-        {value}
-      </p>
+      <p className="mt-0.5 text-xs text-brand-gray">{detail}</p>
+      <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
+        {items.map((it) => (
+          <div key={it.label}>
+            <p className="text-xs text-brand-gray">{it.label}</p>
+            <p
+              className={`tnum text-base font-bold ${
+                it.alert ? 'text-amber-700' : 'text-brand-ink'
+              }`}
+            >
+              {it.value}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
+  );
+}
+
+function TabLink({
+  href,
+  label,
+  value,
+  badge,
+}: {
+  href: string;
+  label: string;
+  value: string;
+  badge?: React.ReactNode;
+}) {
+  return (
+    <li>
+      <Link
+        href={href}
+        className="flex items-center justify-between gap-3 py-2.5 text-sm transition hover:text-brand-green-dark"
+      >
+        <span className="font-medium text-brand-ink">{label}</span>
+        <span className="flex items-center gap-2 text-right text-xs text-brand-gray">
+          {badge}
+          {value}
+        </span>
+      </Link>
+    </li>
   );
 }

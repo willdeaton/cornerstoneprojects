@@ -20,7 +20,7 @@ async function requireBiller() {
 /** Every view a billing change can show up in. */
 function revalidateBilling(projectId: number) {
   revalidatePath('/billing');
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}`, 'layout');
   revalidatePath('/projects');
 }
 

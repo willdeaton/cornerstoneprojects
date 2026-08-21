@@ -145,7 +145,7 @@ async function touchSchedule(projectId: number, userId: number | null) {
 /** Refresh every view that renders schedule data for a job. */
 function revalidateSchedule(projectId?: number) {
   revalidatePath('/schedule');
-  if (projectId) revalidatePath(`/projects/${projectId}`);
+  if (projectId) revalidatePath(`/projects/${projectId}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
 }
