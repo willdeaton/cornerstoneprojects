@@ -38,6 +38,8 @@ import {
   deleteSubcontractor,
   addHoliday,
   deleteHoliday,
+  addWarehouseDays,
+  removeWarehouseDay,
   type CrewDayInput,
   type DayTimeInput,
 } from '@/lib/schedule-data';
@@ -660,6 +662,64 @@ export async function unassignCrewDayAction(input: CrewDayFields): Promise<Actio
   return { ok: true };
 }
 
+/* ------------------------------------------------------- Warehouse days */
+
+/** Putting somebody in the warehouse, or taking them back out. */
+export interface WarehouseDaysFields {
+  user_id: number;
+  /** The days to book; anything that isn't a date is dropped. */
+  days: string[];
+}
+
+/** Days as stored: real dates, no duplicates, in order. */
+function cleanDays(days: string[] | undefined): string[] {
+  return [...new Set(days ?? [])].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+}
+
+/**
+ * Put one person in the warehouse for a run of days.
+ *
+ * There is nothing here to check a day against. The warehouse is standing work
+ * — no window, no crew budget, no dependency chain — which is exactly why it's
+ * a card that is always there rather than a phase of a job: any day is a
+ * legitimate day to be in the warehouse, weekends included, and it can never
+ * be over-staffed. Days somebody already has are skipped rather than failing
+ * the run.
+ *
+ * Warehouse days are not a job's dates, so nothing here touches a job's
+ * publish state: there is no customer commitment to baseline and no crew to
+ * re-email about a phase that moved.
+ */
+export async function bookWarehouseDaysAction(
+  input: WarehouseDaysFields
+): Promise<ActionResult> {
+  await requireManager();
+  if (!Number.isInteger(input.user_id) || input.user_id <= 0) {
+    return { ok: false, error: 'Pick somebody to put in the warehouse.' };
+  }
+  const days = cleanDays(input.days);
+  if (days.length === 0) return { ok: false, error: 'Pick a day.' };
+
+  const booked = await addWarehouseDays(input.user_id, days);
+  revalidateSchedule();
+  if (booked === 0) {
+    return { ok: false, error: 'They were already in the warehouse on every one of those days.' };
+  }
+  return { ok: true };
+}
+
+/** Take one person out of the warehouse for the given days. */
+export async function unbookWarehouseDaysAction(
+  input: WarehouseDaysFields
+): Promise<ActionResult> {
+  await requireManager();
+  for (const day of cleanDays(input.days)) {
+    await removeWarehouseDay(input.user_id, day);
+  }
+  revalidateSchedule();
+  return { ok: true };
+}
+
 /* -------------------------------------------------------- Crew job cards */
 
 /**
@@ -1105,6 +1165,18 @@ export async function saveScheduleDraftAction(edits: DraftEdit[]): Promise<Draft
         applied++;
         if (edit.taskId < 0 && res.id) ids[edit.taskId] = res.id;
       }
+      continue;
+    }
+
+    // The warehouse card belongs to no job and no phase, so its bookings are
+    // replayed before anything tries to resolve a task id for them.
+    if (edit.kind === 'warehouse-book' || edit.kind === 'warehouse-unbook') {
+      const res =
+        edit.kind === 'warehouse-book'
+          ? await bookWarehouseDaysAction({ user_id: edit.userId, days: edit.days })
+          : await unbookWarehouseDaysAction({ user_id: edit.userId, days: edit.days });
+      if (res.ok) applied++;
+      else fail(res.error ?? 'Could not save those warehouse days.');
       continue;
     }
 

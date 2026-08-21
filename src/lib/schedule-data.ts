@@ -11,6 +11,7 @@ import type {
   ScheduleTaskRow,
   Subcontractor,
   TaskStatus,
+  WarehouseDay,
 } from './types';
 import type { TaskInput, WorkCalendar } from './schedule-math';
 
@@ -561,6 +562,65 @@ export async function listAssigneeContacts(): Promise<AssigneeContact[]> {
      SELECT 'sub:' || id AS key, name, email
        FROM subcontractors WHERE active = TRUE`
   );
+}
+
+/* ------------------------------------------------------- Warehouse days */
+
+/*
+ * The standing warehouse card. Job phases are staffed against a window and a
+ * crew budget; the warehouse has neither, so its bookings are their own rows
+ * and their own queries rather than a phase pretending to run forever.
+ */
+
+/** Everyone in the warehouse, optionally narrowed to a range or one person. */
+export async function listWarehouseDays(
+  opts: { from?: string; to?: string; userId?: number } = {}
+): Promise<WarehouseDay[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.from) {
+    params.push(opts.from);
+    where.push(`w.day >= $${params.length}`);
+  }
+  if (opts.to) {
+    params.push(opts.to);
+    where.push(`w.day <= $${params.length}`);
+  }
+  if (opts.userId != null) {
+    params.push(opts.userId);
+    where.push(`w.user_id = $${params.length}`);
+  }
+  return q<WarehouseDay>(
+    `SELECT w.id, w.day, w.user_id, u.name, u.role AS detail
+       FROM warehouse_days w
+       JOIN users u ON u.id = w.user_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY w.day, u.name`,
+    params
+  );
+}
+
+/**
+ * Put one person in the warehouse for a run of days. Days they already have
+ * are left alone rather than failing the run — the same forgiveness a phase's
+ * span booking gives — and the number that landed comes back so the caller can
+ * say so.
+ */
+export async function addWarehouseDays(userId: number, days: string[]): Promise<number> {
+  if (days.length === 0) return 0;
+  const rows = await q<{ id: number }>(
+    `INSERT INTO warehouse_days (user_id, day)
+     SELECT $1, d::date FROM unnest($2::text[]) AS d
+     ON CONFLICT (day, user_id) DO NOTHING
+     RETURNING id`,
+    [userId, days]
+  );
+  return rows.length;
+}
+
+/** Take one person out of the warehouse for one day. */
+export async function removeWarehouseDay(userId: number, day: string): Promise<void> {
+  await q('DELETE FROM warehouse_days WHERE user_id = $1 AND day = $2', [userId, day]);
 }
 
 /* ------------------------------------------------------------- Holidays */

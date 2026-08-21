@@ -100,6 +100,21 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     late inspection), the notes they read before turning up, and who is booked
     on each day. These live here rather than on the timeline because none of
     them make sense without the days in front of you.
+  - **The Warehouse card** — a card that is always there, beside the "Work to
+    staff" heading rather than filed under a week, because warehouse work
+    doesn't start in one. Somebody has to load out, take the delivery and put
+    the stock away whatever is on site, so the card takes any day of any of our
+    own people and never fills up: no customer, no phases, no crew budget. It
+    is deliberately not a job — a project invented to hold it would land on the
+    billing desk and in the dashboard's counts. Book it exactly like a phase:
+    pick it and click days, drag it onto a day, drag it onto a name for every
+    working day on screen, or drag sideways along a row. Subs never appear on
+    it — they're contracted to a job's phase on the timeline. A warehouse day
+    alongside a job isn't counted as a double-booking (loading out in the
+    morning and driving to site after is an ordinary day), it carries no start
+    time or phase notes of its own, and it isn't part of publishing: there are
+    no customer dates to baseline, and the employee sees it on their own week
+    as soon as it's saved.
   - **Every job on the board** — jobs with nothing scheduled are listed too,
     with their status, so it's obvious which ones haven't been planned yet.
     Expand a job for its phases; collapsed, it still shows the stretch its work
@@ -147,7 +162,8 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     it to finish, so a sub can work alongside the crew ahead of them.
   - **My Schedule** — employees get their own week: one card per day they're
     booked, showing the start time, the job, the address, the phase notes and
-    the crew notes, with arrows to step through the weeks.
+    the crew notes, with arrows to step through the weeks. A day in the
+    warehouse shows the same way, with no address to drive to.
 - **Time Clock** — crew clock in/out of jobs, a live timer, weekly hours, "my
   recent time," and a live "on the clock now" panel.
 - **Users & Auth** — email/password login, sign out, and user management

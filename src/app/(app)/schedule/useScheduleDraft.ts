@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { applyDraft, type DraftEdit, type NewDraftEdit } from '@/lib/schedule-draft';
+import {
+  applyDraft,
+  applyWarehouseDraft,
+  type DraftEdit,
+  type NewDraftEdit,
+} from '@/lib/schedule-draft';
 import { saveScheduleDraftAction } from '@/app/actions/schedule';
-import type { ScheduleTaskRow } from '@/lib/types';
+import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 
 /** How often an untouched draft writes itself out. */
 export const AUTOSAVE_MS = 10_000;
@@ -13,6 +18,8 @@ export const AUTOSAVE_MS = 10_000;
 export interface ScheduleDraft {
   /** The server's rows with every pending edit applied — what the views draw. */
   tasks: ScheduleTaskRow[];
+  /** The standing warehouse card's days, likewise with pending bookings applied. */
+  warehouse: WarehouseDay[];
   /** Edits made and not yet written. */
   edits: DraftEdit[];
   saving: boolean;
@@ -50,7 +57,8 @@ export interface ScheduleDraft {
  */
 export function useScheduleDraft(
   serverTasks: ScheduleTaskRow[],
-  holidays: string[]
+  holidays: string[],
+  serverWarehouse: WarehouseDay[] = []
 ): ScheduleDraft {
   const router = useRouter();
   const [edits, setEdits] = useState<DraftEdit[]>([]);
@@ -75,6 +83,11 @@ export function useScheduleDraft(
     [serverTasks, settling, edits, holidays]
   );
 
+  const warehouse = useMemo(
+    () => applyWarehouseDraft(serverWarehouse, [...settling, ...edits]),
+    [serverWarehouse, settling, edits]
+  );
+
   const queue = useCallback((edit: NewDraftEdit) => {
     setError(null);
     setEdits((prev) => [...prev, { ...edit, editId: nextEditId.current++ } as DraftEdit]);
@@ -83,7 +96,7 @@ export function useScheduleDraft(
   const newTaskId = useCallback(() => nextTaskId.current--, []);
 
   const dropTask = useCallback((taskId: number) => {
-    setEdits((prev) => prev.filter((e) => e.taskId !== taskId));
+    setEdits((prev) => prev.filter((e) => !('taskId' in e) || e.taskId !== taskId));
   }, []);
 
   const save = useCallback(async (): Promise<boolean> => {
@@ -162,6 +175,7 @@ export function useScheduleDraft(
 
   return {
     tasks,
+    warehouse,
     edits,
     saving,
     savedAt,

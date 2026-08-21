@@ -19,7 +19,7 @@ import {
   weekStart,
   type AssigneeBooking,
 } from '@/lib/schedule-math';
-import type { CrewNote, ScheduleTaskRow } from '@/lib/types';
+import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
 
 /**
@@ -38,11 +38,14 @@ export function MySchedule({
   tasks,
   holidays,
   userId,
+  warehouse = [],
   crewNotes = [],
 }: {
   tasks: ScheduleTaskRow[];
   holidays: string[];
   userId: number;
+  /** The days this person is in the warehouse rather than out on a job. */
+  warehouse?: WarehouseDay[];
   /** Job-specific notes for the crew, for the jobs this person is booked on. */
   crewNotes?: CrewNote[];
 }) {
@@ -52,7 +55,14 @@ export function MySchedule({
   const weekDays = useMemo(() => eachDay(monday, addDays(monday, 6)), [monday]);
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
 
-  // Every day this person is booked, this week, with the phase behind it.
+  /** The days this week they're in the warehouse — standing work, not a job. */
+  const warehouseDays = useMemo(
+    () => new Set(warehouse.filter((w) => weekDays.includes(w.day)).map((w) => w.day)),
+    [warehouse, weekDays]
+  );
+
+  // Every day this person is booked, this week, with the phase behind it — plus
+  // the days they're in the warehouse, which belong to no job at all.
   const { byDay, jobIds, bookedDays } = useMemo(() => {
     const { windows } = computeSchedule(tasks, calendar);
     const mine = assigneeBookings(tasks, windows, calendar).filter(
@@ -63,13 +73,15 @@ export function MySchedule({
         b.end >= weekDays[0]
     );
     const indexed = bookingsByDay(mine).get(`user:${userId}`) ?? new Map<string, AssigneeBooking[]>();
-    const days = weekDays.filter((d) => (indexed.get(d)?.length ?? 0) > 0);
+    const days = weekDays.filter(
+      (d) => (indexed.get(d)?.length ?? 0) > 0 || warehouseDays.has(d)
+    );
     return {
       byDay: indexed,
       jobIds: new Set(mine.map((b) => b.projectId)),
       bookedDays: days,
     };
-  }, [tasks, calendar, userId, weekDays]);
+  }, [tasks, calendar, userId, weekDays, warehouseDays]);
 
   const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 
@@ -155,6 +167,22 @@ export function MySchedule({
                 </div>
 
                 <div className="space-y-4">
+                  {/* Standing warehouse work, above the jobs: it has no
+                      customer, no address and no start time of its own — it's
+                      simply where you are that day. */}
+                  {warehouseDays.has(day) && (
+                    <div className="min-w-0">
+                      <h4 className="font-semibold text-brand-ink">
+                        Warehouse
+                        <span className="font-normal text-brand-gray"> · standing work</span>
+                      </h4>
+                      <p className="mt-0.5 text-sm text-brand-gray">
+                        {items.length > 0
+                          ? 'In the warehouse as well as the job below — check with your manager which comes first.'
+                          : 'In the warehouse — normal hours unless your manager tells you otherwise.'}
+                      </p>
+                    </div>
+                  )}
                   {items.map((b) => {
                     const task = taskById.get(b.taskId);
                     // Who else is on this phase at all — not only today, so the
@@ -248,6 +276,7 @@ export function MySchedule({
 
       <p className="text-xs text-brand-gray">
         One card per day you&apos;re booked, with the time you start and the address to drive to.
+        A day in the warehouse shows the same way, without an address.
         Dates can shift as jobs move — check with your manager before making plans around them.
       </p>
     </div>
