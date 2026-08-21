@@ -1,8 +1,8 @@
 import { getUserName, listProjectInvoices } from '@/lib/data';
 import { billingSummary, tallyInvoices } from '@/lib/billing';
 import { loadProject, requireJobBiller } from '../job';
-import { BillingSection } from '../BillingSection';
-import { InvoiceSection } from '../InvoiceSection';
+import { BillingSection } from '@/components/billing/BillingSection';
+import { InvoiceSection } from '@/components/billing/InvoiceSection';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic';
  *
  * Both halves are on one tab because they are one concern: the stage, the aging
  * and the variance above are computed from the invoice rows below, so they can
- * never disagree. Admins and managers only — enforced here, not by hiding the
- * tab, and again in `updateInvoiceAction` so the ledger can't be posted to
- * either.
+ * never disagree. Both are the same components the billing desk opens inline,
+ * so a job's billing reads and behaves identically whichever way you came at
+ * it. Admins and managers only — enforced here, not by hiding the tab, and
+ * again in `updateInvoiceAction` so the ledger can't be posted to either.
  */
 export default async function ProjectBillingPage({
   params,

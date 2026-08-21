@@ -19,6 +19,10 @@ import { uploadInvoicePdfAction } from '@/app/actions/billing';
  * anything changes and commits the whole card at once. A PDF picked against a
  * brand-new row is uploaded straight after that row is saved, which is why the
  * save action hands back the id of every row it wrote.
+ *
+ * The same card serves the job's Billing tab and the billing desk, where it is
+ * rendered inline inside an opened row (`variant="inline"`) — one ledger, so
+ * billing is edited the same way wherever you happen to be standing.
  */
 
 /** Client-side row: mirrors a saved invoice, or has a null id when brand new. */
@@ -106,9 +110,15 @@ function comparable(rows: Row[]): string {
 export function InvoiceSection({
   project,
   invoices,
+  variant = 'card',
+  onSaved,
 }: {
   project: Project;
   invoices: ProjectInvoiceWithFile[];
+  /** `inline` drops the card chrome, for a ledger already inside a card. */
+  variant?: 'card' | 'inline';
+  /** Called after a save lands, for a caller holding its own copy of the rows. */
+  onSaved?: () => void;
 }) {
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>(() => toRows(invoices));
@@ -119,19 +129,35 @@ export function InvoiceSection({
   // Counter for keys on unsaved rows; negative so it can't collide with an id.
   const nextKey = useRef(-1);
 
-  const saved = comparable(toRows(invoices));
-  const current = comparable(rows);
-  const dirty = current !== saved || notes !== (project.invoice_notes ?? '');
+  /**
+   * The ledger as it last stood on the server, and the baseline "unsaved"
+   * is measured against. It is deliberately state rather than a value read
+   * straight off the props: the invoices can change underneath this card
+   * without anybody typing — marking a job billed or paid from the billing
+   * desk rewrites exactly these rows — and comparing local edits against
+   * freshly-arrived server rows would read that as unsaved work and put a
+   * Save bar over a card that is perfectly in step.
+   */
+  const [baseline, setBaseline] = useState(() => ({
+    rows: comparable(toRows(invoices)),
+    notes: project.invoice_notes ?? '',
+  }));
 
-  // Keep local state in sync if the project refreshes underneath us (e.g. after
-  // a save elsewhere) as long as the user isn't mid-edit.
+  const dirty = comparable(rows) !== baseline.rows || notes !== baseline.notes;
+
+  const incoming = comparable(toRows(invoices));
+  const incomingNotes = project.invoice_notes ?? '';
+
+  // Adopt what the server now has when it differs from the baseline — but never
+  // over the top of edits in progress, which stay until they're saved or cancelled.
   useEffect(() => {
-    if (!dirty) {
-      setRows(toRows(invoices));
-      setNotes(project.invoice_notes ?? '');
-    }
+    if (incoming === baseline.rows && incomingNotes === baseline.notes) return;
+    if (dirty) return;
+    setRows(toRows(invoices));
+    setNotes(incomingNotes);
+    setBaseline({ rows: incoming, notes: incomingNotes });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saved, project.invoice_notes]);
+  }, [incoming, incomingNotes]);
 
   // Auto-grow the notes textarea to fit its content.
   useEffect(() => {
@@ -212,40 +238,51 @@ export function InvoiceSection({
       // were new, and each attachment now settled — so the card reads as saved
       // and the next refresh can sync it from the server. A file that failed to
       // attach stays pending, so Save can be pressed again to retry it.
-      setRows(
-        keep.map((r, i) => {
-          const stuck = failed.has(i);
-          return {
-            ...r,
-            id: ids[i] ?? r.id,
-            // As the server stored it, so "$12,500.75" as typed stops reading
-            // as an unsaved change the moment it has been saved.
-            amount: amountText(parseAmount(r.amount)),
-            invoice_number: r.invoice_number.trim(),
-            po_number: r.po_number.trim(),
-            file: stuck ? r.file : null,
-            remove_pdf: false,
-            pdf_filename: stuck
-              ? r.pdf_filename
-              : r.file
-                ? r.file.name
-                : r.remove_pdf
-                  ? null
-                  : r.pdf_filename,
-            pdf_size: stuck ? r.pdf_size : r.file ? r.file.size : r.remove_pdf ? null : r.pdf_size,
-          };
-        })
-      );
+      const written = keep.map((r, i) => {
+        const stuck = failed.has(i);
+        return {
+          ...r,
+          id: ids[i] ?? r.id,
+          // As the server stored it, so "$12,500.75" as typed stops reading
+          // as an unsaved change the moment it has been saved.
+          amount: amountText(parseAmount(r.amount)),
+          invoice_number: r.invoice_number.trim(),
+          po_number: r.po_number.trim(),
+          file: stuck ? r.file : null,
+          remove_pdf: false,
+          pdf_filename: stuck
+            ? r.pdf_filename
+            : r.file
+              ? r.file.name
+              : r.remove_pdf
+                ? null
+                : r.pdf_filename,
+          pdf_size: stuck ? r.pdf_size : r.file ? r.file.size : r.remove_pdf ? null : r.pdf_size,
+        };
+      });
+      setRows(written);
+      // The baseline is what the *server* now holds, which is these rows minus
+      // any file that didn't make it up. So a stuck attachment keeps the card
+      // dirty and the Save button available to retry it, while everything that
+      // did save reads as saved straight away rather than at the next refresh.
+      setBaseline({
+        rows: comparable(written.map((r) => ({ ...r, file: null }))),
+        notes,
+      });
       if (failed.size) {
         setError(`Saved, but the file didn't attach — ${[...failed.values()].join('; ')}`);
       }
+      onSaved?.();
       router.refresh();
     });
   }
 
   function cancel() {
+    // Dropping the edits also picks up anything the server has changed since,
+    // so Cancel always leaves the card showing what is actually stored.
     setRows(toRows(invoices));
-    setNotes(project.invoice_notes ?? '');
+    setNotes(incomingNotes);
+    setBaseline({ rows: incoming, notes: incomingNotes });
     setError(null);
   }
 
@@ -258,7 +295,7 @@ export function InvoiceSection({
   const leftToBill = project.value - billed;
 
   return (
-    <div className="card p-5">
+    <div className={variant === 'inline' ? '' : 'card p-5'}>
       <div className="mb-4 flex items-center justify-between">
         <h2 className="brand-heading text-sm text-brand-gray">
           Invoicing{' '}

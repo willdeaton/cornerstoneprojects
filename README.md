@@ -18,16 +18,27 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   Completed), progress, value, hours logged, and due dates.
 - **Project detail** — editable status & progress, **job notes**, and a
   per-job **time clock**.
-- **Billing** — the desk between "the work is finished" and "the money is in".
-  Marking a job **Completed** stamps its completion and puts it on the billing
-  queue; from there it moves itself along as the invoices on the job are ticked
-  **Sent** and **Paid**.
+- **Billing** — the desk between "the work is finished" and "the money is in",
+  and a page that stands on its own: **opening a job's row bills it right
+  there** — its invoice ledger, its stage decisions, all of it inline — so a
+  pass down the queue never leaves the page. Marking a job **Completed** stamps
+  its completion and puts it on the billing queue; from there it moves itself
+  along as the invoices are ticked **Sent** and **Paid**.
   - **One row per invoice**, carrying everything the desk has to answer for:
     the invoice number, the customer's **PO number**, the **amount billed**,
     the **date it was sent**, whether it has been paid, and the **invoice PDF**
     that went out. Ticking Sent fills in today's date; typing a date is the
     other way of saying it went out. The PDF lives behind the billing gate
     rather than in the job's Files tab — an invoice is A/R paperwork.
+  - **Mark billed / mark paid, with no invoicing details** — plenty of work is
+    invoiced and collected outside this app, and a queue that demands an invoice
+    number, a PO and a send date before a finished job can leave it is a queue
+    people stop updating. One click marks every invoice on the job sent, or sent
+    and paid; a job with nothing raised against it gets one invoice for its
+    contract value, with no number, PO or PDF. It writes an ordinary invoice row
+    rather than a special "billed anyway" flag, so every figure and every stage
+    follows from it exactly as if it had been typed — and the ledger is where it
+    gets a number later, or gets undone.
   - **Left to bill** — the contract value less what has actually gone out,
     shown on the invoice card as you type, on the job's billing card, and per
     job and desk-wide on the Billing page. An invoice raised but not yet sent
@@ -56,9 +67,10 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     balance outstanding (a write-off has to be able to leave the queue) and the
     page says so rather than blocking it.
   - Admins and managers only — what every customer owes is not an employee's view,
-    which is the same line Settings draws. Nothing is edited on the Billing page
-    itself: it's a queue that points at the job to work on next, and the
-    invoices are edited on the job.
+    which is the same line Settings draws. The desk and the job's Billing tab
+    render the same components against the same actions, so billing reads and
+    behaves identically whichever way you came at it; the job page is still
+    there for everything that isn't billing.
 - **Schedule** — scheduling is two steps, in two views over the same data.
   **Job Timeline** plans the *work*: each job is a set of phases carrying a
   duration in working days, who does it — our own crew as a headcount, or a
