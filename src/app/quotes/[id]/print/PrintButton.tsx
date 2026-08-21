@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { BackToList } from '@/components/ListMemory';
 
 export function PrintToolbar({ editHref, fileName }: { editHref: string; fileName: string }) {
   const [downloading, setDownloading] = useState(false);
@@ -31,9 +32,9 @@ export function PrintToolbar({ editHref, fileName }: { editHref: string; fileNam
 
   return (
     <div className="no-print sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-black/10 bg-white px-4 py-3">
-      <Link href="/quotes" className="btn-secondary">
+      <BackToList listKey="quotes" fallback="/quotes" className="btn-secondary">
         ← Back to Quotes
-      </Link>
+      </BackToList>
       <div className="flex gap-2">
         <Link href={editHref} className="btn-secondary">
           Edit

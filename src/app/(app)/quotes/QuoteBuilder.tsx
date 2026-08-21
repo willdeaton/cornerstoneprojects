@@ -10,6 +10,7 @@ import { Combobox } from '@/components/Combobox';
 import { RichTextEditor } from '@/components/RichTextEditor';
 import { UnitSelect } from '@/components/UnitSelect';
 import { CategorySelect } from '@/components/CategorySelect';
+import { useListHref } from '@/components/ListMemory';
 import type {
   LineItemInput,
   QuoteDocInput,
@@ -311,6 +312,9 @@ export function QuoteBuilder({
   initialSaved?: boolean;
 }) {
   const router = useRouter();
+  // Closing the builder returns to the quotes list the user came from — same
+  // tab, same filters — not the default Open tab.
+  const listHref = useListHref('quotes', '/quotes');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Collapsible cards. Line Items — the heart of the quote — starts open; the
@@ -889,8 +893,8 @@ export function QuoteBuilder({
     setSaving(true);
     try {
       const res = quote
-        ? await updateQuoteDocAction(quote.id, payload, mode)
-        : await createQuoteDocAction(payload, mode);
+        ? await updateQuoteDocAction(quote.id, payload, mode, listHref)
+        : await createQuoteDocAction(payload, mode, listHref);
       if (res?.error) {
         setError(res.error);
         setSaving(false);
@@ -931,7 +935,7 @@ export function QuoteBuilder({
       setClosePrompt(true);
       return;
     }
-    router.push('/quotes');
+    router.push(listHref);
   }
 
   return (
@@ -1575,7 +1579,7 @@ export function QuoteBuilder({
                 className="btn-secondary text-red-600"
                 onClick={() => {
                   setClosePrompt(false);
-                  router.push('/quotes');
+                  router.push(listHref);
                 }}
                 disabled={saving}
               >
