@@ -12,6 +12,8 @@ import type {
   TimeEntry,
   ProjectFile,
   ProjectInvoice,
+  ProjectInvoiceWithFile,
+  InvoiceFile,
   QuoteFile,
   QuoteStatus,
   ProjectStatus,
@@ -680,9 +682,18 @@ export async function deleteProject(id: number): Promise<void> {
 
 /* ----------------------------------------------------- Project invoices */
 
-export async function listProjectInvoices(projectId: number): Promise<ProjectInvoice[]> {
-  return q<ProjectInvoice>(
-    'SELECT * FROM project_invoices WHERE project_id = $1 ORDER BY position, id',
+/**
+ * One project's invoices, each carrying what is known about its attached PDF —
+ * the name and the size, never the bytes, so a listing stays small however
+ * many megabytes of paperwork hang off it.
+ */
+export async function listProjectInvoices(projectId: number): Promise<ProjectInvoiceWithFile[]> {
+  return q<ProjectInvoiceWithFile>(
+    `SELECT i.*, f.filename AS pdf_filename, f.size AS pdf_size
+       FROM project_invoices i
+       LEFT JOIN invoice_files f ON f.invoice_id = i.id
+      WHERE i.project_id = $1
+      ORDER BY i.position, i.id`,
     [projectId]
   );
 }
@@ -691,20 +702,25 @@ export async function listProjectInvoices(projectId: number): Promise<ProjectInv
 export async function addProjectInvoice(inv: {
   project_id: number;
   invoice_number?: string | null;
+  po_number?: string | null;
   amount?: number;
   billed?: boolean;
+  sent_on?: string | null;
   paid?: boolean;
 }): Promise<number> {
   const row = await one<{ id: number }>(
-    `INSERT INTO project_invoices (project_id, invoice_number, amount, billed, paid, position)
-     VALUES ($1,$2,$3,$4,$5,
+    `INSERT INTO project_invoices
+       (project_id, invoice_number, po_number, amount, billed, sent_on, paid, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,
        (SELECT COALESCE(MAX(position), 0) + 1 FROM project_invoices WHERE project_id = $1))
      RETURNING id`,
     [
       inv.project_id,
       inv.invoice_number ?? null,
+      inv.po_number ?? null,
       inv.amount ?? 0,
       inv.billed ?? false,
+      inv.sent_on ?? null,
       inv.paid ?? false,
     ]
   );
@@ -713,7 +729,12 @@ export async function addProjectInvoice(inv: {
 
 export async function updateProjectInvoice(
   id: number,
-  fields: Partial<Pick<ProjectInvoice, 'invoice_number' | 'amount' | 'billed' | 'paid'>>
+  fields: Partial<
+    Pick<
+      ProjectInvoice,
+      'invoice_number' | 'po_number' | 'amount' | 'billed' | 'sent_on' | 'paid'
+    >
+  >
 ): Promise<void> {
   const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
   if (entries.length === 0) return;
@@ -732,6 +753,76 @@ export async function setProjectInvoicePosition(id: number, position: number): P
 
 export async function deleteProjectInvoice(id: number): Promise<void> {
   await q('DELETE FROM project_invoices WHERE id = $1', [id]);
+}
+
+/* ------------------------------------------------------ Invoice PDFs */
+
+/**
+ * Attach the invoice PDF, replacing whatever was there — one invoice has one
+ * invoice document, and re-uploading is how you correct it. The bytes go in as
+ * a base64 data URL, the same way project files are stored.
+ */
+export async function setInvoiceFile(file: {
+  invoice_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  data: string;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+}): Promise<void> {
+  await q(
+    `INSERT INTO invoice_files
+       (invoice_id, filename, mime, size, data, uploaded_by, uploader_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (invoice_id) DO UPDATE SET
+       filename = EXCLUDED.filename,
+       mime = EXCLUDED.mime,
+       size = EXCLUDED.size,
+       data = EXCLUDED.data,
+       uploaded_by = EXCLUDED.uploaded_by,
+       uploader_name = EXCLUDED.uploader_name,
+       created_at = now()`,
+    [
+      file.invoice_id,
+      file.filename,
+      file.mime,
+      file.size,
+      file.data,
+      file.uploaded_by,
+      file.uploader_name,
+    ]
+  );
+}
+
+/**
+ * The attached PDF with its bytes, plus the project it hangs off so the route
+ * serving it can authorize against the job rather than trusting the id.
+ */
+export async function getInvoiceFile(invoiceId: number): Promise<InvoiceFile | undefined> {
+  return one<InvoiceFile>(
+    `SELECT f.*, i.project_id
+       FROM invoice_files f
+       JOIN project_invoices i ON i.id = f.invoice_id
+      WHERE f.invoice_id = $1`,
+    [invoiceId]
+  );
+}
+
+export async function deleteInvoiceFile(invoiceId: number): Promise<void> {
+  await q('DELETE FROM invoice_files WHERE invoice_id = $1', [invoiceId]);
+}
+
+/** Whether an invoice belongs to a given job — the check before writing to it. */
+export async function invoiceBelongsToProject(
+  invoiceId: number,
+  projectId: number
+): Promise<boolean> {
+  const row = await one<{ id: number }>(
+    'SELECT id FROM project_invoices WHERE id = $1 AND project_id = $2',
+    [invoiceId, projectId]
+  );
+  return !!row;
 }
 
 /* -------------------------------------------------------- Project files */
@@ -1739,10 +1830,15 @@ export async function getBackupData(from: string, to: string): Promise<BackupDat
     [from, to]
   );
   const projectIds = projects.map((p) => p.id);
+  // Invoices carry their PDF's name and size (not its bytes) so the workbook
+  // can say which invoice a document in the zip belongs to.
   const invoices = projectIds.length
-    ? await q<ProjectInvoice>(
-        `SELECT * FROM project_invoices WHERE project_id = ANY($1::int[])
-          ORDER BY project_id, position, id`,
+    ? await q<ProjectInvoiceWithFile>(
+        `SELECT i.*, f.filename AS pdf_filename, f.size AS pdf_size
+           FROM project_invoices i
+           LEFT JOIN invoice_files f ON f.invoice_id = i.id
+          WHERE i.project_id = ANY($1::int[])
+          ORDER BY i.project_id, i.position, i.id`,
         [projectIds]
       )
     : [];

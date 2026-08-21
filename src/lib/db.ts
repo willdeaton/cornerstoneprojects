@@ -440,6 +440,46 @@ Your City, ST 00000',
     END $$;
   `);
 
+  /* ------------------------------------------------------------------
+   * What an invoice needs beyond a number and an amount: the customer's
+   * purchase-order number it bills against, the date it actually went out,
+   * and the PDF that was sent.
+   *
+   * `sent_on` does not replace `billed` — `billed` is what the pipeline reads
+   * and it stays the flag. The date is the paperwork answer to "when did this
+   * go out", kept in step with the flag by the invoice card and the action
+   * behind it (a date implies sent; clearing sent clears the date). Invoices
+   * billed before the column existed keep a NULL date rather than a guessed
+   * one — an invented send date is worse than an unknown one.
+   * ------------------------------------------------------------------ */
+  await pool.query(`
+    ALTER TABLE project_invoices ADD COLUMN IF NOT EXISTS po_number TEXT;
+    ALTER TABLE project_invoices ADD COLUMN IF NOT EXISTS sent_on   DATE;
+  `);
+
+  /* ------------------------------------------------------------------
+   * The invoice PDF: one per invoice, so the row is keyed by the invoice
+   * itself and a re-upload replaces what was there. The bytes are stored
+   * inline as a base64 data URL, exactly like project_files.
+   *
+   * It is deliberately NOT a project_files row: an invoice is A/R paperwork
+   * and only the billing roles may read it, which is the gate on
+   * /api/invoices/[id]/pdf. The Files tab is a wider audience than the
+   * Billing tab, and this way it stays that way.
+   * ------------------------------------------------------------------ */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_files (
+      invoice_id    INTEGER PRIMARY KEY REFERENCES project_invoices(id) ON DELETE CASCADE,
+      filename      TEXT NOT NULL,
+      mime          TEXT,
+      size          INTEGER NOT NULL DEFAULT 0,
+      data          TEXT NOT NULL,
+      uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploader_name TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
   /* ==================================================================
    * Billing workflow.
    *

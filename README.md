@@ -21,7 +21,17 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
 - **Billing** — the desk between "the work is finished" and "the money is in".
   Marking a job **Completed** stamps its completion and puts it on the billing
   queue; from there it moves itself along as the invoices on the job are ticked
-  **Billed** and **Paid**.
+  **Sent** and **Paid**.
+  - **One row per invoice**, carrying everything the desk has to answer for:
+    the invoice number, the customer's **PO number**, the **amount billed**,
+    the **date it was sent**, whether it has been paid, and the **invoice PDF**
+    that went out. Ticking Sent fills in today's date; typing a date is the
+    other way of saying it went out. The PDF lives behind the billing gate
+    rather than in the job's Files tab — an invoice is A/R paperwork.
+  - **Left to bill** — the contract value less what has actually gone out,
+    shown on the invoice card as you type, on the job's billing card, and per
+    job and desk-wide on the Billing page. An invoice raised but not yet sent
+    still counts as left to bill, which is the honest reading.
   - **The stage is derived, never stored** — it falls out of the job's status
     and its invoice rows, so there is no second thing to keep in step. Tick an
     invoice Paid on the project and the job leaves the outstanding queue by

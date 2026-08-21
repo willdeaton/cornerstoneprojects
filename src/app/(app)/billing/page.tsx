@@ -88,6 +88,12 @@ export default async function BillingPage({
     .reduce((t, r) => t + r.summary.outstanding, 0);
   const lateCount = rows.filter((r) => r.summary.urgency === 'late').length;
   const collected = rows.reduce((t, r) => t + r.summary.paid, 0);
+  // Contract value nobody has sent an invoice for yet, across every job still
+  // on the desk. Closed jobs are done being billed whatever their figures say,
+  // and an over-billed job contributes nothing rather than a negative.
+  const leftToBill = rows
+    .filter((r) => r.summary.stage !== 'closed')
+    .reduce((t, r) => t + Math.max(0, r.summary.leftToBill), 0);
 
   return (
     <div>
@@ -100,12 +106,18 @@ export default async function BillingPage({
         </Link>
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Ready to Bill"
           value={money(readyValue)}
           accent="amber"
           hint={`${readyCount} ${readyCount === 1 ? 'job' : 'jobs'} finished, nothing sent`}
+        />
+        <StatCard
+          label="Left to Bill"
+          value={money(leftToBill)}
+          accent="gray"
+          hint="Contract value not yet invoiced out"
         />
         <StatCard
           label="Awaiting Payment"
@@ -234,9 +246,14 @@ function BillingRow({ row }: { row: Row }) {
           </p>
         </div>
 
-        <dl className="tnum grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4 lg:shrink-0 lg:text-right">
+        <dl className="tnum grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-5 lg:shrink-0 lg:text-right">
           <Cell label="Contract" value={money(s.contract)} />
           <Cell label="Invoiced" value={money(s.invoiced)} />
+          <Cell
+            label="Left to Bill"
+            value={money(Math.max(0, s.leftToBill))}
+            alert={s.leftToBill > 0 && s.stage !== 'closed'}
+          />
           <Cell label="Paid" value={money(s.paid)} />
           <Cell
             label="Outstanding"

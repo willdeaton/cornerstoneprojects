@@ -231,12 +231,46 @@ export interface ProjectInvoice {
   id: number;
   project_id: number;
   invoice_number: string | null;
+  /** The customer's purchase order this invoice bills against. */
+  po_number: string | null;
   amount: number;
   billed: boolean;
+  /**
+   * The day the invoice actually went out (YYYY-MM-DD), when it is known.
+   * `billed` is still the flag the pipeline reads — this is the paperwork
+   * answer to "when did we send it", kept in step with the flag: a date
+   * implies sent, and clearing sent clears the date. NULL on an invoice that
+   * went out before the date was recorded, which is honest rather than guessed.
+   */
+  sent_on: string | null;
   paid: boolean;
   position: number;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * An invoice as the billing card reads it: the row plus what is known about
+ * its attached PDF, never the bytes. Both fields are NULL when nothing has
+ * been attached.
+ */
+export interface ProjectInvoiceWithFile extends ProjectInvoice {
+  pdf_filename: string | null;
+  pdf_size: number | null;
+}
+
+/** The invoice PDF itself — one per invoice, bytes and all. */
+export interface InvoiceFile {
+  invoice_id: number;
+  /** The invoice's project, carried along so the route can authorize on it. */
+  project_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  data: string;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+  created_at: string;
 }
 
 export interface ProjectFile {

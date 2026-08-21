@@ -29,6 +29,12 @@ function safeName(s: string): string {
   return s.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim() || 'file';
 }
 
+/** The name an invoice's PDF gets inside the zip — id-prefixed so two invoices
+ *  that were both scanned as "invoice.pdf" can't collide. */
+function invoicePdfName(invoiceId: number, filename: string): string {
+  return `${invoiceId}-${safeName(filename)}`;
+}
+
 /** Resolve once every <img> in the node has loaded (or errored) so html2canvas
  *  captures the logo rather than a blank box. */
 function waitForImages(el: HTMLElement): Promise<void> {
@@ -132,6 +138,7 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
         Completed: p.completed_at ?? '',
         'Billing Stage': BILLING_STAGE_LABELS[billing.stage],
         Invoiced: billing.invoiced,
+        'Left to Bill': Math.max(0, billing.leftToBill),
         Paid: billing.paid,
         Outstanding: billing.outstanding,
         'Billing Hold': p.billing_hold ? p.billing_hold_reason || 'Yes' : '',
@@ -148,9 +155,14 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
     data.invoices.map((inv) => ({
       Project: projectName.get(inv.project_id) ?? `#${inv.project_id}`,
       'Invoice #': inv.invoice_number ?? '',
+      'PO #': inv.po_number ?? '',
       Amount: inv.amount,
-      Billed: inv.billed ? 'Yes' : 'No',
+      Sent: inv.billed ? 'Yes' : 'No',
+      'Date Sent': inv.sent_on ?? '',
       Paid: inv.paid ? 'Yes' : 'No',
+      // Names the file in the zip's invoices/ folder, so a row in the sheet
+      // and the document it went out on can be matched up.
+      'Invoice PDF': inv.pdf_filename ? invoicePdfName(inv.id, inv.pdf_filename) : '',
       Created: inv.created_at,
     }))
   );
@@ -302,6 +314,20 @@ export async function runBackup(
       }
     } finally {
       document.body.removeChild(holder);
+    }
+  }
+
+  // The invoice PDFs — the paperwork behind the Invoices sheet, fetched one at
+  // a time for the same reason the project files are.
+  const withPdfs = data.invoices.filter((inv) => inv.pdf_filename);
+  if (withPdfs.length > 0) {
+    const invoiceFolder = zip.folder('invoices')!;
+    for (let i = 0; i < withPdfs.length; i++) {
+      const inv = withPdfs[i];
+      onProgress(`Adding invoice PDFs… (${i + 1} of ${withPdfs.length})`);
+      const pdfRes = await fetch(`/api/invoices/${inv.id}/pdf?download=1`);
+      if (!pdfRes.ok) continue; // skip one that can't be read rather than failing the backup
+      invoiceFolder.file(invoicePdfName(inv.id, inv.pdf_filename!), await pdfRes.blob());
     }
   }
 

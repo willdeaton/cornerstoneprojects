@@ -148,9 +148,20 @@ export function BillingSection({
 
       {/* The money, contract-first: what the job is worth, what has been
           raised against it, and what is still owed. */}
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+      {/* Five figures now, so the count follows the width: three across when
+          the card has the page, two when it's the narrow sidebar column. */}
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-2">
         <Figure label="Contract" value={money(summary.contract)} />
         <Figure label="Invoiced" value={money(summary.invoiced, { cents: true })} />
+        {/* Left to bill counts what has actually gone out, so an invoice
+            raised and not sent still reads as work left to bill. Clamped at
+            zero — an over-bill is called out in words below, not as a
+            negative figure here. */}
+        <Figure
+          label="Left to Bill"
+          value={money(Math.max(0, summary.leftToBill), { cents: true })}
+          strong={summary.leftToBill > 0 && summary.stage !== 'closed'}
+        />
         <Figure label="Paid" value={money(summary.paid, { cents: true })} />
         <Figure
           label="Outstanding"
@@ -186,7 +197,7 @@ export function BillingSection({
         {summary.unbilled > 0 && (
           <p className="text-amber-700">
             {money(summary.unbilled, { cents: true })} is on an invoice that hasn&apos;t gone out
-            yet — tick <strong>Billed</strong> below once it does.
+            yet — tick <strong>Sent</strong> on it once it does.
           </p>
         )}
 
@@ -205,7 +216,8 @@ export function BillingSection({
 
         {summary.count === 0 && !closed && (
           <p className="text-brand-gray">
-            No invoices raised yet. Add the first one in the Invoicing card below.
+            No invoices raised yet. Add the first one in the Invoicing card — its number, the
+            customer&apos;s PO, the amount and the PDF that went out.
           </p>
         )}
       </div>

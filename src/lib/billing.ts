@@ -129,6 +129,14 @@ export interface BillingSummary extends InvoiceTally {
   unbilled: number;
   /** Contract value no invoice covers yet; negative when over-billed. */
   uninvoiced: number;
+  /**
+   * What is still to bill: the contract value less what has actually gone out
+   * to the customer. Wider than `uninvoiced` on purpose — an invoice that has
+   * been raised but never sent is still work left to bill, so it counts here
+   * and not there. Negative once more has gone out than the contract is worth,
+   * which the views clamp for display and call out as an over-bill.
+   */
+  leftToBill: number;
   /** Days since the job completed, or null while it's still running. */
   ageDays: number | null;
   urgency: BillingUrgency;
@@ -170,6 +178,7 @@ export function billingSummary(
     outstanding: tally.billed - tally.paid,
     unbilled: tally.invoiced - tally.billed,
     uninvoiced: p.value - tally.invoiced,
+    leftToBill: p.value - tally.billed,
     ageDays,
     urgency: billingUrgency(stage, ageDays),
   };
