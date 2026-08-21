@@ -77,7 +77,7 @@ export function AppShell({
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
-  // "Time" groups the Time Clock + Timesheets pages. Workers only have the
+  // "Time" groups the Time Clock + Timesheets pages. Employees only have the
   // Time Clock, so for them it stays a plain link.
   const timeItems = canManageUsers
     ? TIME_GROUP.items
@@ -497,7 +497,6 @@ function UserCard({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
 const VIEW_AS_ROLES: { value: Role; label: string }[] = [
   { value: 'admin', label: 'Admin' },
   { value: 'manager', label: 'Manager' },
-  { value: 'worker', label: 'Worker' },
   { value: 'employee', label: 'Employee' },
 ];
 

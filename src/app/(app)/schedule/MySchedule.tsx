@@ -23,7 +23,7 @@ import type { CrewNote, ScheduleTaskRow } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
 
 /**
- * A worker's own schedule, one week at a time.
+ * An employee's own schedule, one week at a time.
  *
  * The week is the unit the crew actually works to, so this opens on the current
  * week and steps back and forward through them rather than showing a rolling

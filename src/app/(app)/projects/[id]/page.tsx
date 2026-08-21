@@ -55,7 +55,7 @@ export default async function ProjectDetail({ params }: { params: Promise<{ id: 
   const closedByName = project.billing_closed_by
     ? await getUserName(project.billing_closed_by)
     : null;
-  // Billing is an admin/manager view: the A/R on every job isn't a worker's
+  // Billing is an admin/manager view: the A/R on every job isn't an employee's
   // business, which is the same line Settings draws.
   const canBill = user.role === 'admin' || user.role === 'manager';
   const [scheduleTasks, holidays, subs, publication, scheduleChanges, crewNotes] =

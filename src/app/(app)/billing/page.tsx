@@ -48,7 +48,7 @@ export default async function BillingPage({
 }) {
   const me = await getCurrentUser();
   if (!me) redirect('/login');
-  // Same gate as Settings — what every customer owes us isn't a worker's view.
+  // Same gate as Settings — what every customer owes us isn't an employee's view.
   if (me.role !== 'admin' && me.role !== 'manager') redirect('/projects');
 
   const { stage } = await searchParams;

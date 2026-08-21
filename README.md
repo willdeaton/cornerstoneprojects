@@ -45,7 +45,7 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     a no-charge job closes with nothing raised at all. Closing is allowed with a
     balance outstanding (a write-off has to be able to leave the queue) and the
     page says so rather than blocking it.
-  - Admins and managers only — what every customer owes is not a worker's view,
+  - Admins and managers only — what every customer owes is not an employee's view,
     which is the same line Settings draws. Nothing is edited on the Billing page
     itself: it's a queue that points at the job to work on next, and the
     invoices are edited on the job.
@@ -145,21 +145,22 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **Overlapping phases** — a phase can start a set number of working days
     after the previous phase *starts* (start-to-start), instead of waiting for
     it to finish, so a sub can work alongside the crew ahead of them.
-  - **My Schedule** — workers get their own week: one card per day they're
+  - **My Schedule** — employees get their own week: one card per day they're
     booked, showing the start time, the job, the address, the phase notes and
     the crew notes, with arrows to step through the weeks.
 - **Time Clock** — crew clock in/out of jobs, a live timer, weekly hours, "my
   recent time," and a live "on the clock now" panel.
 - **Users & Auth** — email/password login, sign out, and user management
   (add users, set roles, reset passwords, deactivate). Roles: **admin**,
-  **manager**, **worker**. User management lives under **Settings → Users**.
+  **manager**, **employee** — an employee gets the time clock and their own
+  schedule, nothing else. User management lives under **Settings → Users**.
   Being scheduled is its own switch there — **Remove from scheduling** keeps
   somebody out of the crew week entirely (an estimator, an office manager,
   anyone who clocks in but isn't crew) without touching their access or their
   time. Days they are already booked on are left exactly where they are, and
   they still show in the crew week while those days stand.
 - **View as role** (admins only) — a "View as" switcher in the sidebar lets an
-  admin preview the app exactly as a **manager** or **worker** would see it
+  admin preview the app exactly as a **manager** or **employee** would see it
   (hidden nav, page redirects, and restricted actions all apply). An amber
   banner marks the preview; "Exit preview" or picking **Admin** returns to full
   access. Previewing only ever lowers access — it can never escalate.
@@ -185,11 +186,11 @@ disable, or `PGSSL=true` to force it).
 
 ### Default logins (change these!)
 
-| Role   | Email                    | Password         |
-| ------ | ------------------------ | ---------------- |
-| Admin  | wdeaton@dlomgroup.com    | `cornerstone2026`|
-| Worker | mike@dlomgroup.com       | `welcome123`     |
-| Worker | dave@dlomgroup.com       | `welcome123`     |
+| Role     | Email                    | Password         |
+| -------- | ------------------------ | ---------------- |
+| Admin    | wdeaton@dlomgroup.com    | `cornerstone2026`|
+| Employee | mike@dlomgroup.com       | `welcome123`     |
+| Employee | dave@dlomgroup.com       | `welcome123`     |
 
 Sign in as the admin, go to **Users**, and reset these passwords right away.
 

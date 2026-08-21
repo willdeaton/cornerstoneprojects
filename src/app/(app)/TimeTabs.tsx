@@ -5,7 +5,7 @@ import { TIME_GROUP } from './nav-config';
 
 /**
  * Tabs for the Time section (Time Clock / Timesheets). Timesheets is only
- * available to managers/admins, so workers with a single page see no tabs.
+ * available to managers/admins, so employees with a single page see no tabs.
  */
 export function TimeTabs({ canManage }: { canManage: boolean }) {
   const items = canManage

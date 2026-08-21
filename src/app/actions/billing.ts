@@ -7,8 +7,8 @@ import { setProjectBillingHold, setProjectBillingClosed } from '@/lib/data';
 
 /**
  * The billing desk. Only admins and managers get here — the A/R on every job
- * is not something a worker or an employee has any business seeing, which is
- * the same line Settings draws.
+ * is not something an employee has any business seeing, which is the same line
+ * Settings draws.
  */
 async function requireBiller() {
   const user = await getCurrentUser();

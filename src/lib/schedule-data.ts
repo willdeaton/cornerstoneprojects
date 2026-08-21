@@ -449,7 +449,7 @@ export async function listCrewNotes(projectId: number): Promise<CrewNote[]> {
   );
 }
 
-/** Crew notes for several jobs at once — one query for a worker's own schedule. */
+/** Crew notes for several jobs at once — one query for one person's own schedule. */
 export async function listCrewNotesForProjects(projectIds: number[]): Promise<CrewNote[]> {
   if (projectIds.length === 0) return [];
   return q<CrewNote>(
