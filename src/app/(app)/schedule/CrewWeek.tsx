@@ -274,7 +274,7 @@ export function CrewWeek({
    */
   finishedProjects?: number[];
 }) {
-  /** How many weeks are on screen — the nav steps by exactly this much. */
+  /** How many weeks are on screen. The nav steps one week at a time regardless. */
   const [weeks, setWeeks] = useState<number>(DEFAULT_WEEKS);
   const [anchor, setAnchor] = useState<string>(() => weekStart(today()));
   const [showIdle, setShowIdle] = useState(true);
@@ -874,23 +874,29 @@ export function CrewWeek({
     <div className={`space-y-3 ${range ? 'select-none' : ''}`}>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex overflow-hidden rounded-lg border border-black/10">
+          {/* One week per press, whether one week or two are on screen. A
+              fortnight that paged a fortnight at a time skipped the week in
+              between: the arrows slide the window, they don't jump it. */}
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setAnchor(addDays(rangeFrom, -7 * weeks))}
-            aria-label={weeks === 1 ? 'Previous week' : 'Earlier weeks'}
+            onClick={() => setAnchor(addDays(rangeFrom, -7))}
+            aria-label="Back one week"
+            title="Back one week"
           >
             ‹
           </button>
           <button
             className="border-x border-black/10 px-3 py-2 text-sm font-medium text-brand-ink hover:bg-black/5"
             onClick={() => setAnchor(weekStart(today()))}
+            title="Jump back to the week containing today"
           >
             This Week
           </button>
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setAnchor(addDays(rangeFrom, 7 * weeks))}
-            aria-label={weeks === 1 ? 'Next week' : 'Later weeks'}
+            onClick={() => setAnchor(addDays(rangeFrom, 7))}
+            aria-label="Forward one week"
+            title="Forward one week"
           >
             ›
           </button>
@@ -1637,6 +1643,21 @@ function PhaseTile({
         </button>
       </div>
       <p className="truncate text-[10px] leading-tight text-brand-gray">{task.name}</p>
+      {/* The job is parked waiting on somebody else. Said on the card rather
+          than left to the timeline: this is where the week gets staffed, and
+          booking four people onto work that can't start yet is the mistake. */}
+      {task.project_on_hold && !card.finished && (
+        <p
+          className="truncate text-[10px] font-semibold leading-tight text-amber-800"
+          title={
+            task.project_on_hold_reason
+              ? `On hold — waiting on ${task.project_on_hold_reason}`
+              : 'On hold'
+          }
+        >
+          On hold{task.project_on_hold_reason ? ` · ${task.project_on_hold_reason}` : ''}
+        </p>
+      )}
       {subName && (
         <p className="truncate text-[10px] font-medium leading-tight text-brand-ink">
           Sub: {subName}

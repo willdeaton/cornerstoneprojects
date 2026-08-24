@@ -521,6 +521,27 @@ Your City, ST 00000',
   `);
 
   /* ==================================================================
+   * Jobs parked while somebody else finishes their part.
+   *
+   * A job on hold is still live work: its status stays not started or in
+   * progress, its phases stay on the schedule, and its dates stay where they
+   * are. What the flag says is that nothing is waiting on US — the general
+   * contractor hasn't poured the slab, the owner hasn't picked a colour, the
+   * other trade isn't out of the room yet.
+   *
+   *   on_hold(+reason)  — parked, with what it is waiting on. The reason is
+   *                       required: the whole point of a hold is that the next
+   *                       person to look at the board knows who to chase.
+   *   on_hold_since     — when it was parked, so a hold that has been sitting
+   *                       for a month reads as one.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS on_hold        BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS on_hold_reason TEXT;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS on_hold_since  TIMESTAMPTZ;
+  `);
+
+  /* ==================================================================
    * Self-service password reset.
    *
    * A user who forgets their password requests a reset from the login

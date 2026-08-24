@@ -35,6 +35,9 @@ export default async function ProjectSchedulePage({
         customer: project.customer,
         due_date: project.due_date,
         hard_finish_date: project.hard_finish_date,
+        on_hold: project.on_hold,
+        on_hold_reason: project.on_hold_reason,
+        on_hold_since: project.on_hold_since,
       }}
       tasks={tasks}
       subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}

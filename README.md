@@ -136,7 +136,8 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     lives here rather than on the timeline because none of it makes sense without
     the days in front of you. Clicking never removes anything: taking somebody
     off a day is the **×** in the corner of the card, and a phase on a finished
-    job opens read-only, as the record of a week that has been worked.
+    job opens editable but says so — it is the record of a week that has been
+    worked, so every change to one is confirmed first.
   - **The Warehouse card** — a card that is always there, beside the "Work to
     staff" heading rather than filed under a week, because warehouse work
     doesn't start in one. Somebody has to load out, take the delivery and put
@@ -154,13 +155,19 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     as soon as it's saved.
   - **Every job on the board** — jobs with nothing scheduled are listed too,
     with their status, so it's obvious which ones haven't been planned yet.
+    Each job is its own block: a colour of its own down the left edge and washed
+    across its header band, a gutter above it, and its name leading the row — so
+    one job can be followed across six weeks of columns without counting rules.
     Expand a job for its phases; collapsed, it still shows the stretch its work
-    covers. Each phase row reads either "2 people × 4 days" plus how much of
+    covers as a single bar in the job's own colour. Each phase row reads either "2 people × 4 days" plus how much of
     that the crew week has covered, or the subcontractor carrying it, and the
     board can be filtered to phases still needing crew.
   - **Whole weeks from Monday** — the Week, 2-Week and 6-Week views always start
     on a Monday and run to a Sunday, with each week's Monday held in a band
-    above its days, so the same weekday is always in the same column.
+    above its days, so the same weekday is always in the same column. The ‹ ›
+    arrows move **one week per press** whatever width is on screen, on the
+    timeline and the crew week alike: a 6-week view that paged six weeks at a
+    time skipped everything in between. **This Week** jumps back to today.
   - **Change reasons** — moving a phase's dates, duration or link *always*
     requires a typed reason, published or not. It's kept in the job's change
     history with an auto-generated summary of what moved ("Start Mar 3 → Mar 5;
@@ -187,6 +194,21 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **Hard finish date** — a date a job *must* be done by, separate from the due
     date it's aimed at. The schedule warns whenever the planned work runs past
     it, and moving a date that was already promised is recorded with a reason.
+  - **On hold** — a job waiting on somebody else (the GC hasn't poured the slab,
+    the owner hasn't picked a colour, another trade isn't out of the room) can be
+    parked from the timeline, the job's Schedule tab or its Overview. It is
+    deliberately *not* a status: the job stays not started or in progress, keeps
+    its dates and its phases, and stays on the board and in the counts — a hold
+    records that nothing is waiting on **us**. The reason is required and travels
+    with it: badged on the timeline block, flagged on the crew week card so
+    nobody staffs four people onto work that can't start, and shown on the job
+    itself with how long it has been sitting. **Back To Work** releases it.
+  - **Correcting a finished job** — page back and finished jobs appear on the
+    weeks they ran, drawn back and out of every count of work still to plan or
+    staff. They are still editable in both views, because a plan or a record that
+    was entered wrong has to be fixable without reopening the whole job — behind
+    a confirmation naming the job and what is about to change, and logged with a
+    reason like any other schedule change.
   - **Site address & crew notes** — each job carries the full address crews drive
     to (with a directions link) and a **Crew Notes** list — gate codes, parking,
     who to ask for on site — written by managers and read by everyone booked on

@@ -22,6 +22,7 @@ import {
 
 import { PublishBar, ScheduleHistory, type PublishedInfo } from '@/app/(app)/schedule/PublishBar';
 import { HardFinishControl } from '@/app/(app)/schedule/HardFinishControl';
+import { OnHoldControl } from '@/app/(app)/schedule/OnHoldControl';
 
 const STATUS_BADGE: Record<ScheduleTaskRow['status'], string> = {
   not_started: 'bg-gray-100 text-gray-700',
@@ -123,6 +124,14 @@ export function ScheduleSection({
             projectName={project.name}
             hardFinishDate={project.hard_finish_date ?? null}
             projectedEnd={projected}
+            compact={false}
+          />
+          <OnHoldControl
+            projectId={project.id}
+            projectName={project.name}
+            onHold={!!project.on_hold}
+            reason={project.on_hold_reason ?? null}
+            since={project.on_hold_since ?? null}
             compact={false}
           />
         </div>

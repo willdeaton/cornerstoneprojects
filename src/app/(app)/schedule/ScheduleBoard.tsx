@@ -27,10 +27,13 @@ import {
 } from '@/lib/schedule-math';
 import type { ProjectStatus, ScheduleTaskRow } from '@/lib/types';
 import { PROJECT_STATUS_LABELS } from '@/lib/types';
+import { Modal } from '@/components/Modal';
+import { OnHoldBadge } from '@/components/ui';
 import { TaskModal, type ProjectOption, type SubOption } from './TaskModal';
 import { PublishBar, type PublishedInfo } from './PublishBar';
 import type { ScheduleDraft } from './useScheduleDraft';
 import { HardFinishControl } from './HardFinishControl';
+import { OnHoldControl } from './OnHoldControl';
 
 /** Timeline widths offered by the range switcher, in whole weeks. */
 const SPANS = [
@@ -41,6 +44,90 @@ const SPANS = [
 
 const DEFAULT_SPAN = 14;
 
+/**
+ * A colour per job, cycled down the board.
+ *
+ * The timeline's problem is that every job looks like the one above it: the same
+ * grid, the same grey header, bars tinted by phase status rather than by whose
+ * job they are. So each job gets a hue and keeps it — a rule down its left edge,
+ * a dot by its name, a wash across its header band and its collapsed bar — and
+ * the eye can hold one job across six weeks of columns. Cycled by position, so
+ * two jobs next to each other are never the same colour; it identifies nothing,
+ * it just separates.
+ *
+ * Written as whole class strings rather than composed at runtime so Tailwind
+ * actually emits them.
+ */
+interface JobAccent {
+  /** The rule down the left edge of the job's header row. */
+  stripe: string;
+  /** The same rule, softened, down its phase rows. */
+  stripeSoft: string;
+  /** Label background on the header row — opaque, because it's sticky. */
+  head: string;
+  /** The dot beside the job's name. */
+  mark: string;
+  /** The wash across the header row's day cells. */
+  band: string;
+  /** The collapsed job's single roll-up bar. */
+  rollup: string;
+}
+
+const JOB_ACCENTS: JobAccent[] = [
+  {
+    stripe: 'border-l-[#7BA82C]',
+    stripeSoft: 'border-l-[#7BA82C]/30',
+    head: 'bg-[#eff5e3]',
+    mark: 'bg-[#7BA82C]',
+    band: 'bg-[#7BA82C]/[.07]',
+    rollup: 'bg-[#7BA82C]/40',
+  },
+  {
+    stripe: 'border-l-[#4B7BB5]',
+    stripeSoft: 'border-l-[#4B7BB5]/30',
+    head: 'bg-[#eaf0f7]',
+    mark: 'bg-[#4B7BB5]',
+    band: 'bg-[#4B7BB5]/[.07]',
+    rollup: 'bg-[#4B7BB5]/40',
+  },
+  {
+    stripe: 'border-l-[#C4714E]',
+    stripeSoft: 'border-l-[#C4714E]/30',
+    head: 'bg-[#f8ece7]',
+    mark: 'bg-[#C4714E]',
+    band: 'bg-[#C4714E]/[.07]',
+    rollup: 'bg-[#C4714E]/40',
+  },
+  {
+    stripe: 'border-l-[#3C9B94]',
+    stripeSoft: 'border-l-[#3C9B94]/30',
+    head: 'bg-[#e7f2f1]',
+    mark: 'bg-[#3C9B94]',
+    band: 'bg-[#3C9B94]/[.07]',
+    rollup: 'bg-[#3C9B94]/40',
+  },
+  {
+    stripe: 'border-l-[#8A6BA8]',
+    stripeSoft: 'border-l-[#8A6BA8]/30',
+    head: 'bg-[#f1edf6]',
+    mark: 'bg-[#8A6BA8]',
+    band: 'bg-[#8A6BA8]/[.07]',
+    rollup: 'bg-[#8A6BA8]/40',
+  },
+  {
+    stripe: 'border-l-[#B08900]',
+    stripeSoft: 'border-l-[#B08900]/30',
+    head: 'bg-[#f8f2e0]',
+    mark: 'bg-[#B08900]',
+    band: 'bg-[#B08900]/[.07]',
+    rollup: 'bg-[#B08900]/40',
+  },
+];
+
+function jobAccent(index: number): JobAccent {
+  return JOB_ACCENTS[index % JOB_ACCENTS.length];
+}
+
 type Editing = { task?: ScheduleTaskRow; projectId?: number } | null;
 
 /** A job as the board lists it — every live job, scheduled or not. */
@@ -48,6 +135,12 @@ export interface BoardProject extends ProjectOption {
   status: ProjectStatus;
   /** The address the crew drives to, shown under the job name. */
   site_address?: string | null;
+  /** Parked waiting on somebody else — still planned, just not on us. */
+  on_hold?: boolean;
+  /** What the hold is waiting on. */
+  on_hold_reason?: string | null;
+  /** When it was parked. */
+  on_hold_since?: string | null;
 }
 
 /**
@@ -105,9 +198,11 @@ export function ScheduleBoard({
    */
   draft: ScheduleDraft;
   /**
-   * Jobs that are finished. Their phases are drawn on the weeks they ran and
-   * nothing else: not editable, not counted as work still to plan or staff, and
-   * only listed at all on a range their work actually touches.
+   * Jobs that are finished. Their phases are drawn on the weeks they ran, out of
+   * every count of work still to plan or staff, and only listed at all on a
+   * range their work actually touches. They stay editable — a date or a duration
+   * that turns out to have been recorded wrong has to be fixable without
+   * reopening the job — behind a confirmation on every change.
    */
   finishedProjects?: number[];
 }) {
@@ -123,6 +218,14 @@ export function ScheduleBoard({
   /** 'short' narrows the board to phases the crew week hasn't filled yet. */
   const [staffing, setStaffing] = useState<'all' | 'short'>('all');
   const [editing, setEditing] = useState<Editing>(null);
+  /**
+   * An edit to a finished job, held back until it's agreed to. The phases of a
+   * job that is over are the record of what was worked and probably already
+   * billed, so the editor doesn't open on one until somebody has said yes.
+   */
+  const [confirming, setConfirming] = useState<{ edit: Editing; jobName: string; what: string } | null>(
+    null
+  );
   // Per-job expand/collapse, only for jobs the user has actually clicked. Jobs
   // they haven't touched follow the default below, which tracks the visible
   // range — so paging to a quiet week doesn't leave every row shut.
@@ -212,6 +315,9 @@ export function ScheduleBoard({
           customer: p.customer,
           address: p.site_address ?? null,
           status: p.status,
+          onHold: !!p.on_hold,
+          onHoldReason: p.on_hold_reason ?? null,
+          onHoldSince: p.on_hold_since ?? null,
           dueDate: p.due_date,
           hardFinish: p.hard_finish_date ?? null,
           projected: end,
@@ -247,6 +353,9 @@ export function ScheduleBoard({
   const unplanned = groups.filter((g) => g.tasks.length === 0).length;
   // Rows that are only on screen because their work ran in this range.
   const history = groups.filter((g) => finished.has(g.projectId)).length;
+  // Jobs parked waiting on somebody else. Still planned, still counted — the
+  // point of the number is that a board with three of them says so.
+  const held = groups.filter((g) => g.onHold && !finished.has(g.projectId)).length;
 
   // Just the version numbers, which is all the phase editor needs to decide
   // whether a change requires a reason.
@@ -270,36 +379,58 @@ export function ScheduleBoard({
     return openState[g.projectId] ?? g.inRange;
   }
 
+  /**
+   * Open the phase editor — after saying so out loud when the job is over.
+   *
+   * A finished job's phases are editable here because a plan that was recorded
+   * wrong has to be correctable: a phase that actually ran three days longer,
+   * or a duration typed against the wrong phase, is a mistake in the record and
+   * reopening the whole job to fix it is worse. But they are the record of work
+   * already done and probably already billed, so nothing about one changes
+   * before somebody has agreed to change it, and there is no unlocked mode to
+   * forget you left on.
+   */
+  function openEditor(edit: Editing, over: { jobName: string; what: string } | null) {
+    if (over) setConfirming({ edit, ...over });
+    else setEditing(edit);
+  }
+
   function setAllOpen(open: boolean) {
     setOpenState(Object.fromEntries(groups.map((g) => [g.projectId, open])));
   }
 
-  // 220px of labels, then one equal column per day.
-  const gridTemplate = `minmax(200px, 220px) repeat(${days.length}, minmax(26px, 1fr))`;
-  const weeks = Math.max(1, Math.round(days.length / 7));
+  // The job name leads its block, so the label column is wide enough to read
+  // one; then one equal column per day.
+  const gridTemplate = `minmax(232px, 260px) repeat(${days.length}, minmax(26px, 1fr))`;
 
   return (
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex overflow-hidden rounded-lg border border-black/10">
+          {/* One week per press, whatever width is on screen. A 6-week view that
+              paged six weeks at a time skipped everything between: the arrows
+              slide the window, they don't jump it. */}
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setAnchor(addDays(rangeStart, -7 * weeks))}
-            aria-label="Earlier"
+            onClick={() => setAnchor(addDays(rangeStart, -7))}
+            aria-label="Back one week"
+            title="Back one week"
           >
             ‹
           </button>
           <button
             className="border-x border-black/10 px-3 py-2 text-sm font-medium text-brand-ink hover:bg-black/5"
             onClick={() => setAnchor(weekStart(today()))}
+            title="Jump back to the week containing today"
           >
             This Week
           </button>
           <button
             className="px-3 py-2 text-sm font-medium text-brand-gray hover:bg-black/5"
-            onClick={() => setAnchor(addDays(rangeStart, 7 * weeks))}
-            aria-label="Later"
+            onClick={() => setAnchor(addDays(rangeStart, 7))}
+            aria-label="Forward one week"
+            title="Forward one week"
           >
             ›
           </button>
@@ -374,6 +505,9 @@ export function ScheduleBoard({
             <span>
               {groups.length} {groups.length === 1 ? 'job' : 'jobs'}
               {history > 0 && ` · ${history} finished`}
+              {held > 0 && (
+                <span className="font-medium text-amber-800"> · {held} on hold</span>
+              )}
               {unplanned > 0 && ` · ${unplanned} with nothing scheduled yet`}
               {shortfall > 0 && (
                 <span className="font-medium text-amber-700">
@@ -399,7 +533,7 @@ export function ScheduleBoard({
 
           <div className="card overflow-hidden">
             <div className="overflow-x-auto">
-              <div className="min-w-[820px]">
+              <div className="min-w-[900px]">
                 {/* Week band: each week's Monday, held until the next week starts. */}
                 <div
                   className="grid border-b border-black/10 bg-black/[.04]"
@@ -447,21 +581,34 @@ export function ScheduleBoard({
                   ))}
                 </div>
 
-                {groups.map((g) => {
+                {groups.map((g, gi) => {
                   const open = isOpen(g);
-                  // A job that is over keeps its dates on screen and loses every
-                  // control that would change them: nothing here is still a plan.
+                  // A job that is over is history: on screen for the weeks it
+                  // ran, out of every count, and editable only behind a
+                  // confirmation — see openEditor.
                   const over = finished.has(g.projectId);
+                  const accent = jobAccent(gi);
+                  // What a click on one of this job's phases has to agree to
+                  // first, or null while the job is still a live plan.
+                  const gate = over ? { jobName: g.projectName } : null;
                   return (
-                    <div key={g.projectId} className="border-b border-black/10 last:border-0">
+                    <div
+                      key={g.projectId}
+                      // Each job is its own block with a real gutter above it:
+                      // the thing this view is read for is "which job is this",
+                      // and a hairline between two grids never answered that.
+                      className={`relative ${gi > 0 ? 'border-t-[6px] border-surface-sunken' : ''}`}
+                    >
                       {/* Job header row — click the name row to fold the job away. */}
                       <div
-                        className="grid bg-black/[.02]"
+                        className="grid"
                         style={{ gridTemplateColumns: gridTemplate }}
                       >
                         <div
                           style={{ gridRow: 1, gridColumn: 1 }}
-                          className="sticky left-0 z-20 bg-[#fafafa] px-4 py-2"
+                          className={`sticky left-0 z-20 border-l-4 py-2 pl-3 pr-4 ${accent.stripe} ${
+                            over ? 'bg-[#f2f2f1]' : g.onHold ? 'bg-[#faf3e4]' : accent.head
+                          }`}
                         >
                           <div className="flex items-start gap-1.5">
                             <button
@@ -478,21 +625,38 @@ export function ScheduleBoard({
                             <div className="min-w-0">
                               <Link
                                 href={`/projects/${g.projectId}`}
-                                className="block truncate text-sm font-semibold text-brand-ink hover:text-brand-green-dark"
+                                className="flex items-center gap-1.5 text-[15px] font-bold leading-tight text-brand-ink hover:text-brand-green-dark"
                               >
-                                {g.projectName}
+                                {/* The job's own colour, repeated down every row
+                                    it owns — the thread that ties a bar on the
+                                    right to a name on the left. */}
+                                <span className={`h-2 w-2 shrink-0 rounded-full ${accent.mark}`} />
+                                <span className="truncate">{g.projectName}</span>
                               </Link>
-                              <p className="truncate text-xs text-brand-gray">{g.customer}</p>
-                              <p className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                              <p className="truncate text-xs font-medium text-brand-gray">{g.customer}</p>
+                              <p className="mt-1 flex flex-wrap items-center gap-1.5">
                                 <span className={`badge ${STATUS_BADGE[g.status]}`}>
                                   {PROJECT_STATUS_LABELS[g.status]}
                                 </span>
+                                {g.onHold && !over && (
+                                  <OnHoldBadge reason={g.onHoldReason} since={g.onHoldSince} />
+                                )}
                                 <span className="text-[11px] text-brand-gray">
                                   {g.tasks.length === 0
                                     ? 'no phases yet'
                                     : `${g.tasks.length} ${g.tasks.length === 1 ? 'phase' : 'phases'}`}
                                 </span>
                               </p>
+                              {g.onHold && g.onHoldReason && !over && (
+                                <p
+                                  className="mt-0.5 truncate text-[11px] font-medium text-amber-800"
+                                  title={`On hold — ${g.onHoldReason}${
+                                    g.onHoldSince ? ` · since ${shortDate(g.onHoldSince)}` : ''
+                                  }`}
+                                >
+                                  {g.onHoldReason}
+                                </p>
+                              )}
                               {g.address && (
                                 <a
                                   href={mapsUrl(g.address)}
@@ -532,18 +696,30 @@ export function ScheduleBoard({
                               {over ? (
                                 <p
                                   className="text-[11px] font-medium text-brand-gray"
-                                  title="Marked complete — its dates are kept so a week that has been worked reads true. Change them from the job itself."
+                                  title="Marked complete. Its dates are kept so a week that has been worked reads true — and can still be corrected, with every change confirmed first."
                                 >
-                                  Finished job · shown for the weeks it ran
+                                  Finished job · shown for the weeks it ran · edits are confirmed
                                 </p>
                               ) : (
                                 <>
-                                  <HardFinishControl
-                                    projectId={g.projectId}
-                                    projectName={g.projectName}
-                                    hardFinishDate={g.hardFinish}
-                                    projectedEnd={g.projected}
-                                  />
+                                  {/* Two small text controls side by side, so
+                                      they wrap as a pair instead of butting
+                                      into each other on a narrow label. */}
+                                  <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                    <HardFinishControl
+                                      projectId={g.projectId}
+                                      projectName={g.projectName}
+                                      hardFinishDate={g.hardFinish}
+                                      projectedEnd={g.projected}
+                                    />
+                                    <OnHoldControl
+                                      projectId={g.projectId}
+                                      projectName={g.projectName}
+                                      onHold={g.onHold}
+                                      reason={g.onHoldReason}
+                                      since={g.onHoldSince}
+                                    />
+                                  </span>
                                   <PublishBar
                                     projectId={g.projectId}
                                     projectName={g.projectName}
@@ -560,7 +736,15 @@ export function ScheduleBoard({
                           <div
                             key={d}
                             style={{ gridRow: 1, gridColumn: i + 2 }}
-                            className={`min-h-[24px] ${weekEdge(d)} ${cellTint(d, holidaySet, now)}`}
+                            // The job's band runs the full width of the view, so
+                            // the eye can follow one job's row across six weeks
+                            // without counting rules.
+                            className={`min-h-[24px] ${weekEdge(d)} ${bandTint(
+                              d,
+                              holidaySet,
+                              now,
+                              over ? 'bg-black/[.03]' : g.onHold ? 'bg-amber-500/[.07]' : accent.band
+                            )}`}
                           />
                         ))}
                         {/* Folded away, the job still shows the stretch its work
@@ -573,6 +757,7 @@ export function ScheduleBoard({
                             rangeStart={rangeStart}
                             rangeEnd={rangeEnd}
                             phases={g.tasks.length}
+                            tint={accent.rollup}
                           />
                         )}
                       </div>
@@ -580,12 +765,17 @@ export function ScheduleBoard({
                       {/* One row per phase, once the job is expanded */}
                       {open &&
                         (g.tasks.length === 0 ? (
-                          <div className="px-4 py-3">
+                          <div className={`border-l-4 px-4 py-3 pl-9 ${accent.stripeSoft}`}>
                             <p className="text-sm text-brand-gray">
                               Nothing scheduled on this job yet.{' '}
                               <button
                                 className="font-medium text-brand-green-dark hover:underline"
-                                onClick={() => setEditing({ projectId: g.projectId })}
+                                onClick={() =>
+                                  openEditor(
+                                    { projectId: g.projectId },
+                                    gate ? { ...gate, what: 'Adding a phase' } : null
+                                  )
+                                }
                               >
                                 Schedule its first phase
                               </button>
@@ -605,9 +795,15 @@ export function ScheduleBoard({
                               holidaySet={holidaySet}
                               gridTemplate={gridTemplate}
                               conflicted={conflictedTasks.has(t.id)}
-                              onEdit={() => setEditing({ task: t })}
+                              onEdit={() =>
+                                openEditor(
+                                  { task: t },
+                                  gate ? { ...gate, what: `Editing \u201c${t.name}\u201d` } : null
+                                )
+                              }
                               published={!!published[t.project_id]}
-                              readOnly={over}
+                              stripe={accent.stripeSoft}
+                              finishedJob={over}
                             />
                           ))
                         ))}
@@ -621,16 +817,53 @@ export function ScheduleBoard({
       )}
 
       <p className="text-xs text-brand-gray">
-        Every live job is listed — expand one to see its phases, or whether it has any yet. A phase
-        here is the work: how long it runs and how many people it takes. Who those people are, and
-        what time they start, is settled a week at a time in the Crew Week. Views run in whole
-        weeks from Monday, with each week&apos;s Monday held above its days; weekends and
-        non-working days are shaded and never count toward a phase&apos;s duration. A phase marked
-        &ldquo;starts after&rdquo; another moves automatically when the one before it slips, and
-        moving any phase&apos;s dates asks for a reason that&apos;s kept with the job. Page back and
-        finished jobs appear on the weeks they ran, greyed and not editable — the record of what
-        was worked, kept out of every count of what is still to plan.
+        Every live job is listed as its own block, with its own colour down the left edge and across
+        its band — expand one to see its phases, or whether it has any yet. A phase here is the
+        work: how long it runs and how many people it takes. Who those people are, and what time
+        they start, is settled a week at a time in the Crew Week. The arrows move one week at a
+        time whatever width is on screen; each view runs in whole weeks from Monday, with every
+        week&apos;s Monday held above its days, and weekends and non-working days are shaded and
+        never count toward a phase&apos;s duration. A phase marked &ldquo;starts after&rdquo;
+        another moves automatically when the one before it slips, and moving any phase&apos;s dates
+        asks for a reason that&apos;s kept with the job. A job waiting on somebody else can be put
+        <span className="whitespace-nowrap"> on hold</span> — it keeps its dates and its place here,
+        badged with what it&apos;s waiting on. Page back and finished jobs appear on the weeks they
+        ran, drawn back and out of every count of what is still to plan; they can still be
+        corrected, and every change to one is confirmed first.
       </p>
+
+      {/* The warning before a finished job is touched. A real dialog rather than
+          a browser confirm: it has to say which job, what is about to change and
+          why that matters, and be dismissable without changing anything. */}
+      {confirming && (
+        <Modal open onClose={() => setConfirming(null)} title="This job is already finished">
+          <div className="space-y-4">
+            <p className="text-sm text-brand-ink">
+              <span className="font-semibold">{confirming.jobName}</span> is marked complete.{' '}
+              {confirming.what} changes the record of work that has already been done — and
+              probably already billed.
+            </p>
+            <p className="text-sm text-brand-gray">
+              Go ahead if the record is wrong. The change is logged against the job with the reason
+              you give, the same as any other change to a schedule.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setConfirming(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  setEditing(confirming.edit);
+                  setConfirming(null);
+                }}
+              >
+                Edit Anyway
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {editing && (
         <TaskModal
@@ -662,6 +895,7 @@ function RollupBar({
   rangeStart,
   rangeEnd,
   phases,
+  tint,
 }: {
   start: string | null;
   end: string | null;
@@ -669,6 +903,8 @@ function RollupBar({
   rangeStart: string;
   rangeEnd: string;
   phases: number;
+  /** The job's own colour, so a folded job still reads as that job. */
+  tint: string;
 }) {
   if (!start || !end || start > rangeEnd || end < rangeStart) return null;
   const from = clamp(start, rangeStart, rangeEnd);
@@ -680,7 +916,7 @@ function RollupBar({
   return (
     <div
       style={{ gridRow: 1, gridColumn: `${startIdx + 2} / ${endIdx + 3}` }}
-      className="z-10 my-2 flex h-6 items-center self-center overflow-hidden rounded bg-brand-gray/30 px-2 text-[11px] font-medium text-brand-ink"
+      className={`z-10 my-2 flex h-6 items-center self-center overflow-hidden rounded px-2 text-[11px] font-medium text-brand-ink ${tint}`}
       title={`${shortDate(start)} – ${shortDate(end)} · ${phases} ${phases === 1 ? 'phase' : 'phases'}`}
     >
       <span className="truncate">
@@ -703,7 +939,8 @@ function PhaseRow({
   gridTemplate,
   conflicted,
   published,
-  readOnly = false,
+  stripe,
+  finishedJob = false,
   onEdit,
 }: {
   task: ScheduleTaskRow;
@@ -716,8 +953,14 @@ function PhaseRow({
   gridTemplate: string;
   conflicted: boolean;
   published: boolean;
-  /** The job is finished: the row is a record of what ran, not a plan to edit. */
-  readOnly?: boolean;
+  /** The rule down the left edge, in the job's colour. */
+  stripe: string;
+  /**
+   * The job is finished: the row is the record of what ran rather than a plan.
+   * Drawn back a shade and still editable — a record that turns out to be wrong
+   * has to be fixable — with the confirmation handled by whoever owns `onEdit`.
+   */
+  finishedJob?: boolean;
   onEdit: () => void;
 }) {
   const budget = useMemo(
@@ -766,7 +1009,7 @@ function PhaseRow({
       ? ''
       : budget.remaining === 0
         ? 'fully staffed'
-        : readOnly
+        : finishedJob
           ? `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} never booked`
           : `${budget.remaining} crew ${budget.remaining === 1 ? 'day' : 'days'} to book`;
 
@@ -781,7 +1024,9 @@ function PhaseRow({
   }${task.site_address ? `\n${task.site_address}` : ''}${
     conflicted ? '\nSomeone on this phase is double-booked' : ''
   }${published ? '\nPublished — changes need a reason' : ''}${
-    readOnly ? '\nFinished job — kept as a record of the weeks it ran' : ''
+    finishedJob
+      ? '\nFinished job — the record of the weeks it ran. Editable, with the change confirmed first.'
+      : ''
   }`;
 
   return (
@@ -790,11 +1035,13 @@ function PhaseRow({
           explicitly placed, and auto-placed cells would be bumped into a second
           row wherever a bar already occupies a column. */}
       <Cell
-        onEdit={readOnly ? null : onEdit}
+        onEdit={onEdit}
         style={{ gridRow: 1, gridColumn: 1 }}
-        title={readOnly ? tooltip : undefined}
-        className={`sticky left-0 z-20 bg-white px-4 py-2 pl-9 text-left ${
-          readOnly ? 'text-brand-gray' : 'hover:bg-black/[.03]'
+        title={tooltip}
+        // The job's rule carries on down its phases, a shade lighter, so a row
+        // this far from its header still visibly belongs to it.
+        className={`sticky left-0 z-20 border-l-4 py-2 pl-8 pr-4 text-left ${stripe} ${
+          finishedJob ? 'bg-[#fafafa] text-brand-gray hover:bg-black/[.04]' : 'bg-white hover:bg-black/[.03]'
         }`}
       >
         <span className="flex items-center gap-1.5">
@@ -830,12 +1077,14 @@ function PhaseRow({
       {segments.map((s, i) => (
         <Cell
           key={s.key}
-          onEdit={readOnly ? null : onEdit}
+          onEdit={onEdit}
           title={tooltip}
           style={{ gridRow: 1, gridColumn: `${s.startIdx + 2} / ${s.endIdx + 3}` }}
           className={`z-10 my-2 flex items-center overflow-hidden rounded px-2 text-left text-[11px] font-medium text-white ${
             BAR_TINT[task.status]
-          } ${readOnly ? 'opacity-60' : 'transition-opacity hover:opacity-90'} ${
+          } ${
+            finishedJob ? 'opacity-60 transition-opacity hover:opacity-80' : 'transition-opacity hover:opacity-90'
+          } ${
             conflicted ? 'ring-2 ring-red-500 ring-offset-1' : ''
           } ${s.clippedLeft ? 'rounded-l-none' : ''} ${s.clippedRight ? 'rounded-r-none' : ''}`}
         >
@@ -845,7 +1094,7 @@ function PhaseRow({
             <span className="truncate">
               {task.name}
               <span className="opacity-80"> · {crewNote}</span>
-              {budget.remaining > 0 && !readOnly && (
+              {budget.remaining > 0 && !finishedJob && (
                 <span className="opacity-80"> · {budget.remaining} to book</span>
               )}
             </span>
@@ -857,23 +1106,24 @@ function PhaseRow({
 }
 
 /**
- * A phase row's label or bar. A phase that can still be planned is a button on
- * to its editor; one on a finished job is the same thing to look at and nothing
- * to click, rather than a button that opens an editor for work that is over.
+ * A phase row's label or bar — a button on to its editor.
+ *
+ * Every phase is one, including a finished job's: its dates are a record rather
+ * than a plan, but a record that turns out to be wrong has to be fixable, so the
+ * row opens the same editor behind a confirmation instead of being dead to the
+ * touch.
  */
 function Cell({
   onEdit,
   children,
   ...rest
 }: {
-  /** null when the phase is read-only. */
-  onEdit: (() => void) | null;
+  onEdit: () => void;
   children: ReactNode;
   style?: CSSProperties;
   className?: string;
   title?: string;
 }) {
-  if (!onEdit) return <div {...rest}>{children}</div>;
   return (
     <button onClick={onEdit} {...rest}>
       {children}
@@ -940,6 +1190,22 @@ function isOff(day: string, holidays: Set<string>): boolean {
 function cellTint(day: string, holidays: Set<string>, now: string): string {
   if (day === now) return 'bg-brand-green/10';
   return isOff(day, holidays) ? 'bg-black/[.04]' : '';
+}
+
+/**
+ * Background for a day cell on a JOB's header band. Today and the non-working
+ * days still win — they're facts about the calendar, not decoration — and
+ * everything else takes the job's own wash, so one job's band reads as one
+ * stripe across the whole view.
+ *
+ * One class rather than two stacked backgrounds on purpose: two `bg-` utilities
+ * on the same element resolve by stylesheet order, not by the order they're
+ * written, so which one won would be luck.
+ */
+function bandTint(day: string, holidays: Set<string>, now: string, wash: string): string {
+  if (day === now) return 'bg-brand-green/20';
+  if (isOff(day, holidays)) return 'bg-black/[.07]';
+  return wash;
 }
 
 /** A firmer rule where a new week starts, so week boundaries read at a glance. */

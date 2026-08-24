@@ -193,6 +193,17 @@ export interface Project {
    * harder when derived work runs past it.
    */
   hard_finish_date: string | null;
+  /**
+   * The job is parked waiting on somebody else — the GC, the owner, another
+   * trade. Still live work with live dates: what the flag says is that nothing
+   * is waiting on us, so a job nobody is touching stops looking like a job
+   * nobody has noticed.
+   */
+  on_hold: boolean;
+  /** What the hold is waiting on. Required to place one, cleared on release. */
+  on_hold_reason: string | null;
+  /** When it was parked, so a hold that has sat for a month reads as one. */
+  on_hold_since: string | null;
   invoice_numbers: string | null;
   invoice_notes: string | null;
   /**
@@ -463,6 +474,12 @@ export type ScheduleTaskRow = ScheduleTask & {
   project_due_date: string | null;
   /** The job's immovable finish date, when it has one. */
   project_hard_finish_date: string | null;
+  /** The job is parked waiting on somebody else — see `Project.on_hold`. */
+  project_on_hold: boolean;
+  /** What that hold is waiting on, for the views that can show it. */
+  project_on_hold_reason: string | null;
+  /** When the job was parked. */
+  project_on_hold_since: string | null;
   /** The subcontractor's name, when the phase is theirs. */
   subcontractor_name: string | null;
   /** Who is booked on which day, ascending by day then name. */

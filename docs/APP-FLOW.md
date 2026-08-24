@@ -151,7 +151,8 @@ hangs off:
   parking, who to ask for. Pinned notes stay on top. These surface on every
   booked person's own schedule and in the schedule email.
 - **Schedule section** — the job's phases, its projected finish (derived), its
-  hard finish date, and its change history.
+  hard finish date, whether it is **on hold** (and what it's waiting on), and its
+  change history.
 - **Time** — every entry logged against this job, and total hours.
 - **Files** — attachments, stored as base64 in the database, streamed back via
   `/api/files/[id]`. Invoice PDFs deliberately do *not* live here: they're in
@@ -279,9 +280,28 @@ Rules that fall out of this model:
   phase notes need a reason too.
 - **Hard finish date** — a date the job *must* hit, separate from the due date
   it aims at. The schedule warns whenever derived work runs past it.
+- **On hold** — `projects.on_hold` (+ `on_hold_reason`, `on_hold_since`), set
+  from the timeline, the job's Schedule tab or its Overview. Deliberately NOT a
+  status: an on-hold job keeps `status`, its dates, its phases, its place on the
+  board and its place in the counts. The flag records that nothing is waiting on
+  *us* — the GC, the owner or another trade is what it is waiting on — and the
+  reason is required, since a bare "on hold" is unreadable a fortnight later. It
+  is badged on the timeline block, flagged on the crew week card, and shown on
+  the job with how long it has been parked.
+- **Finished jobs stay correctable** — jobs marked complete are loaded back as
+  far as `HISTORY_WEEKS` and drawn on the weeks they ran, out of every count of
+  work still to plan or staff. Both views still allow edits: a plan or a record
+  entered wrong has to be fixable without reopening the job. The timeline gates
+  a phase edit behind a dialog naming the job and the change; the crew week
+  confirms each booking and each card edit. Everything is logged to
+  `schedule_changes` with a reason like any other schedule change.
 
 Views run in whole Monday-to-Sunday weeks (Week / 2-Week / 6-Week, defaulting to
-2), so the same weekday is always in the same column.
+2), so the same weekday is always in the same column. Each job on the timeline is
+its own block, with a colour of its own down its left edge and across its header
+band, so one job can be followed across a six-week view. The ‹ › arrows step
+**one week per press** whatever width is on screen — a wide view that paged by
+its own width skipped everything between — and **This Week** returns to today.
 
 **My Schedule** is what an employee gets instead: a read-only week of their own
 bookings — one card per day, with the shift ("All day", or "8:00 AM – 12:00 PM ·
@@ -580,8 +600,18 @@ want.
 >   phase notes need a reason too.
 > - A **hard finish date** — a date the job must hit — is separate from the due
 >   date it aims at, and the schedule warns when planned work runs past it.
+> - A job can be put **on hold** while it waits on somebody else — the GC, the
+>   owner, another trade. It is not a status: the job keeps its status, its dates,
+>   its phases and its place in the counts, and the hold records that nothing is
+>   waiting on *us*. The reason is required and travels with it onto the timeline
+>   block, the crew week card and the job itself.
+> - **Finished jobs stay correctable.** They are drawn on the weeks they ran, out
+>   of every count of work still to plan or staff, and still editable in both
+>   views — a plan or a record entered wrong has to be fixable without reopening
+>   the job — behind a confirmation naming the job and the change.
 > - Views run in whole Monday-to-Sunday weeks (1, 2 or 6), so the same weekday is
->   always in the same column.
+>   always in the same column, and each job on the timeline is its own colour-led
+>   block. The arrows step **one week per press** whatever width is on screen.
 >
 > Employees get **My Schedule** instead: a read-only week of their own
 > bookings, one card per day, with start time, job, address, phase notes and

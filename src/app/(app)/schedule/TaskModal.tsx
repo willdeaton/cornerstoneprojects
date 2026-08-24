@@ -30,6 +30,12 @@ export interface ProjectOption {
   due_date: string | null;
   /** The date the job must be finished by, when it has one. */
   hard_finish_date?: string | null;
+  /** Parked waiting on somebody else — the job is planned, just not on us. */
+  on_hold?: boolean;
+  /** What that hold is waiting on. */
+  on_hold_reason?: string | null;
+  /** When it was parked. */
+  on_hold_since?: string | null;
 }
 export interface WorkerOption {
   id: number;
@@ -353,6 +359,11 @@ export function TaskModal({
       project_status: 'in_progress',
       project_due_date: job?.due_date ?? null,
       project_hard_finish_date: job?.hard_finish_date ?? null,
+      // A phase that hasn't been saved yet says nothing about the job's hold:
+      // the real row arrives with it on the next load.
+      project_on_hold: false,
+      project_on_hold_reason: null,
+      project_on_hold_since: null,
       subcontractor_name: subs.find((s) => s.id === f.subcontractor_id)?.name ?? null,
       crew_days: [],
       day_times: [],

@@ -1,3 +1,4 @@
+import { shortDate } from '@/lib/format';
 import type { ProjectStatus, QuoteStatus } from '@/lib/types';
 import { BILLING_STAGE_LABELS, type BillingStage, type BillingUrgency } from '@/lib/billing';
 
@@ -73,6 +74,31 @@ export function ProjectStatusBadge({ status }: { status: ProjectStatus }) {
     <span className={`badge ${PROJECT_BADGE[status]}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${PROJECT_DOT[status]}`} />
       {PROJECT_LABEL[status]}
+    </span>
+  );
+}
+
+/**
+ * A job parked waiting on somebody else. Sits BESIDE the status badge rather
+ * than replacing it: a held job is still not started or still in progress, and
+ * losing that would hide where the work had actually got to.
+ */
+export function OnHoldBadge({
+  reason,
+  since,
+}: {
+  /** What it is waiting on — carried in the tooltip, since the badge is small. */
+  reason?: string | null;
+  since?: string | null;
+}) {
+  const detail = [reason, since ? `since ${shortDate(since)}` : null].filter(Boolean).join(' · ');
+  return (
+    <span
+      className="badge bg-amber-100 text-amber-900"
+      title={detail ? `On hold — ${detail}` : 'On hold'}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+      On Hold
     </span>
   );
 }

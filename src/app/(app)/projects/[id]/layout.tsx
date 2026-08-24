@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { money, shortDate } from '@/lib/format';
-import { ProjectStatusBadge } from '@/components/ui';
+import { OnHoldBadge, ProjectStatusBadge } from '@/components/ui';
 import { BackToList } from '@/components/ListMemory';
 import { loadProject, requireJobUser } from './job';
 import { tabsForRole } from './project-tabs';
@@ -48,6 +48,12 @@ export default async function ProjectLayout({
               {project.customer}
             </p>
             <ProjectStatusBadge status={project.status} />
+            {/* Beside the status, never instead of it: a held job is still not
+                started or still in progress, and losing that would hide where
+                the work had actually got to. */}
+            {project.on_hold && (
+              <OnHoldBadge reason={project.on_hold_reason} since={project.on_hold_since} />
+            )}
           </div>
           <h1 className="brand-heading mt-1 text-2xl text-brand-ink sm:text-3xl">{project.name}</h1>
           <p className="mt-1 text-sm text-brand-gray">

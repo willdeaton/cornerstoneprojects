@@ -148,6 +148,12 @@ export default async function SchedulePage() {
             site_address: p.site_address,
             due_date: p.due_date,
             hard_finish_date: p.hard_finish_date,
+            // Parked waiting on somebody else: the board badges it rather than
+            // hiding it, because a job standing still is exactly what a manager
+            // reading the timeline is looking for.
+            on_hold: p.on_hold,
+            on_hold_reason: p.on_hold_reason,
+            on_hold_since: p.on_hold_since,
           }))}
         // Everybody active, with whether they're in scheduling at all: the crew
         // week hides the ones who aren't, but still shows anybody already booked
