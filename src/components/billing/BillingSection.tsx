@@ -4,9 +4,14 @@ import { billingVariance, BILLING_SLA, type BillingSummary } from '@/lib/billing
 import { BillingStageControls } from './BillingStageControls';
 
 /**
- * Where this job stands on the billing desk, and the decisions only a person
- * can make about it — all of which live in `BillingStageControls`, shared with
- * the billing desk so the same job reads and behaves the same in both places.
+ * Where this job stands on the billing desk, and the decisions about it a
+ * person can make from here — all of which live in `BillingStageControls`,
+ * shared with the billing desk so the same job reads and behaves the same in
+ * both places.
+ *
+ * Closing a job out is not one of them: signing a job off the billing desk is
+ * the desk's own act, so this card offers everything but that. A job already
+ * closed can still be reopened from here, so nothing is stuck that way.
  *
  * The money on this card is read-only on purpose: the stage and the figures
  * come out of the invoice rows in the card below, so this one never offers a
@@ -47,6 +52,7 @@ export function BillingSection({
           holdReason={holdReason}
           closedAt={closedAt}
           closedByName={closedByName}
+          allowCloseOut={false}
         />
       </div>
 

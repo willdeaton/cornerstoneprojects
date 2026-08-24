@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { Quote } from '@/lib/types';
 import { money, shortDate } from '@/lib/format';
 import { QuoteStatusBadge, EmptyState } from '@/components/ui';
+import { readListFilters, writeListFilters } from '@/lib/list-state';
 import { QuoteActions } from './QuoteActions';
 import {
   bulkDeleteQuotesAction,
@@ -33,6 +34,18 @@ const COLUMNS: { key: SortKey; label: string; align?: 'right' }[] = [
   { key: 'bid_value', label: 'Bid Value', align: 'right' },
   { key: 'status', label: 'Status' },
 ];
+
+/** What survives a trip into a quote and back. */
+type SavedFilters = {
+  search: string;
+  category: string;
+  sortKey: SortKey;
+  sortDir: SortDir;
+};
+
+function isSortKey(v: unknown): v is SortKey {
+  return COLUMNS.some((c) => c.key === v);
+}
 
 function compare(a: Quote, b: Quote, key: SortKey): number {
   switch (key) {
@@ -81,16 +94,41 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
     [quotes],
   );
 
+  // Search, category and sort are picked back up when the user returns from a
+  // quote — the status tab lives in the URL, this is the rest of the view.
+  // Restored after mount, not in the initial state, so the server-rendered
+  // markup still matches.
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    const saved = readListFilters<SavedFilters>('quotes');
+    if (saved) {
+      if (typeof saved.search === 'string') setSearch(saved.search);
+      if (typeof saved.category === 'string') setCategory(saved.category);
+      if (isSortKey(saved.sortKey)) setSortKey(saved.sortKey);
+      if (saved.sortDir === 'asc' || saved.sortDir === 'desc') setSortDir(saved.sortDir);
+    }
+    setRestored(true);
+  }, []);
+
+  useEffect(() => {
+    if (!restored) return;
+    writeListFilters<SavedFilters>('quotes', { search, category, sortKey, sortDir });
+  }, [restored, search, category, sortKey, sortDir]);
+
+  // A remembered category that this tab has no quotes for would otherwise blank
+  // the table out with no obvious cause.
+  const activeCategory = category !== 'all' && !categories.includes(category) ? 'all' : category;
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return quotes.filter((quote) => {
-      if (category !== 'all' && quote.category !== category) return false;
+      if (activeCategory !== 'all' && quote.category !== activeCategory) return false;
       if (!q) return true;
       return [quote.quote_number, quote.customer, quote.project_name, quote.category]
         .filter((v): v is string => Boolean(v))
         .some((v) => v.toLowerCase().includes(q));
     });
-  }, [quotes, search, category]);
+  }, [quotes, search, activeCategory]);
 
   const sorted = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -195,7 +233,7 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
         />
         <select
           className="input sm:w-52"
-          value={category}
+          value={activeCategory}
           onChange={(e) => setCategory(e.target.value)}
           aria-label="Filter by category"
         >

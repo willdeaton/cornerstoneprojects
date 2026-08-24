@@ -141,9 +141,11 @@ hangs off:
   same way from either place.
 - **Billing card** — the derived stage, aging, what's **left to bill** (contract
   less what has gone out) and the contract-vs-invoiced variance, plus the stage
-  decisions (`BillingStageControls`, shared with the Billing desk): put billing
-  **on hold** (reason required), **close out**, and the short path — **mark
-  billed** / **mark paid** with no invoice detail entered at all.
+  decisions this card offers (`BillingStageControls`, shared with the Billing
+  desk): put billing **on hold** (reason required), and the short path — **mark
+  billed** / **mark paid** with no invoice detail entered at all. Closing a job
+  out is not a button on this card — signing a job off the billing desk is the
+  desk's own act — though a job already closed out can still be reopened here.
 - **Job notes** — internal, staff-facing.
 - **Crew notes** — separate table, written *to be read by the crew*: gate codes,
   parking, who to ask for. Pinned notes stay on top. These surface on every

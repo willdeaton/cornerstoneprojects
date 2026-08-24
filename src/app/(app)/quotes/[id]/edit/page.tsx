@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import {
@@ -10,6 +9,7 @@ import {
   listQuoteFiles,
 } from '@/lib/data';
 import { PageHeader } from '@/components/ui';
+import { BackToList } from '@/components/ListMemory';
 import { QuoteBuilder } from '../../QuoteBuilder';
 
 export const dynamic = 'force-dynamic';
@@ -42,9 +42,13 @@ export default async function EditQuotePage({
   return (
     <div>
       <div className="mb-5">
-        <Link href="/quotes" className="text-sm font-medium text-brand-gray hover:text-brand-ink">
+        <BackToList
+          listKey="quotes"
+          fallback="/quotes"
+          className="text-sm font-medium text-brand-gray hover:text-brand-ink"
+        >
           ← Back to Quotes
-        </Link>
+        </BackToList>
       </div>
       <PageHeader title="Edit Quote" subtitle={quote.customer} />
       <QuoteBuilder
