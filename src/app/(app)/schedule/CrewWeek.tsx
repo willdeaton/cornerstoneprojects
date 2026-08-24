@@ -1455,7 +1455,9 @@ export function CrewWeek({
                                         to: dayUnder(e, s),
                                       });
                                     }}
-                                    title={`${entry.task.project_name} — ${entry.task.name}\n${span}${
+                                    title={`${entry.task.project_name} — ${entry.task.name}${
+                                      entry.task.customer ? `\n${entry.task.customer}` : ''
+                                    }\n${span}${
                                       days > 1 ? ` (${days} days)` : ''
                                     }\n${shiftLabel(entry.shift)}\nClick for the job details, start times and crew notes${
                                       entry.contracted
@@ -1479,9 +1481,9 @@ export function CrewWeek({
                                     }`}
                                     style={{ borderLeftColor: jobTint(entry.task.project_id) }}
                                   >
-                                    {/* Three short lines rather than two crowded
-                                        ones: at a fortnight's column width, a start
-                                        time sharing a line with the job or the phase
+                                    {/* Short lines rather than two crowded ones:
+                                        at a fortnight's column width, a start time
+                                        sharing a line with the job or the phase
                                         truncates the other one away entirely. */}
                                     {(shiftShort(entry.shift) || days > 1) && (
                                       <span className="flex items-baseline justify-between gap-1 text-[9px] font-bold leading-tight text-brand-green-dark">
@@ -1499,6 +1501,16 @@ export function CrewWeek({
                                     <span className="block truncate opacity-90">
                                       {entry.task.name}
                                     </span>
+                                    {/* Who the work is for. Job names repeat across
+                                        customers and read as sites more often than
+                                        as clients, so the booked day says the
+                                        customer outright rather than leaving it to
+                                        the hover. */}
+                                    {entry.task.customer && (
+                                      <span className="block truncate opacity-70">
+                                        {entry.task.customer}
+                                      </span>
+                                    )}
                                   </button>
                                   {/* Taking somebody off is its own small target now
                                       that the card itself opens the job. Nothing to
