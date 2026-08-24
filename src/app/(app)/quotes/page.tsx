@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { listQuotes } from '@/lib/data';
 import type { QuoteStatus } from '@/lib/types';
 import { PageHeader } from '@/components/ui';
+import { ListMemory } from '@/components/ListMemory';
 import { QuotesTable } from './QuotesTable';
 
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,8 @@ export default async function QuotesPage({
 
   return (
     <div>
+      {/* Remembers this tab + scroll offset so "← Back to Quotes" lands here. */}
+      <ListMemory listKey="quotes" />
       <PageHeader title="Quotes" subtitle="Prospective work in the pipeline">
         <Link href="/quotes/new" className="btn-primary">
           + Create Quote

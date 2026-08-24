@@ -17,6 +17,7 @@ import {
   EmptyState,
   BillingStageBadge,
 } from '@/components/ui';
+import { ListMemory } from '@/components/ListMemory';
 import { AddProjectButton } from './AddProjectButton';
 
 export const dynamic = 'force-dynamic';
@@ -57,6 +58,8 @@ export default async function ProjectsPage({
 
   return (
     <div>
+      {/* Remembers this tab + scroll offset so "← Back to Projects" lands here. */}
+      <ListMemory listKey="projects" />
       <PageHeader title="Projects" subtitle="Sold work and where it stands">
         <AddProjectButton />
       </PageHeader>

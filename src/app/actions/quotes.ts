@@ -13,6 +13,7 @@ import {
   getQuote,
 } from '@/lib/data';
 import type { QuoteDocInput } from '@/lib/types';
+import { safeListHref } from '@/lib/list-state';
 import { sendNewProjectEmail } from '@/lib/email/send';
 
 async function requireUser() {
@@ -49,10 +50,15 @@ export async function updateQuoteAction(id: number, formData: FormData) {
  * opens the printable page, `'list'` returns to the quotes list, and `'stay'`
  * returns `{ ok: true, id }` instead of redirecting so the builder can move
  * to the new quote's edit page without leaving the form.
+ *
+ * `returnTo` is the list URL the builder was opened from, so `'list'` comes
+ * back to that tab rather than the default one. Ignored unless it is a plain
+ * `/quotes` path.
  */
 export async function createQuoteDocAction(
   input: QuoteDocInput,
-  after: 'pdf' | 'list' | 'stay' = 'pdf'
+  after: 'pdf' | 'list' | 'stay' = 'pdf',
+  returnTo?: string
 ) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
@@ -62,19 +68,21 @@ export async function createQuoteDocAction(
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
   if (after === 'stay') return { ok: true, id };
-  redirect(after === 'pdf' ? `/quotes/${id}/print` : '/quotes');
+  redirect(after === 'pdf' ? `/quotes/${id}/print` : safeListHref(returnTo, '/quotes'));
 }
 
 /**
  * Update an existing quote document. `after` controls where the user lands:
- * `'pdf'` opens the printable page, `'list'` returns to the quotes list, and
- * `'stay'` keeps them on the edit page (returning `{ ok: true }` instead of
- * redirecting) so a plain Save can persist without leaving the form.
+ * `'pdf'` opens the printable page, `'list'` returns to the quotes list (see
+ * `returnTo` above), and `'stay'` keeps them on the edit page (returning
+ * `{ ok: true }` instead of redirecting) so a plain Save can persist without
+ * leaving the form.
  */
 export async function updateQuoteDocAction(
   id: number,
   input: QuoteDocInput,
-  after: 'pdf' | 'list' | 'stay' = 'pdf'
+  after: 'pdf' | 'list' | 'stay' = 'pdf',
+  returnTo?: string
 ) {
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
@@ -84,7 +92,7 @@ export async function updateQuoteDocAction(
   revalidatePath('/dashboard');
   revalidatePath(`/quotes/${id}/print`);
   if (after === 'stay') return { ok: true };
-  redirect(after === 'pdf' ? `/quotes/${id}/print` : '/quotes');
+  redirect(after === 'pdf' ? `/quotes/${id}/print` : safeListHref(returnTo, '/quotes'));
 }
 
 /** Trim strings, coerce numbers, and drop blank line items before persisting. */

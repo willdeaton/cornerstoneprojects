@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { money, shortDate } from '@/lib/format';
 import { ProjectStatusBadge } from '@/components/ui';
+import { BackToList } from '@/components/ListMemory';
 import { loadProject, requireJobUser } from './job';
 import { tabsForRole } from './project-tabs';
 import { ProjectTabs } from './ProjectTabs';
@@ -31,9 +32,13 @@ export default async function ProjectLayout({
   return (
     <div>
       <div className="mb-5">
-        <Link href="/projects" className="text-sm font-medium text-brand-gray hover:text-brand-ink">
+        <BackToList
+          listKey="projects"
+          fallback="/projects"
+          className="text-sm font-medium text-brand-gray hover:text-brand-ink"
+        >
           ← Back to Projects
-        </Link>
+        </BackToList>
       </div>
 
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
