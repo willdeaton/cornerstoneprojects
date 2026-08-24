@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -13,6 +13,7 @@ import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import {
   availableCrew,
   boardAlerts,
+  crewWeekModel,
   dayBoard,
   nextDayWithWork,
   paginate,
@@ -20,6 +21,7 @@ import {
   type TimelineProject,
 } from './tv-board';
 import { BOARD_BG, CARD, TEXT } from './tv-style';
+import { TvCrew } from './TvCrew';
 import { TvDay } from './TvDay';
 import { TvTimeline } from './TvTimeline';
 
@@ -29,8 +31,14 @@ const REFRESH_SECONDS = 90;
 const DAY_CHECK_SECONDS = 60;
 /** Jobs per timeline screen. Past this the board pages instead of shrinking. */
 const ROWS_PER_PAGE = 7;
+/** People per crew-week screen, for the same reason. */
+const CREW_PER_PAGE = 10;
+/** Weeks of crew week on screen — the fortnight the Schedule itself opens on. */
+const CREW_WEEKS = 2;
+/** Where the paused screen is remembered, so a reload comes back to it. */
+const HOLD_KEY = 'tv-hold';
 
-type Slide = { kind: 'day' } | { kind: 'timeline'; page: number };
+type Slide = { kind: 'day' } | { kind: 'crew'; page: number } | { kind: 'timeline'; page: number };
 
 /**
  * The office status board.
@@ -70,8 +78,8 @@ export function TvBoard({
   serverDay: string;
   /** When these rows were read, so the board can say how fresh it is. */
   loadedAt: string;
-  /** 'rotate' cycles the panels; the others pin the board to one of them. */
-  panel: 'rotate' | 'today' | 'timeline';
+  /** 'rotate' cycles the screens; the others pin the board to one of them. */
+  panel: 'rotate' | 'today' | 'crew' | 'timeline';
   rotateSeconds: number;
   weeks: number;
 }) {
@@ -82,8 +90,6 @@ export function TvBoard({
   const [day, setDay] = useState(serverDay);
   const [slide, setSlide] = useState(0);
   const [paused, setPaused] = useState(false);
-  const [controlsShown, setControlsShown] = useState(false);
-  const hideControls = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
   const { windows } = useMemo(() => computeSchedule(tasks, calendar), [tasks, calendar]);
@@ -111,13 +117,22 @@ export function TvBoard({
     [tasks, projects, windows, calendar, day, weeks]
   );
   const pages = useMemo(() => paginate(model.rows, ROWS_PER_PAGE), [model]);
+  const crew = useMemo(
+    () => crewWeekModel(bookings, warehouse, workers, day, CREW_WEEKS),
+    [bookings, warehouse, workers, day]
+  );
+  const crewPages = useMemo(() => paginate(crew.rows, CREW_PER_PAGE), [crew]);
 
+  // Today, then where everybody is, then the weeks ahead — narrowing from the
+  // day in front of the office to the shape of the month.
   const slides: Slide[] = useMemo(() => {
+    const crewScreens: Slide[] = crewPages.map((_, i) => ({ kind: 'crew', page: i }));
     const timeline: Slide[] = pages.map((_, i) => ({ kind: 'timeline', page: i }));
     if (panel === 'today') return [{ kind: 'day' }];
+    if (panel === 'crew') return crewScreens;
     if (panel === 'timeline') return timeline;
-    return [{ kind: 'day' }, ...timeline];
-  }, [pages, panel]);
+    return [{ kind: 'day' }, ...crewScreens, ...timeline];
+  }, [crewPages, pages, panel]);
 
   // A board that has just lost a timeline page (a job finished, the rows now
   // fit one screen) must not sit on a slide that no longer exists.
@@ -196,37 +211,58 @@ export function TvBoard({
   }, []);
 
   const step = useCallback(
-    (by: number) => setSlide((s) => (slides.length + s + by) % slides.length),
+    (by: number) => {
+      // Stepping by hand is somebody choosing a screen, so it holds there
+      // rather than turning over two seconds later.
+      setPaused(true);
+      setSlide((s) => (slides.length + s + by) % slides.length);
+    },
     [slides.length]
   );
 
-  const reveal = useCallback(() => {
-    setControlsShown(true);
-    if (hideControls.current) clearTimeout(hideControls.current);
-    hideControls.current = setTimeout(() => setControlsShown(false), 4000);
+  // A held screen is remembered, so a browser that reloads overnight — or a TV
+  // that reboots — comes back to the screen somebody left up rather than to the
+  // rotation they deliberately stopped.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HOLD_KEY);
+      if (!raw) return;
+      const held = JSON.parse(raw) as { paused?: boolean; slide?: number };
+      if (!held?.paused) return;
+      setPaused(true);
+      if (typeof held.slide === 'number' && held.slide >= 0) setSlide(held.slide);
+    } catch {
+      // A browser with storage blocked simply starts on the rotation.
+    }
   }, []);
+
+  useEffect(() => {
+    try {
+      if (paused) localStorage.setItem(HOLD_KEY, JSON.stringify({ paused: true, slide: index }));
+      else localStorage.removeItem(HOLD_KEY);
+    } catch {
+      // Not being able to remember the hold doesn't stop it holding now.
+    }
+  }, [paused, index]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight') step(1);
       else if (e.key === 'ArrowLeft') step(-1);
-      else if (e.key === ' ') {
+      else if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         setPaused((p) => !p);
       } else if (e.key.toLowerCase() === 'f') void toggleFullscreen();
       else if (e.key.toLowerCase() === 'r') router.refresh();
-      else return;
-      reveal();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [step, reveal, router]);
+  }, [step, router]);
 
   return (
     <div
       className="flex h-screen flex-col overflow-hidden p-[1.2vw] text-white"
       style={{ background: BOARD_BG }}
-      onMouseMove={reveal}
     >
       <header className="flex items-center justify-between gap-6 pb-[1vw]">
         <div className="flex min-w-0 items-center gap-[1vw]">
@@ -269,6 +305,15 @@ export function TvBoard({
 
       {current.kind === 'day' ? (
         <TvDay board={board} next={nextBoard} available={available} today={day} />
+      ) : current.kind === 'crew' ? (
+        <TvCrew
+          model={crew}
+          rows={crewPages[current.page] ?? []}
+          pages={crewPages.length}
+          firstRow={current.page * CREW_PER_PAGE + 1}
+          today={day}
+          holidays={calendar.holidays}
+        />
       ) : (
         <TvTimeline
           model={model}
@@ -285,7 +330,7 @@ export function TvBoard({
         <div className="flex items-center gap-2">
           {slides.map((s, i) => (
             <span
-              key={s.kind === 'day' ? 'day' : `timeline-${s.page}`}
+              key={s.kind === 'day' ? 'day' : `${s.kind}-${s.page}`}
               className={`h-1.5 rounded-full transition-all duration-300 ${
                 i === index ? 'w-8 bg-brand-green' : 'w-3 bg-white/20'
               }`}
@@ -301,19 +346,24 @@ export function TvBoard({
               />
             </span>
           )}
-          {paused && <span className={`${TEXT.micro} ml-2 text-white/40`}>Paused</span>}
+          {paused && (
+            <span className={`${TEXT.micro} ml-2 font-semibold text-brand-green`}>
+              Holding on this screen
+            </span>
+          )}
         </div>
 
-        <div
-          className={`flex items-center gap-2 transition-opacity duration-300 ${
-            controlsShown || paused ? 'opacity-100' : 'opacity-0'
-          }`}
-        >
+        {/* Always on screen, dimmed until somebody walks up to it: a board you
+            can't stop on the screen you're reading is a board you fight. */}
+        <div className="flex items-center gap-2 opacity-50 transition-opacity duration-200 hover:opacity-100">
           <Control onClick={() => step(-1)} label="Previous screen">
             ‹
           </Control>
-          <Control onClick={() => setPaused((p) => !p)} label={paused ? 'Resume' : 'Pause'}>
-            {paused ? '▶' : '❚❚'}
+          <Control
+            onClick={() => setPaused((p) => !p)}
+            label={paused ? 'Resume the rotation' : 'Hold this screen'}
+          >
+            <span className="font-semibold">{paused ? '▶ Resume' : '❚❚ Pause'}</span>
           </Control>
           <Control onClick={() => step(1)} label="Next screen">
             ›

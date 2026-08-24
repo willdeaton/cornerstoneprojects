@@ -18,15 +18,21 @@
 import {
   addDays,
   crewBudget,
+  dayIsClashing,
+  eachDay,
   findConflicts,
+  isWeekend,
   isWorkingDay,
   mondayLabel,
   shiftLabel,
+  shiftShort,
   weekAlignedRange,
   weekBands,
+  weekStart,
   workedSegments,
   type AssigneeBooking,
   type ComputedWindow,
+  type DayShift,
   type WeekBand,
   type WorkCalendar,
 } from '@/lib/schedule-math';
@@ -343,6 +349,11 @@ export interface TimelineBar {
   lane: number;
   /** Only the first stretch of a phase carries the label. */
   leading: boolean;
+  /**
+   * Empty columns to the right of this bar on its own lane. A bar too narrow
+   * for its own name borrows them, so a one-day phase is still readable.
+   */
+  gapAfter: number;
 }
 
 /** One job's row on the timeline. */
@@ -453,6 +464,7 @@ export function timelineModel(
         const endIdx = index.get(to);
         if (startIdx == null || endIdx == null || endIdx < startIdx) return;
         bars.push({
+          gapAfter: 0,
           key: `${task.id}-${s.start}`,
           taskId: task.id,
           label: task.subcontractor_name ? `${task.name} · ${task.subcontractor_name}` : task.name,
@@ -468,6 +480,7 @@ export function timelineModel(
     }
 
     if (bars.length === 0) continue;
+    labelRoom(bars, days.length);
     rows.push({
       projectId: project.id,
       name: project.name,
@@ -486,6 +499,30 @@ export function timelineModel(
   return { start: range.start, end: range.end, days, bands: weekBands(days), rows, unscheduled };
 }
 
+/**
+ * How much clear space each bar has after it on its own lane.
+ *
+ * A one-day phase is two centimetres wide on a six-week board, which is not a
+ * name — it's three letters and an ellipsis. Knowing the gap lets the label sit
+ * in the empty columns beside the bar instead, and knowing it exactly is what
+ * keeps that label from running over the phase that comes next.
+ */
+function labelRoom(bars: TimelineBar[], columns: number): void {
+  const byLane = new Map<number, TimelineBar[]>();
+  for (const bar of bars) {
+    const lane = byLane.get(bar.lane);
+    if (lane) lane.push(bar);
+    else byLane.set(bar.lane, [bar]);
+  }
+  for (const lane of byLane.values()) {
+    lane.sort((a, b) => a.startIdx - b.startIdx);
+    lane.forEach((bar, i) => {
+      const next = lane[i + 1];
+      bar.gapAfter = (next ? next.startIdx : columns) - bar.endIdx - 1;
+    });
+  }
+}
+
 /** "Aug 24 – Sep 13" — the span a timeline page is headed with. */
 export function spanLabel(start: string, end: string): string {
   return `${mondayLabel(start)} – ${mondayLabel(end)}`;
@@ -497,4 +534,228 @@ export function paginate<T>(items: T[], size: number): T[][] {
   const pages: T[][] = [];
   for (let i = 0; i < items.length; i += size) pages.push(items.slice(i, i + size));
   return pages;
+}
+
+/* -------------------------------------------------------------- Crew week */
+
+/** What somebody is on, on one day — a phase of a job, or the warehouse. */
+interface CrewEntry {
+  /** 'task:12' / 'warehouse' — what a run of days is joined by. */
+  key: string;
+  projectId: number | null;
+  /** The job, or "Warehouse". */
+  label: string;
+  phase: string | null;
+  status: TaskStatus | null;
+  shift: DayShift;
+}
+
+/** A run of days one person works the same thing, on the same shift. */
+export interface CrewSpan {
+  key: string;
+  label: string;
+  phase: string | null;
+  /** "8a", "8–12" — the shift at chip width, empty when it's all day. */
+  shift: string;
+  status: TaskStatus | null;
+  /** First and last visible column, inclusive. */
+  startIdx: number;
+  endIdx: number;
+  lane: number;
+  /** This card shares a day with another job whose hours collide. */
+  clash: boolean;
+}
+
+/** One person's line across the weeks. */
+export interface CrewRow {
+  key: string;
+  kind: 'user' | 'sub';
+  name: string;
+  detail: string | null;
+  spans: CrewSpan[];
+  lanes: number;
+  /** Visible columns they're booked on — 0 is somebody with a free fortnight. */
+  bookedDays: number;
+}
+
+export interface CrewWeekModel {
+  start: string;
+  end: string;
+  /** The days actually drawn: weekends only when somebody is on them. */
+  columns: string[];
+  bands: WeekBand[];
+  rows: CrewRow[];
+}
+
+/**
+ * Where everybody is, a fortnight at a time — one row per person, one column
+ * per day.
+ *
+ * The Schedule's Crew Week is where this is *staffed*; this is the same picture
+ * with nothing to click, for a room to read. It follows the same two rules that
+ * make that grid legible: a run of days on one job at one shift is a single
+ * card rather than one chip per day, and a weekend stays off the grid unless
+ * somebody is actually booked on it.
+ *
+ * People with nothing booked keep their row. On a wall board "who is free this
+ * week" is half the question being asked, and an empty line answers it.
+ */
+export function crewWeekModel(
+  bookings: AssigneeBooking[],
+  warehouse: WarehouseDay[],
+  workers: { id: number; name: string; schedulable: boolean }[],
+  anchor: string,
+  weeks: number
+): CrewWeekModel {
+  const range = weekAlignedRange(anchor, weeks * 7);
+  const allDays: string[] = [];
+  for (let d = range.start; d <= range.end; d = addDays(d, 1)) allDays.push(d);
+
+  const byPerson = new Map<
+    string,
+    { kind: 'user' | 'sub'; name: string; detail: string | null; days: Map<string, CrewEntry[]> }
+  >();
+  const put = (
+    key: string,
+    kind: 'user' | 'sub',
+    name: string,
+    detail: string | null,
+    day: string,
+    entry: CrewEntry
+  ) => {
+    let person = byPerson.get(key);
+    if (!person) {
+      person = { kind, name, detail, days: new Map() };
+      byPerson.set(key, person);
+    }
+    const list = person.days.get(day);
+    if (list) list.push(entry);
+    else person.days.set(day, [entry]);
+  };
+
+  for (const b of bookings) {
+    if (b.start > range.end || b.end < range.start) continue;
+    for (const day of eachDay(b.start, b.end)) {
+      if (day < range.start || day > range.end) continue;
+      put(b.key, b.kind, b.name, b.detail, day, {
+        key: `task:${b.taskId}`,
+        projectId: b.projectId,
+        label: b.projectName,
+        phase: b.taskName,
+        status: b.taskStatus,
+        shift: { startTime: b.startTime, hours: b.hours },
+      });
+    }
+  }
+  for (const w of warehouse) {
+    if (w.day < range.start || w.day > range.end) continue;
+    put(`user:${w.user_id}`, 'user', w.name, w.detail, w.day, {
+      key: 'warehouse',
+      projectId: null,
+      label: 'Warehouse',
+      phase: null,
+      status: null,
+      shift: { startTime: null, hours: null },
+    });
+  }
+
+  // A Saturday nobody is on is not a column: a normal fortnight stays ten wide,
+  // and a weekend that IS worked is exactly the thing to show.
+  const columns = allDays.filter((d) => {
+    if (!isWeekend(d)) return true;
+    return [...byPerson.values()].some((p) => (p.days.get(d)?.length ?? 0) > 0);
+  });
+
+  const rows: CrewRow[] = [];
+  const rowFor = (key: string, kind: 'user' | 'sub', name: string, detail: string | null) => {
+    const days = byPerson.get(key)?.days ?? new Map<string, CrewEntry[]>();
+    const { spans, lanes } = crewSpans(days, columns);
+    return {
+      key,
+      kind,
+      name,
+      detail,
+      spans,
+      lanes,
+      bookedDays: columns.filter((d) => (days.get(d)?.length ?? 0) > 0).length,
+    };
+  };
+
+  for (const w of workers) {
+    const key = `user:${w.id}`;
+    // Somebody out of scheduling only appears while they still have days on the
+    // board — the same forgiveness the Crew Week gives them.
+    if (!w.schedulable && !byPerson.has(key)) continue;
+    rows.push(rowFor(key, 'user', w.name, null));
+  }
+  for (const [key, person] of byPerson) {
+    if (person.kind === 'sub') rows.push(rowFor(key, 'sub', person.name, person.detail));
+  }
+
+  rows.sort(
+    (a, b) => (a.kind === b.kind ? 0 : a.kind === 'user' ? -1 : 1) || a.name.localeCompare(b.name)
+  );
+  return { start: range.start, end: range.end, columns, bands: weekBands(columns), rows };
+}
+
+/**
+ * One person's days, gathered into the cards their row draws.
+ *
+ * Days join up when they're the same booking on the same shift in adjacent
+ * columns of the same week: a card spanning days is stating one shift for all
+ * of them, and the grid bands the weeks apart anyway. Cards that overlap stack
+ * into lanes, so a two-day job and the half day beside it each keep a line.
+ */
+function crewSpans(
+  days: Map<string, CrewEntry[]>,
+  columns: string[]
+): { spans: CrewSpan[]; lanes: number } {
+  const spans: CrewSpan[] = [];
+  const open = new Map<string, CrewSpan>();
+
+  columns.forEach((day, i) => {
+    const entries = days.get(day) ?? [];
+    // Only a real double-booking rings a card: two phases of one job, or two
+    // bounded shifts that clear each other, are somebody's ordinary day.
+    const clashing = dayIsClashing(
+      entries
+        .filter((e) => e.projectId != null)
+        .map((e) => ({ projectId: e.projectId as number, shift: e.shift }))
+    );
+    for (const entry of entries) {
+      const run = open.get(entry.key);
+      const joins =
+        run != null &&
+        run.endIdx === i - 1 &&
+        weekStart(columns[run.endIdx]) === weekStart(day) &&
+        run.shift === shiftShort(entry.shift);
+      if (joins && run) {
+        run.endIdx = i;
+        run.clash = run.clash || clashing;
+      } else {
+        const started: CrewSpan = {
+          key: entry.key,
+          label: entry.label,
+          phase: entry.phase,
+          shift: shiftShort(entry.shift),
+          status: entry.status,
+          startIdx: i,
+          endIdx: i,
+          lane: 0,
+          clash: clashing,
+        };
+        spans.push(started);
+        open.set(entry.key, started);
+      }
+    }
+  });
+
+  const laneEnds: number[] = [];
+  for (const span of spans) {
+    let lane = laneEnds.findIndex((end) => end < span.startIdx);
+    if (lane === -1) lane = laneEnds.push(span.endIdx) - 1;
+    else laneEnds[lane] = span.endIdx;
+    span.lane = lane;
+  }
+  return { spans, lanes: Math.max(1, laneEnds.length) };
 }

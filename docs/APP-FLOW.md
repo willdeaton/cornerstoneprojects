@@ -312,13 +312,21 @@ and without an address.
 **Status board** `/tv` is the same rows for a wall screen. Deliberately outside
 the `(app)` group — the sidebar, the "view as" switcher and the backup reminder
 are all things you click, and none belong on a TV — so what's left is the
-schedule itself, dark and full-bleed, rotating between today's crew and a
-Monday-anchored timeline of the weeks ahead. It derives everything through
-`computeSchedule()` / `assigneeBookings()` exactly as the Schedule does
-(`src/app/tv/tv-board.ts` shapes the day, the alerts and the timeline rows; it
-holds no queries and no state), refreshes itself every 90s, rolls the day over at
-midnight, and takes `?panel=today|timeline`, `?rotate=<seconds>` and `?weeks=<n>`
-from the URL. Admins and managers only, and read-only end to end.
+schedule itself, dark and full-bleed, rotating through three screens: **today**
+(a card per job with crew on it), the **crew week** (a row per person over a
+Monday-anchored fortnight, weekends off the grid unless worked, a run of days on
+one job at one shift drawn as one card, double-bookings ringed), and the **job
+timeline** (a row per job, phase bars over the weeks ahead). It derives
+everything through `computeSchedule()` / `assigneeBookings()` exactly as the
+Schedule does (`src/app/tv/tv-board.ts` shapes the day, the alerts, the crew rows
+and the timeline rows; it holds no queries and no state), refreshes itself every
+90s, rolls the day over at midnight, and takes `?panel=today|crew|timeline`,
+`?rotate=<seconds>` and `?weeks=<n>` from the URL. Nothing is ever dropped to
+make room: the day's cards divide and shed detail instead of hiding jobs, a bar
+too narrow for its label borrows the empty columns beside it, and the crew and
+timeline screens page. Pausing holds a screen and is remembered in
+`localStorage`, so a TV that reloads comes back to it. Admins and managers only,
+and read-only end to end.
 
 **Send Schedule** emails each assignee their own dates only.
 
