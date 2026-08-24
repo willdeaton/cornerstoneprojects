@@ -197,6 +197,21 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **Overlapping phases** — a phase can start a set number of working days
     after the previous phase *starts* (start-to-start), instead of waiting for
     it to finish, so a sub can work alongside the crew ahead of them.
+  - **Status board (TV)** — `/tv`, the schedule for a screen on the office wall.
+    Full-bleed and dark, with no sidebar and nothing to click: it rotates between
+    **today** — every job with somebody on it, the time they start, the crew by
+    name, the site address, plus the next day with work, who's in the warehouse
+    and who isn't booked — and the **job timeline**, the same phase bars the
+    Schedule draws, one row per job over the next few weeks. Anything worth
+    interrupting a room for sits across the top: a double-booking, a job planned
+    past its hard finish date, crew days still to book on work starting within
+    the week. It re-reads the schedule every 90 seconds, rolls itself over at
+    midnight, keeps the screen awake, and pages through the jobs rather than
+    shrinking them. The URL carries the settings: `/tv?panel=today` or
+    `?panel=timeline` pins one screen, `?rotate=40` slows the turnover, `?weeks=6`
+    shows a longer timeline. It's a signed-in page like every other — sign the TV
+    in once as a manager or admin — and it only ever reads: nothing on it can
+    change a booking. Open it from the **TV board** button on the Schedule.
   - **My Schedule** — employees get their own week: one card per day they're
     booked, showing the start time, the job, the address, the phase notes and
     the crew notes, with arrows to step through the weeks. A day in the
