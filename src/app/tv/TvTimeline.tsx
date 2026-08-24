@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { fromDay, mondayLabel, weekStart } from '@/lib/schedule-math';
 import { shortDate } from '@/lib/format';
 import { CARD, JOB_DOT, PHASE_TINT, TEXT } from './tv-style';
@@ -196,26 +197,48 @@ function JobRow({
         />
       ))}
 
-      {row.bars.map((bar) => (
-        <div
-          key={bar.key}
-          style={{
-            gridRow: bar.lane + 1,
-            gridColumn: `${bar.startIdx + 2} / ${bar.endIdx + 3}`,
-          }}
-          className={`z-10 flex h-[clamp(1.5rem,4vh,3rem)] items-center self-center overflow-hidden rounded px-2 ${
-            PHASE_TINT[bar.status]
-          } ${bar.clippedLeft ? 'rounded-l-none' : ''} ${
-            bar.clippedRight ? 'rounded-r-none' : ''
-          }`}
-        >
-          {/* Only the first stretch is labelled; the rest are the same phase
-              carrying on after a weekend. */}
-          {bar.leading && (
-            <span className={`${TEXT.micro} truncate font-semibold`}>{bar.label}</span>
-          )}
-        </div>
-      ))}
+      {row.bars.map((bar) => {
+        // A one- or two-day bar has no room for a phase name inside it, so the
+        // name goes beside it instead of being cut to three letters. A board
+        // nobody can read the labels on isn't showing anything.
+        // Anything under four columns wide is narrower than its own name.
+        const narrow = bar.endIdx - bar.startIdx < 3;
+        const beside = bar.leading && narrow && bar.gapAfter >= 1;
+        return (
+          <Fragment key={bar.key}>
+            <div
+              style={{
+                gridRow: bar.lane + 1,
+                gridColumn: `${bar.startIdx + 2} / ${bar.endIdx + 3}`,
+              }}
+              className={`z-10 flex h-[clamp(1.5rem,4vh,3rem)] items-center self-center overflow-hidden rounded px-2 ${
+                PHASE_TINT[bar.status]
+              } ${bar.clippedLeft ? 'rounded-l-none' : ''} ${
+                bar.clippedRight ? 'rounded-r-none' : ''
+              }`}
+            >
+              {/* Only the first stretch is labelled; the rest are the same phase
+                  carrying on after a weekend. */}
+              {bar.leading && !beside && (
+                <span className={`${TEXT.micro} truncate font-semibold`}>{bar.label}</span>
+              )}
+            </div>
+            {beside && (
+              <div
+                style={{
+                  gridRow: bar.lane + 1,
+                  gridColumn: `${bar.endIdx + 3} / ${bar.endIdx + 3 + bar.gapAfter}`,
+                }}
+                className="z-10 flex items-center self-center overflow-hidden pl-2"
+              >
+                <span className={`${TEXT.micro} truncate font-semibold text-white/85`}>
+                  {bar.label}
+                </span>
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

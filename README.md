@@ -198,20 +198,33 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     after the previous phase *starts* (start-to-start), instead of waiting for
     it to finish, so a sub can work alongside the crew ahead of them.
   - **Status board (TV)** — `/tv`, the schedule for a screen on the office wall.
-    Full-bleed and dark, with no sidebar and nothing to click: it rotates between
-    **today** — every job with somebody on it, the time they start, the crew by
-    name, the site address, plus the next day with work, who's in the warehouse
-    and who isn't booked — and the **job timeline**, the same phase bars the
-    Schedule draws, one row per job over the next few weeks. Anything worth
-    interrupting a room for sits across the top: a double-booking, a job planned
-    past its hard finish date, crew days still to book on work starting within
-    the week. It re-reads the schedule every 90 seconds, rolls itself over at
-    midnight, keeps the screen awake, and pages through the jobs rather than
-    shrinking them. The URL carries the settings: `/tv?panel=today` or
-    `?panel=timeline` pins one screen, `?rotate=40` slows the turnover, `?weeks=6`
-    shows a longer timeline. It's a signed-in page like every other — sign the TV
-    in once as a manager or admin — and it only ever reads: nothing on it can
-    change a booking. Open it from the **TV board** button on the Schedule.
+    Full-bleed and dark, with no sidebar and nothing to click. It rotates between
+    three screens: **today** — every job with somebody on it, the time they
+    start, the crew by name, the site address, plus the next day with work,
+    who's in the warehouse and who isn't booked; the **crew week** — one row per
+    person over the fortnight, so "where is everybody" is answered in the shape
+    the question comes in, with the days somebody is free left blank; and the
+    **job timeline**, the same phase bars the Schedule draws, one row per job
+    over the next few weeks. Anything worth interrupting a room for sits across
+    the top: a double-booking, a job planned past its hard finish date, crew days
+    still to book on work starting within the week.
+  - **Reading it from across the room** — every job on today gets a card,
+    always: as the day fills up the grid divides and the cards shed the detail
+    that stops fitting (the status word, then the address), so nothing is ever
+    hidden behind a "+3 more". A phase bar too narrow for its own name is
+    labelled in the empty days beside it rather than cut to three letters, and
+    the crew week and timeline page through people and jobs rather than
+    shrinking them. **Pause** holds the screen you're reading — it's a button on
+    the board, the space bar, or simply stepping with the arrows — and a held
+    screen is remembered, so a TV that reboots overnight comes back to it.
+  - **Left running** — it re-reads the schedule every 90 seconds and whenever the
+    tab comes back, rolls itself over at midnight, and keeps the screen awake
+    where the browser allows it. The URL carries the settings:
+    `/tv?panel=today`, `?panel=crew` or `?panel=timeline` pins one screen,
+    `?rotate=40` slows the turnover, `?weeks=6` shows a longer timeline. It's a
+    signed-in page like every other — sign the TV in once as a manager or
+    admin — and it only ever reads: nothing on it can change a booking. Open it
+    from the **TV board** button on the Schedule.
   - **My Schedule** — employees get their own week: one card per day they're
     booked, showing the start time, the job, the address, the phase notes and
     the crew notes, with arrows to step through the weeks. A day in the

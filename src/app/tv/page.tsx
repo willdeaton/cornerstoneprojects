@@ -25,7 +25,8 @@ const DEFAULT_WEEKS = 3;
  * Deliberately outside the `(app)` group: the app shell's sidebar, the "view
  * as" switcher and the backup reminder are all things you click, and none of
  * them belong on a screen on the wall. What's left is the schedule itself,
- * full-bleed and dark, rotating between today's crew and the weeks ahead.
+ * full-bleed and dark, rotating between today's jobs, where everybody is this
+ * fortnight, and the weeks ahead.
  *
  * It is still a signed-in page — the whole company's jobs, customers and crew
  * are on it — so the TV signs in once, as a manager or admin, and stays signed
@@ -33,8 +34,9 @@ const DEFAULT_WEEKS = 3;
  * schedule instead, which is the same line the rest of the app draws.
  *
  * The URL takes the settings a wall screen actually needs:
- *   /tv                          both screens, rotating
+ *   /tv                          all three screens, rotating
  *   /tv?panel=today              today only
+ *   /tv?panel=crew               the crew week only
  *   /tv?panel=timeline           the timeline only
  *   /tv?rotate=40&weeks=6        a slower turnover and a longer view
  */
@@ -48,7 +50,10 @@ export default async function TvPage({
   if (me.role !== 'admin' && me.role !== 'manager') redirect('/schedule');
 
   const params = await searchParams;
-  const panel = params.panel === 'today' || params.panel === 'timeline' ? params.panel : 'rotate';
+  const panel =
+    params.panel === 'today' || params.panel === 'crew' || params.panel === 'timeline'
+      ? params.panel
+      : 'rotate';
   const rotateSeconds = clamp(Number(params.rotate), 5, 300, DEFAULT_ROTATE);
   const weeks = clamp(Number(params.weeks), 1, 8, DEFAULT_WEEKS);
 
