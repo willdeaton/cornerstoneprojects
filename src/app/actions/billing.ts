@@ -6,10 +6,13 @@ import { getCurrentUser } from '@/lib/auth';
 import {
   setProjectBillingHold,
   setProjectBillingClosed,
+  markProjectBilling,
+  listProjectInvoices,
   setInvoiceFile,
   deleteInvoiceFile,
   invoiceBelongsToProject,
 } from '@/lib/data';
+import type { ProjectInvoiceWithFile } from '@/lib/types';
 
 /**
  * The billing desk. Only admins and managers get here — the A/R on every job
@@ -28,6 +31,48 @@ function revalidateBilling(projectId: number) {
   revalidatePath('/billing');
   revalidatePath(`/projects/${projectId}`, 'layout');
   revalidatePath('/projects');
+  // The dashboard counts invoiced work too, so a mark made here shows up there.
+  revalidatePath('/dashboard');
+}
+
+/**
+ * One job's invoice ledger, for the billing desk to open a job's billing
+ * without leaving the page.
+ *
+ * The desk loads these a job at a time, on the row being expanded, rather than
+ * every invoice on every completed job up front — the page stays the size of
+ * the queue however many years of paperwork are behind it.
+ */
+export async function listJobInvoicesAction(
+  projectId: number
+): Promise<ProjectInvoiceWithFile[]> {
+  await requireBiller();
+  return listProjectInvoices(projectId);
+}
+
+/**
+ * Mark a job billed, or billed and paid, without entering any invoice detail.
+ *
+ * Plenty of work is invoiced and collected outside this app, and making
+ * somebody type an invoice number, a PO and a send date just to get a finished
+ * job off the desk is how a billing queue stops being trusted. So this marks
+ * every invoice on the job sent (and paid, when asked), and raises one for the
+ * contract value when the job has nothing on it at all.
+ *
+ * It is deliberately not a separate "billed anyway" flag: what it writes is an
+ * ordinary invoice row, which is why the stage, the aging and every total
+ * follow from it with no special case anywhere — and why it is undone by
+ * editing the row in the ledger like any other.
+ */
+export async function markBillingAction(
+  projectId: number,
+  mark: 'billed' | 'paid'
+): Promise<{ error?: string }> {
+  await requireBiller();
+  const touched = await markProjectBilling(projectId, mark === 'paid');
+  if (touched === 0) return { error: 'That job no longer exists.' };
+  revalidateBilling(projectId);
+  return {};
 }
 
 /**

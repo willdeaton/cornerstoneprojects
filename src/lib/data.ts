@@ -544,11 +544,60 @@ export async function setProjectBillingClosed(
   await q(
     `UPDATE projects
         SET billing_closed_at = CASE WHEN $1::boolean THEN now() ELSE NULL END,
-            billing_closed_by = CASE WHEN $1::boolean THEN $2 ELSE NULL END,
+            -- $2 is cast explicitly: inside a CASE against NULL there is
+            -- nothing for Postgres to infer a parameter's type from, so it
+            -- assumes text and the assignment to an integer column is rejected.
+            billing_closed_by = CASE WHEN $1::boolean THEN $2::int ELSE NULL END,
             updated_at = now()
       WHERE id = $3`,
     [closed, userId, id]
   );
+}
+
+/**
+ * Mark a job's billing done without asking anybody to type an invoice.
+ *
+ * This is the short path for work that is simply billed and collected outside
+ * this app: no invoice number, no PO, no PDF. Every invoice already on the job
+ * is marked sent — and paid too when asked — and a job with nothing raised
+ * against it gets one row for its contract value, so the derived stage moves
+ * exactly as it would have if the paperwork had been entered by hand. The row
+ * is an ordinary invoice: the ledger on the billing desk is where it gets a
+ * number later, an amount corrected, or the whole thing undone.
+ *
+ * `sent_on` is filled in with today only where it is missing, so a date already
+ * recorded for an invoice is never overwritten by a bulk mark. Nothing is ever
+ * un-marked here: `paid = paid OR $2` means marking sent leaves the paid rows
+ * paid.
+ *
+ * Returns the number of invoices touched, counting one for a row it had to
+ * raise, so a caller can tell a no-op from real work.
+ */
+export async function markProjectBilling(projectId: number, paid: boolean): Promise<number> {
+  const updated = await q<{ id: number }>(
+    `UPDATE project_invoices
+        SET billed  = TRUE,
+            sent_on = COALESCE(sent_on, CURRENT_DATE),
+            paid    = paid OR $2,
+            updated_at = now()
+      WHERE project_id = $1
+      RETURNING id`,
+    [projectId, paid]
+  );
+  if (updated.length > 0) return updated.length;
+
+  // Nothing raised against the job yet, so the mark has to raise it. The
+  // amount is the contract value, read in the same statement rather than
+  // fetched first — the job is what says what it is worth.
+  const raised = await q<{ id: number }>(
+    `INSERT INTO project_invoices (project_id, amount, billed, sent_on, paid, position)
+     SELECT p.id, GREATEST(p.value, 0), TRUE, CURRENT_DATE, $2, 1
+       FROM projects p
+      WHERE p.id = $1
+     RETURNING id`,
+    [projectId, paid]
+  );
+  return raised.length;
 }
 
 /**

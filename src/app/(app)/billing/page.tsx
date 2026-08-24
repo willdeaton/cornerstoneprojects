@@ -2,26 +2,27 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listBillingProjects } from '@/lib/data';
-import { money, shortDate } from '@/lib/format';
-import {
-  billingSummary,
-  billingVariance,
-  BILLING_STAGE_LABELS,
-  type BillingStage,
-  type BillingSummary,
-} from '@/lib/billing';
-import { PageHeader, StatCard, EmptyState, BillingStageBadge } from '@/components/ui';
+import { money } from '@/lib/format';
+import { billingSummary, type BillingStage } from '@/lib/billing';
+import { PageHeader, StatCard, EmptyState } from '@/components/ui';
+import { BillingDesk, type DeskRow } from './BillingDesk';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * The billing desk: every job that has finished the work, in the order the
- * billing wants doing.
+ * billing wants doing — and the place billing is actually done.
  *
  * The tabs are the pipeline, not a filter menu — a job appears under exactly
- * one of them, and it moves between them on its own as the invoice rows on the
- * project are ticked Billed and Paid. Nothing on this page is edited here:
- * it's a queue that points at the job to work on next.
+ * one of them, and it moves between them on its own as its invoices are ticked
+ * Sent and Paid. Which is the point of working here: opening a job brings its
+ * ledger and its stage decisions down into the row (see `BillingDesk`), so a
+ * pass down the queue is a pass down one page, and a job that gets settled
+ * leaves the tab it was in as you go.
+ *
+ * This page still only computes and lays out. Every write behind an opened row
+ * goes through the same components and actions the job's Billing tab uses, so
+ * there is one way to edit billing however you got to it.
  */
 
 /** A tab, and the stages it collects. "All" carries every stage. */
@@ -33,13 +34,6 @@ const TABS: { key: string; label: string; stages: BillingStage[] | null }[] = [
   { key: 'closed', label: 'Closed', stages: ['closed'] },
   { key: 'all', label: 'All', stages: null },
 ];
-
-type Row = {
-  project: { id: number; customer: string; name: string; completed_at: string | null };
-  summary: BillingSummary;
-  holdReason: string | null;
-  hours: number;
-};
 
 export default async function BillingPage({
   searchParams,
@@ -55,10 +49,11 @@ export default async function BillingPage({
   const tab = TABS.find((t) => t.key === stage) ?? TABS[0];
 
   const desk = await listBillingProjects();
-  const rows: Row[] = desk.map((d) => ({
+  const rows: DeskRow[] = desk.map((d) => ({
     project: d.project,
     summary: billingSummary(d.project, d.tally),
     holdReason: d.project.billing_hold_reason,
+    closedByName: d.closed_by_name,
     hours: d.hours,
   }));
 
@@ -99,7 +94,7 @@ export default async function BillingPage({
     <div>
       <PageHeader
         title="Billing"
-        subtitle="Completed work, from ready-to-bill through to paid and closed"
+        subtitle="Completed work, from ready-to-bill through to paid and closed — open a job to bill it"
       >
         <Link href="/projects?status=completed" className="btn-secondary">
           Completed Jobs
@@ -159,11 +154,7 @@ export default async function BillingPage({
           }
         />
       ) : (
-        <div className="space-y-3">
-          {shown.map((r) => (
-            <BillingRow key={r.project.id} row={r} />
-          ))}
-        </div>
+        <BillingDesk rows={shown} />
       )}
     </div>
   );
@@ -197,110 +188,4 @@ function emptyTitle(key: string): string {
     default:
       return 'Nothing on the billing desk';
   }
-}
-
-/**
- * One job on the desk. The row leads with the stage and the age, because the
- * question this page answers is "which job next" — the money is what you check
- * once you've picked one.
- */
-function BillingRow({ row }: { row: Row }) {
-  const { project: p, summary: s } = row;
-  const variance = billingVariance(s);
-  const age =
-    s.ageDays == null
-      ? null
-      : s.ageDays === 0
-        ? 'completed today'
-        : `${s.ageDays}d since completion`;
-
-  return (
-    <Link
-      href={`/projects/${p.id}`}
-      className="card-interactive group block p-4"
-      aria-label={`${p.name} — ${BILLING_STAGE_LABELS[s.stage]}`}
-    >
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0 lg:flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="eyebrow truncate">{p.customer}</p>
-            <BillingStageBadge stage={s.stage} urgency={s.urgency} />
-          </div>
-          <h3 className="brand-heading mt-1 truncate text-brand-ink transition-colors duration-150 group-hover:text-brand-green-dark">
-            {p.name}
-          </h3>
-          <p className="tnum mt-1 text-xs text-brand-gray">
-            {age && (
-              <span className={s.urgency === 'late' ? 'font-semibold text-red-600' : undefined}>
-                {age}
-              </span>
-            )}
-            {p.completed_at && <span> · completed {shortDate(p.completed_at)}</span>}
-            {row.hours > 0 && <span> · {row.hours.toFixed(1)}h logged</span>}
-            {s.count > 0 && (
-              <span>
-                {' '}
-                · {s.count} {s.count === 1 ? 'invoice' : 'invoices'}
-              </span>
-            )}
-          </p>
-        </div>
-
-        <dl className="tnum grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-5 lg:shrink-0 lg:text-right">
-          <Cell label="Contract" value={money(s.contract)} />
-          <Cell label="Invoiced" value={money(s.invoiced)} />
-          <Cell
-            label="Left to Bill"
-            value={money(Math.max(0, s.leftToBill))}
-            alert={s.leftToBill > 0 && s.stage !== 'closed'}
-          />
-          <Cell label="Paid" value={money(s.paid)} />
-          <Cell
-            label="Outstanding"
-            value={money(s.outstanding)}
-            alert={s.outstanding > 0 && s.stage !== 'closed'}
-          />
-        </dl>
-      </div>
-
-      {(row.holdReason || variance || s.unbilled > 0) && (
-        <div className="mt-3 space-y-1 border-t border-surface-line pt-2 text-xs">
-          {s.stage === 'on_hold' && row.holdReason && (
-            <p className="text-brand-gray-dark">
-              <span className="font-semibold">On hold — </span>
-              {row.holdReason}
-            </p>
-          )}
-          {s.unbilled > 0 && (
-            <p className="text-amber-700">
-              {money(s.unbilled)} raised on an invoice that hasn&apos;t gone out yet.
-            </p>
-          )}
-          {variance === 'short' && (
-            <p className="text-amber-700">
-              {money(s.uninvoiced)} of the contract has no invoice against it.
-            </p>
-          )}
-          {variance === 'over' && (
-            <p className="text-amber-700">
-              Invoiced {money(-s.uninvoiced)} over contract — check for a change order.
-            </p>
-          )}
-        </div>
-      )}
-    </Link>
-  );
-}
-
-function Cell({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
-  return (
-    <div>
-      <dt className="text-[0.65rem] font-semibold uppercase tracking-wide text-brand-gray">
-        {label}
-      </dt>
-      <dd className={`text-sm font-semibold ${alert ? 'text-amber-700' : 'text-brand-ink'}`}>
-        {value}
-      </dd>
-    </div>
-  );
 }

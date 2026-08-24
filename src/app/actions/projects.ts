@@ -75,6 +75,9 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
   revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
+  // Completing a job is what puts it on the billing desk, so the desk is stale
+  // the moment this lands.
+  revalidatePath('/billing');
 }
 
 export async function setProjectProgressAction(id: number, progress: number) {
@@ -190,6 +193,9 @@ export async function updateInvoiceAction(
   revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
+  // The billing desk edits this ledger inline now, and every figure and stage
+  // on it is derived from these rows.
+  revalidatePath('/billing');
   return { ids };
 }
 

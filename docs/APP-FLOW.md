@@ -136,13 +136,16 @@ hangs off:
   and the **invoice PDF** in `invoice_files` (one per invoice, keyed by it, so a
   re-upload replaces it). `billed` stays the flag the pipeline reads; `sent_on`
   is the paperwork date, kept in step with it (a date implies sent, clearing
-  sent clears the date). This is where billing is actually *edited*; the Billing
-  page only points at it.
+  sent clears the date). The card is `src/components/billing/InvoiceSection.tsx`,
+  and the Billing desk renders the same one inline — so this ledger is edited the
+  same way from either place.
 - **Billing card** — the derived stage, aging, what's **left to bill** (contract
-  less what has gone out) and the contract-vs-invoiced variance, plus the one
-  deliberate act still offered here: put billing **on hold** (reason required).
-  Closing a job out is no longer a button on this card; a job already closed out
-  can still be reopened from it.
+  less what has gone out) and the contract-vs-invoiced variance, plus the stage
+  decisions this card offers (`BillingStageControls`, shared with the Billing
+  desk): put billing **on hold** (reason required), and the short path — **mark
+  billed** / **mark paid** with no invoice detail entered at all. Closing a job
+  out is not a button on this card — signing a job off the billing desk is the
+  desk's own act — though a job already closed out can still be reopened here.
 - **Job notes** — internal, staff-facing.
 - **Crew notes** — separate table, written *to be read by the crew*: gate codes,
   parking, who to ask for. Pinned notes stay on top. These surface on every
@@ -160,8 +163,14 @@ hangs off:
   Google Maps directions link.
 
 ### Billing `/billing` — admins & managers only
-A queue, not an editor. Nothing is edited here; it points at the job to work
-next. Stages, all derived in `src/lib/billing.ts`:
+A queue you work *in*. Opening a row brings that job's whole billing down into
+the page — the same invoice ledger and the same stage controls the job's Billing
+tab uses (`src/components/billing/`), fetched a job at a time as rows are opened
+rather than shipped with the page. So a pass down the queue never leaves it, and
+a job that gets settled leaves the tab it was in as you go. The job page is
+still there for everything that isn't billing.
+
+Stages, all derived in `src/lib/billing.ts`:
 
 ```
 not_ready → ready_to_bill → invoiced → paid
@@ -186,6 +195,14 @@ raised on an invoice that was never actually sent.
 **Left to bill** — contract value less what has actually gone out — is shown per
 job and totalled desk-wide. It is wider than the short-billed variance on
 purpose: an invoice raised but never sent is still work left to bill.
+
+**Mark billed / mark paid** is the short path for work invoiced and collected
+outside the app: no invoice number, no PO, no send date, no PDF. It marks every
+invoice on the job sent (and paid, when asked), and for a job with nothing
+raised against it, raises one invoice for the contract value. What it writes is
+an ordinary `project_invoices` row — deliberately *not* a "billed anyway" flag —
+so the stage, the aging and every total follow from it with no special case
+anywhere, and it is undone by editing that row in the ledger like any other.
 
 ### Schedule `/schedule`
 Two views over one load of the same rows, and the split between them is the
@@ -475,9 +492,9 @@ want.
 > and due dates. The **project detail page is the hub everything hangs off**:
 > status and progress; **invoices** (one row each, carrying the invoice number,
 > the customer's PO, the amount, the date it was sent, independent billed/paid
-> flags and the invoice PDF — this is where billing is actually edited); a
-> billing card showing the derived stage, aging, what's left to bill and the
-> contract-vs-invoiced variance; internal
+> flags and the invoice PDF — the same ledger card the Billing desk opens
+> inline); a billing card showing the derived stage, aging, what's left to bill
+> and the contract-vs-invoiced variance; internal
 > **job notes**; crew-facing **crew notes** (gate codes, parking, who to ask
 > for — these surface on every booked person's schedule and in the schedule
 > email); the job's schedule phases and projected finish; time logged; file
@@ -488,8 +505,10 @@ want.
 > what puts it on the billing desk and starts its aging clock, and it fires a
 > job-completion email.
 >
-> **Billing** (admins & managers) — a **queue, not an editor**: it points at the
-> job to work next, and the invoices are edited on the job. Stages are derived:
+> **Billing** (admins & managers) — a **queue you work in**: opening a job's row
+> brings its invoice ledger and its stage decisions down into the page, the same
+> components the job's Billing tab uses, so a pass down the queue never leaves
+> it. Stages are derived:
 > `not_ready → ready_to_bill → invoiced → paid`, plus `on_hold` (parked with a
 > required reason — the point of a hold is that the next person knows why nobody
 > is on it) and `closed` (a deliberate sign-off, allowed even with a balance
@@ -502,7 +521,10 @@ want.
 > net-30 terms (30 / 45). It also calls out three money variances: billed short
 > of contract, billed over it (check for a change order), and money raised on an
 > invoice that was never sent — and totals **what's left to bill** per job and
-> across the desk.
+> across the desk. For work invoiced and collected outside the app there is a
+> short path: **mark billed / mark paid** with no invoice detail at all, which
+> writes an ordinary invoice row (for a job with none, one at the contract
+> value), so every derived figure follows from it with no special case.
 >
 > **Schedule** — two views over the same rows, and the split between them is the
 > whole design:
