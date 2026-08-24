@@ -136,6 +136,8 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
         'End Date': p.end_date ?? '',
         'Due Date': p.due_date ?? '',
         Completed: p.completed_at ?? '',
+        'On Hold': p.on_hold ? p.on_hold_reason || 'Yes' : '',
+        'On Hold Since': p.on_hold_since ?? '',
         'Billing Stage': BILLING_STAGE_LABELS[billing.stage],
         Invoiced: billing.invoiced,
         'Left to Bill': Math.max(0, billing.leftToBill),

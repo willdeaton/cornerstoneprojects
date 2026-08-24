@@ -12,6 +12,7 @@ import type { ProjectStatus } from '@/lib/types';
 import { money, shortDate, duration } from '@/lib/format';
 import {
   PageHeader,
+  OnHoldBadge,
   ProjectStatusBadge,
   ProgressBar,
   EmptyState,
@@ -110,7 +111,12 @@ export default async function ProjectsPage({
                       {p.name}
                     </h3>
                   </div>
-                  <ProjectStatusBadge status={p.status} />
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <ProjectStatusBadge status={p.status} />
+                    {p.on_hold && (
+                      <OnHoldBadge reason={p.on_hold_reason} since={p.on_hold_since} />
+                    )}
+                  </div>
                 </div>
 
                 {showBilling ? (

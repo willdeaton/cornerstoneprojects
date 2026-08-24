@@ -511,6 +511,32 @@ export async function getProjectHubCounts(projectId: number): Promise<ProjectHub
   };
 }
 
+/**
+ * Park a job while somebody else finishes their part, or put it back to work.
+ *
+ * A hold changes nothing about the job's own status or dates — the work is
+ * still sold, still planned, still where it was. It records that nothing is
+ * waiting on us, and what it IS waiting on, so a job standing still stops
+ * looking like a job that has been forgotten. Releasing clears the reason and
+ * the timestamp with it, so a job that gets parked twice dates from the second
+ * time rather than the first.
+ */
+export async function setProjectOnHold(
+  id: number,
+  hold: boolean,
+  reason: string | null
+): Promise<void> {
+  await q(
+    `UPDATE projects
+        SET on_hold = $1,
+            on_hold_reason = $2,
+            on_hold_since = CASE WHEN $1 THEN COALESCE(on_hold_since, now()) ELSE NULL END,
+            updated_at = now()
+      WHERE id = $3`,
+    [hold, hold ? reason : null, id]
+  );
+}
+
 /* -------------------------------------------------------- Billing workflow */
 
 /**

@@ -102,6 +102,9 @@ const TASK_SELECT = `
          p.status           AS project_status,
          p.due_date         AS project_due_date,
          p.hard_finish_date AS project_hard_finish_date,
+         p.on_hold          AS project_on_hold,
+         p.on_hold_reason   AS project_on_hold_reason,
+         p.on_hold_since    AS project_on_hold_since,
          sub.name           AS subcontractor_name,
          COALESCE(cd.crew_days, '[]'::json) AS crew_days,
          COALESCE(dt.day_times, '[]'::json) AS day_times

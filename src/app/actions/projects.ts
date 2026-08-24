@@ -8,6 +8,7 @@ import {
   createProject,
   updateProject,
   deleteProject,
+  setProjectOnHold,
   addNote,
   deleteNote,
   listProjectInvoices,
@@ -78,6 +79,34 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
   // Completing a job is what puts it on the billing desk, so the desk is stale
   // the moment this lands.
   revalidatePath('/billing');
+}
+
+/**
+ * Park a job while somebody else finishes their part, or put it back to work.
+ *
+ * Deliberately not a status: a job waiting on the GC is still not started or
+ * still in progress, and its phases stay on the schedule where the crew and the
+ * projected finish can see them. A hold says nothing is waiting on US, and the
+ * reason says who it is waiting on — which is the only thing that makes a
+ * parked job readable a fortnight later, so it is required.
+ */
+export async function setProjectOnHoldAction(
+  id: number,
+  hold: boolean,
+  reason: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  await requireUser();
+  const why = (reason ?? '').trim();
+  if (hold && why === '') {
+    return { ok: false, error: 'Say what this job is waiting on.' };
+  }
+  await setProjectOnHold(id, hold, hold ? why : null);
+  revalidatePath(`/projects/${id}`, 'layout');
+  revalidatePath('/projects');
+  revalidatePath('/dashboard');
+  // The schedule is where a hold is read most: both views badge the job.
+  revalidatePath('/schedule');
+  return { ok: true };
 }
 
 export async function setProjectProgressAction(id: number, progress: number) {

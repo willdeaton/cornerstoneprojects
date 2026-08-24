@@ -21,7 +21,7 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
   {
     id: 'crew',
     label: 'Crew Week',
-    hint: 'Staff that work: two weeks at a time, who is on which job and phase each day, and when they start',
+    hint: 'Staff that work: one or two weeks at a time, who is on which job and phase each day, and when they start',
   },
 ];
 
@@ -40,10 +40,11 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
  * button on the bar above them does that.
  *
  * Finished jobs ride along in the same rows so that paging back to a week that
- * has already been worked shows what actually ran. The timeline draws them
- * read-only — the plan for them is over. The crew week lets them be corrected,
- * because a record of who was on site can turn out to be wrong, and asks for a
- * confirmation on every change.
+ * has already been worked shows what actually ran. Both views draw them back a
+ * shade and keep them out of every count of work still to plan or staff, and
+ * both let them be corrected — a record of what ran and who was on site can
+ * turn out to be wrong, and reopening a whole job to fix a date is worse — with
+ * a confirmation on every change.
  */
 export function ScheduleViews({
   tasks,
@@ -83,7 +84,7 @@ export function ScheduleViews({
   drafts: DraftJob[];
   /**
    * Finished jobs whose work is in `tasks` — loaded so a previous week reads
-   * true. Read-only on the timeline; correctable in the crew week, behind a
+   * true. Drawn back in both views and correctable in both, behind a
    * confirmation.
    */
   finishedProjects?: number[];

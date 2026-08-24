@@ -8,9 +8,10 @@ import { listScheduleTasks, listHolidays } from '@/lib/schedule-data';
 import { computeSchedule, projectedEnd } from '@/lib/schedule-math';
 import { billingSummary, EMPTY_TALLY, BILLING_STAGE_LABELS } from '@/lib/billing';
 import { money, shortDate } from '@/lib/format';
-import { BillingStageBadge } from '@/components/ui';
+import { BillingStageBadge, OnHoldBadge } from '@/components/ui';
 import { loadProject, requireJobUser, canBill } from './job';
 import { StatusProgress } from './StatusProgress';
+import { OnHoldControl } from '@/app/(app)/schedule/OnHoldControl';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,8 +60,32 @@ export default async function ProjectOverview({ params }: { params: Promise<{ id
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       <div className="space-y-6 lg:col-span-2">
         <div className="card p-5">
-          <h2 className="brand-heading mb-4 text-sm text-brand-gray">Status &amp; Progress</h2>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="brand-heading text-sm text-brand-gray">Status &amp; Progress</h2>
+            {/* A hold is not a fourth status — it sits alongside them. The job
+                is still where it was; what the hold records is that nothing is
+                waiting on us. */}
+            <div className="flex items-center gap-2">
+              {project.on_hold && (
+                <OnHoldBadge reason={project.on_hold_reason} since={project.on_hold_since} />
+              )}
+              <OnHoldControl
+                projectId={id}
+                projectName={project.name}
+                onHold={project.on_hold}
+                reason={project.on_hold_reason}
+                since={project.on_hold_since}
+                compact={false}
+              />
+            </div>
+          </div>
           <StatusProgress id={id} status={project.status} progress={project.progress} />
+          {project.on_hold && project.on_hold_reason && (
+            <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              On hold — waiting on {project.on_hold_reason}
+              {project.on_hold_since ? ` · since ${shortDate(project.on_hold_since)}` : ''}
+            </p>
+          )}
         </div>
 
         <div className="card p-5">
