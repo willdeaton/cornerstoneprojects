@@ -308,3 +308,21 @@ body {
     margin: 0.5in;
   }
 }
+
+/* Status board (/tv): the bar that runs down while a screen is up, so a room
+   can see the board is live and how long the screen has left. Restarts on every
+   turnover — the element is keyed by slide, so the animation starts over. */
+@keyframes tv-sweep {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.tv-sweep {
+  transform-origin: left;
+  animation-name: tv-sweep;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}

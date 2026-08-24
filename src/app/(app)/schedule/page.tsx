@@ -126,7 +126,13 @@ export default async function SchedulePage() {
       <PageHeader
         title="Schedule"
         subtitle="Plan and save the work as a draft, then publish it to send every crew their own dates"
-      />
+      >
+        {/* The office display. Its own tab on purpose — it's a screen that gets
+            left running on the wall, not a page you navigate away from. */}
+        <a href="/tv" target="_blank" rel="noreferrer" className="btn-secondary">
+          TV board
+        </a>
+      </PageHeader>
       <ScheduleViews
         tasks={tasks}
         warehouse={warehouse}

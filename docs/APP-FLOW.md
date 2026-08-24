@@ -289,6 +289,17 @@ bookings — one card per day, with the shift ("All day", or "8:00 AM – 12:00 
 step weeks. Their warehouse days appear on the same day cards, above the jobs
 and without an address.
 
+**Status board** `/tv` is the same rows for a wall screen. Deliberately outside
+the `(app)` group — the sidebar, the "view as" switcher and the backup reminder
+are all things you click, and none belong on a TV — so what's left is the
+schedule itself, dark and full-bleed, rotating between today's crew and a
+Monday-anchored timeline of the weeks ahead. It derives everything through
+`computeSchedule()` / `assigneeBookings()` exactly as the Schedule does
+(`src/app/tv/tv-board.ts` shapes the day, the alerts and the timeline rows; it
+holds no queries and no state), refreshes itself every 90s, rolls the day over at
+midnight, and takes `?panel=today|timeline`, `?rotate=<seconds>` and `?weeks=<n>`
+from the URL. Admins and managers only, and read-only end to end.
+
 **Send Schedule** emails each assignee their own dates only.
 
 ### Time `/time` and `/timesheets`
