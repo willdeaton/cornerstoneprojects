@@ -57,9 +57,10 @@ export interface CardFocus {
  * they hold the whole phase, so their days follow its dates and change on the
  * timeline.
  *
- * A phase on a finished job opens read-only. Its times and notes are the record
- * of a week that has been worked, so they're here to read and nothing here
- * writes to the draft.
+ * A phase on a finished job opens editable, but says so. Its times, days and
+ * notes are the record of a week that has been worked — and a record that turns
+ * out to be wrong has to be correctable — so the card carries a warning and
+ * every change made on it is confirmed before it joins the draft.
  */
 export function CrewJobCard({
   task,
@@ -69,7 +70,7 @@ export function CrewJobCard({
   draft,
   crewNotes = [],
   focus = null,
-  readOnly = false,
+  finished = false,
   onClose,
   onSaved,
 }: {
@@ -85,8 +86,11 @@ export function CrewJobCard({
   crewNotes?: CrewNote[];
   /** The booking the card was opened from, when it was opened from one. */
   focus?: CardFocus | null;
-  /** The job is finished: everything here is a record, nothing is editable. */
-  readOnly?: boolean;
+  /**
+   * The job is finished: everything here is the record of work already done.
+   * Still editable — records get corrected — behind a confirmation.
+   */
+  finished?: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -265,6 +269,14 @@ export function CrewJobCard({
     const person = (task.crew_days ?? []).find(
       (c) => c.day === day && c.kind === kind && c.ref_id === refId
     );
+    if (
+      finished &&
+      !confirm(
+        `${task.project_name} is finished. Taking ${person?.name ?? 'them'} off ${shortDate(day)} ` +
+          `changes the record of work that has already been done.\n\nGo ahead with the change?`
+      )
+    )
+      return;
     setRemoving(`${day}:${kind}:${refId}`);
     draft.queue({
       kind: 'crew-unbook',
@@ -284,6 +296,19 @@ export function CrewJobCard({
    * is published — saving the draft just keeps the work.
    */
   function submit() {
+    // A finished job's times and notes are the record of a week that was
+    // worked, so the change is named back before it is made.
+    if (
+      finished &&
+      !confirm(
+        `${task.project_name} is finished. ${
+          changes.length > 0
+            ? `Saving will change the record of what was worked — ${summarizeChanges(changes)}`
+            : 'Saving will change the record of what was worked.'
+        }\n\nGo ahead with the change?`
+      )
+    )
+      return;
     setError(null);
     setSaving(true);
     draft.queue({
@@ -462,17 +487,17 @@ export function CrewJobCard({
           </div>
         )}
 
-        {readOnly && (
-          <div className="rounded-lg border border-black/10 bg-black/[.03] px-3 py-2 text-sm text-brand-gray">
-            <p className="font-semibold text-brand-ink">This job is finished</p>
+        {finished && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="font-semibold">This job is finished</p>
             <p>
-              The times and notes below are the record of what was worked. Nothing here can be
-              changed.
+              The days, times and notes below are the record of what was worked. They can still be
+              corrected — you&apos;ll be asked to confirm before anything changes.
             </p>
           </div>
         )}
 
-        {!readOnly && publishedVersion != null && (
+        {publishedVersion != null && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <p className="font-semibold">Published schedule (v{publishedVersion})</p>
             <p>
@@ -485,74 +510,63 @@ export function CrewJobCard({
         {/* The shift. The phase's covers every day; any single day can be given
             its own, for the 6 AM delivery or the half day before a holiday. */}
         <div className="rounded-lg border border-black/10 p-3">
-          {readOnly ? (
-            <p className="text-sm text-brand-ink">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-brand-gray">
-                Shift:{' '}
-              </span>
-              {shiftLabel(draftShift)}
-            </p>
-          ) : (
-            <>
-              <div className="flex flex-wrap items-end gap-3">
-                <div>
-                  <label className="label">Daily Start Time</label>
-                  <input
-                    className="input w-36"
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="label">Hours On Site</label>
-                  <input
-                    className="input w-28"
-                    type="number"
-                    min="0"
-                    max="24"
-                    step="0.25"
-                    placeholder="all day"
-                    value={hours}
-                    onChange={(e) => setHours(e.target.value)}
-                  />
-                </div>
-                {/* The two shapes a day usually takes, so splitting one between
-                    two jobs is two clicks rather than four fields. */}
-                <div className="flex flex-wrap gap-1 pb-1">
-                  {SHIFT_PRESETS.map((preset) => {
-                    const on = draftStartTime === preset.startTime && draftHours === preset.hours;
-                    return (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() => {
-                          setStartTime(preset.startTime ?? '');
-                          setHours(preset.hours == null ? '' : String(preset.hours));
-                        }}
-                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                          on
-                            ? 'border-brand-green bg-brand-green/15 text-brand-green-dark'
-                            : 'border-black/15 text-brand-gray hover:border-brand-green/50 hover:text-brand-ink'
-                        }`}
-                        title={preset.hint}
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <p className="mt-1.5 text-xs text-brand-gray">
-                <span className="font-semibold text-brand-ink">{shiftLabel(draftShift)}</span>{' '}
-                {draftHours == null
-                  ? draftStartTime
-                    ? '— on site the whole day from then. Put hours on it only to free the rest of the day up for another job.'
-                    : '— every day of this phase, on the crew’s normal hours. Jobs book all day unless you give them hours.'
-                  : '— every day of this phase. Anybody on it can take a second job outside those hours without being double-booked.'}
-              </p>
-            </>
-          )}
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="label">Daily Start Time</label>
+              <input
+                className="input w-36"
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Hours On Site</label>
+              <input
+                className="input w-28"
+                type="number"
+                min="0"
+                max="24"
+                step="0.25"
+                placeholder="all day"
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+              />
+            </div>
+            {/* The two shapes a day usually takes, so splitting one between
+                two jobs is two clicks rather than four fields. */}
+            <div className="flex flex-wrap gap-1 pb-1">
+              {SHIFT_PRESETS.map((preset) => {
+                const on = draftStartTime === preset.startTime && draftHours === preset.hours;
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setStartTime(preset.startTime ?? '');
+                      setHours(preset.hours == null ? '' : String(preset.hours));
+                    }}
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                      on
+                        ? 'border-brand-green bg-brand-green/15 text-brand-green-dark'
+                        : 'border-black/15 text-brand-gray hover:border-brand-green/50 hover:text-brand-ink'
+                    }`}
+                    title={preset.hint}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <p className="mt-1.5 text-xs text-brand-gray">
+            <span className="font-semibold text-brand-ink">{shiftLabel(draftShift)}</span>{' '}
+            {draftHours == null
+              ? draftStartTime
+                ? '— on site the whole day from then. Put hours on it only to free the rest of the day up for another job.'
+                : '— every day of this phase, on the crew’s normal hours. Jobs book all day unless you give them hours.'
+              : '— every day of this phase. Anybody on it can take a second job outside those hours without being double-booked.'}
+          </p>
 
           {workingDays.length > 0 && (
             <div className="mt-3 max-h-64 space-y-1 overflow-y-auto border-t border-black/5 pt-3">
@@ -577,42 +591,36 @@ export function CrewJobCard({
                         day: 'numeric',
                       })}
                     </span>
-                    {readOnly ? (
-                      <span className="w-40 shrink-0 text-brand-gray">{shiftLabel(shift)}</span>
+                    <input
+                      className="input w-28"
+                      type="time"
+                      value={overridden ? shift.startTime ?? '' : ''}
+                      // A blank box on a day that already has an override
+                      // means "no set time that day", which is how one day
+                      // opts out.
+                      onChange={(e) => setDayTime(day, e.target.value)}
+                    />
+                    <input
+                      className="input w-20"
+                      type="number"
+                      min="0"
+                      max="24"
+                      step="0.25"
+                      placeholder="all day"
+                      value={overridden && shift.hours != null ? String(shift.hours) : ''}
+                      onChange={(e) => setDayHours(day, e.target.value)}
+                    />
+                    {overridden ? (
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-brand-green-dark hover:underline"
+                        onClick={() => clearDayTime(day)}
+                        title="Follow the phase's daily shift again"
+                      >
+                        {shiftLabel(shift)} · use phase shift
+                      </button>
                     ) : (
-                      <>
-                        <input
-                          className="input w-28"
-                          type="time"
-                          value={overridden ? shift.startTime ?? '' : ''}
-                          // A blank box on a day that already has an override
-                          // means "no set time that day", which is how one day
-                          // opts out.
-                          onChange={(e) => setDayTime(day, e.target.value)}
-                        />
-                        <input
-                          className="input w-20"
-                          type="number"
-                          min="0"
-                          max="24"
-                          step="0.25"
-                          placeholder="all day"
-                          value={overridden && shift.hours != null ? String(shift.hours) : ''}
-                          onChange={(e) => setDayHours(day, e.target.value)}
-                        />
-                        {overridden ? (
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-brand-green-dark hover:underline"
-                            onClick={() => clearDayTime(day)}
-                            title="Follow the phase's daily shift again"
-                          >
-                            {shiftLabel(shift)} · use phase shift
-                          </button>
-                        ) : (
-                          <span className="text-xs text-brand-gray">{shiftLabel(shift)}</span>
-                        )}
-                      </>
+                      <span className="text-xs text-brand-gray">{shiftLabel(shift)}</span>
                     )}
                     <span className="flex flex-wrap items-center gap-1">
                       {crew.length === 0 ? (
@@ -631,12 +639,7 @@ export function CrewJobCard({
                               ? 'bg-brand-green/30 text-brand-green-dark ring-1 ring-brand-green'
                               : 'bg-brand-green/15 text-brand-green-dark'
                           }`;
-                          return readOnly ? (
-                            <span key={c.id} className={chip}>
-                              {c.name}
-                              {c.kind === 'sub' && <span className="opacity-70"> · sub</span>}
-                            </span>
-                          ) : (
+                          return (
                             <button
                               key={c.id}
                               type="button"
@@ -661,24 +664,16 @@ export function CrewJobCard({
 
         <div>
           <label className="label">Notes For The Crew</label>
-          {readOnly ? (
-            <p className="whitespace-pre-wrap rounded-lg border border-black/10 bg-black/[.02] px-3 py-2 text-sm text-brand-ink">
-              {notes.trim() === '' ? 'No notes were written for this phase.' : notes}
-            </p>
-          ) : (
-            <>
-              <textarea
-                className="input min-h-[80px]"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Park on the north side, ask for Danny at the desk, hard hats required past the gate"
-              />
-              <p className="mt-1 text-xs text-brand-gray">
-                Everyone booked on this phase sees this on their own schedule and in the schedule
-                email, alongside the day they&apos;re working.
-              </p>
-            </>
-          )}
+          <textarea
+            className="input min-h-[80px]"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Park on the north side, ask for Danny at the desk, hard hats required past the gate"
+          />
+          <p className="mt-1 text-xs text-brand-gray">
+            Everyone booked on this phase sees this on their own schedule and in the schedule
+            email, alongside the day they&apos;re working.
+          </p>
         </div>
 
         {/* The job's own notes for whoever works it. Written on the job and
@@ -706,7 +701,7 @@ export function CrewJobCard({
           </div>
         )}
 
-        {!readOnly && (publishedVersion != null || changes.length > 0) && (
+        {(publishedVersion != null || changes.length > 0) && (
           <div>
             <label className="label">
               Reason For Change{' '}
@@ -730,22 +725,20 @@ export function CrewJobCard({
 
         <div className="flex justify-end gap-2">
           <button className="btn-secondary" onClick={onClose} disabled={saving}>
-            {readOnly ? 'Close' : 'Cancel'}
+            Cancel
           </button>
-          {!readOnly && (
-            <button
-              className="btn-primary"
-              onClick={submit}
-              disabled={saving || (reasonRequired && reason.trim() === '')}
-              title={
-                reasonRequired && reason.trim() === ''
-                  ? 'A reason is required to change a published schedule'
-                  : undefined
-              }
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          )}
+          <button
+            className="btn-primary"
+            onClick={submit}
+            disabled={saving || (reasonRequired && reason.trim() === '')}
+            title={
+              reasonRequired && reason.trim() === ''
+                ? 'A reason is required to change a published schedule'
+                : undefined
+            }
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
         </div>
       </div>
     </Modal>
