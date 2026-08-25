@@ -20,6 +20,7 @@ import {
   createCategory,
 } from '@/lib/data';
 import type { Category, CustomerContact, CustomerWithContacts, PricingItem, Unit } from '@/lib/types';
+import { isValidAbbreviation, normalizeAbbreviation } from '@/lib/quote-number';
 
 /** Result of a save/delete action. */
 export interface ActionResult {
@@ -50,9 +51,40 @@ function clean(v: unknown): string | null {
   return t === '' ? null : t;
 }
 
-/** Postgres unique-violation (duplicate customer name). */
+/** Postgres unique-violation (duplicate customer name or abbreviation). */
 function isUniqueViolation(err: unknown): boolean {
   return !!err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === '23505';
+}
+
+/**
+ * Which duplicate a unique violation is about. Name and abbreviation have their
+ * own indexes, so the constraint tells the user exactly what to change.
+ */
+function duplicateMessage(err: unknown): string {
+  const constraint =
+    err && typeof err === 'object' && 'constraint' in err
+      ? String((err as { constraint?: string }).constraint ?? '')
+      : '';
+  return constraint.includes('abbreviation')
+    ? 'That abbreviation is already used by another customer.'
+    : 'A customer with that name already exists.';
+}
+
+/**
+ * Validate a typed customer abbreviation. Blank is allowed (it stays unset and
+ * the customer simply has no auto-generated quote numbers); anything present
+ * must be exactly three letters.
+ */
+function checkAbbreviation(
+  value: unknown
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  const raw = (value ?? '').toString().trim();
+  if (raw === '') return { ok: true, value: null };
+  const code = normalizeAbbreviation(raw);
+  if (!isValidAbbreviation(code) || code.length !== raw.length) {
+    return { ok: false, error: 'Abbreviation must be exactly 3 letters.' };
+  }
+  return { ok: true, value: code };
 }
 
 /* -------------------------------------------------------------- Customers */
@@ -60,6 +92,7 @@ function isUniqueViolation(err: unknown): boolean {
 export interface CustomerFields {
   id?: number;
   name: string;
+  abbreviation?: string | null;
   address?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -70,8 +103,11 @@ export async function saveCustomerAction(input: CustomerFields): Promise<ActionR
   await requireManager();
   const name = (input.name ?? '').trim();
   if (!name) return { ok: false, error: 'Customer name is required.' };
+  const abbrev = checkAbbreviation(input.abbreviation);
+  if (!abbrev.ok) return { ok: false, error: abbrev.error };
   const payload = {
     name,
+    abbreviation: abbrev.value,
     address: clean(input.address),
     phone: clean(input.phone),
     email: clean(input.email),
@@ -81,7 +117,7 @@ export async function saveCustomerAction(input: CustomerFields): Promise<ActionR
     if (input.id) await updateCustomer(input.id, payload);
     else await createCustomer(payload);
   } catch (err) {
-    if (isUniqueViolation(err)) return { ok: false, error: 'A customer with that name already exists.' };
+    if (isUniqueViolation(err)) return { ok: false, error: duplicateMessage(err) };
     throw err;
   }
   revalidatePath('/settings/customers');
@@ -141,23 +177,27 @@ export async function deleteContactAction(id: number): Promise<ActionResult> {
  */
 export async function quickAddCustomerAction(input: {
   name: string;
+  abbreviation?: string | null;
   address?: string | null;
   contact?: { name?: string | null; title?: string | null; email?: string | null; phone?: string | null } | null;
 }): Promise<ActionResult & { customer?: CustomerWithContacts }> {
   await requireUser();
   const name = (input.name ?? '').trim();
   if (!name) return { ok: false, error: 'Customer name is required.' };
+  const abbrev = checkAbbreviation(input.abbreviation);
+  if (!abbrev.ok) return { ok: false, error: abbrev.error };
   let customerId: number;
   try {
     customerId = await createCustomer({
       name,
+      abbreviation: abbrev.value,
       address: clean(input.address),
       phone: null,
       email: null,
       notes: null,
     });
   } catch (err) {
-    if (isUniqueViolation(err)) return { ok: false, error: 'A customer with that name already exists.' };
+    if (isUniqueViolation(err)) return { ok: false, error: duplicateMessage(err) };
     throw err;
   }
   const contacts: CustomerContact[] = [];

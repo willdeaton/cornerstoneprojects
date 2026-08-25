@@ -92,7 +92,12 @@ export async function deleteProjectFileAction(fileId: number, projectId: number)
 
 /* ------------------------------------------- Quote supporting documentation */
 
-/** Upload a supporting document attached to a quote (internal reference only). */
+/**
+ * Upload one or more supporting documents to a quote (internal reference only —
+ * they are never shown on the customer-facing PDF). Mirrors the project
+ * uploader: the picker and the drop zone both take several files at once, and
+ * an oversized file is skipped and named back rather than failing the batch.
+ */
 export async function uploadQuoteFileAction(
   _prev: FileUploadState,
   formData: FormData
@@ -101,30 +106,44 @@ export async function uploadQuoteFileAction(
   const quoteId = Number(formData.get('quote_id'));
   if (!quoteId) return { error: 'Missing quote.' };
 
-  const file = formData.get('file');
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: 'Choose a file to upload.' };
-  }
-  if (file.size > MAX_BYTES) {
-    return { error: 'File must be under 10 MB.' };
-  }
+  const files = formData.getAll('file').filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { error: 'Choose a file to upload.' };
 
-  const buf = Buffer.from(await file.arrayBuffer());
-  const mime = file.type || 'application/octet-stream';
-  const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+  const uploaded: string[] = [];
+  const tooBig: string[] = [];
 
-  await addQuoteFile({
-    quote_id: quoteId,
-    filename: file.name || 'upload',
-    mime,
-    size: file.size,
-    data: dataUrl,
-    uploaded_by: user.id,
-    uploader_name: user.name,
-  });
+  for (const file of files) {
+    if (file.size > MAX_BYTES) {
+      tooBig.push(file.name || 'upload');
+      continue;
+    }
+
+    const buf = Buffer.from(await file.arrayBuffer());
+    const mime = file.type || 'application/octet-stream';
+    const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+
+    await addQuoteFile({
+      quote_id: quoteId,
+      filename: file.name || 'upload',
+      mime,
+      size: file.size,
+      data: dataUrl,
+      uploaded_by: user.id,
+      uploader_name: user.name,
+    });
+    uploaded.push(file.name || 'upload');
+  }
 
   revalidatePath(`/quotes/${quoteId}/edit`);
-  return { success: `Uploaded ${file.name}.` };
+
+  if (uploaded.length === 0) {
+    return { error: `Each file must be under 10 MB — skipped ${tooBig.join(', ')}.` };
+  }
+  const success =
+    uploaded.length === 1 ? `Uploaded ${uploaded[0]}.` : `Uploaded ${uploaded.length} files.`;
+  return tooBig.length
+    ? { success, error: `Skipped (over 10 MB): ${tooBig.join(', ')}.` }
+    : { success };
 }
 
 export async function deleteQuoteFileAction(fileId: number, quoteId: number) {

@@ -617,6 +617,15 @@ Your City, ST 00000',
     -- One record per customer name (case-insensitive) so the picker stays clean.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_name ON customers(lower(name));
 
+    -- Three-letter customer code that prefixes auto-generated quote numbers
+    -- (XXXMMDDYY). Added later, so ADD COLUMN IF NOT EXISTS keeps this safe to
+    -- re-run against an existing database.
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS abbreviation TEXT;
+    -- Unique across customers (case-insensitive) so a code always identifies one
+    -- customer. Existing rows have none yet, so NULLs are exempt.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_abbreviation
+      ON customers(upper(abbreviation)) WHERE abbreviation IS NOT NULL;
+
     CREATE TABLE IF NOT EXISTS customer_contacts (
       id          SERIAL PRIMARY KEY,
       customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,

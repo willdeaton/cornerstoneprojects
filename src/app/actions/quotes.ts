@@ -11,8 +11,10 @@ import {
   createQuoteWithItems,
   updateQuoteWithItems,
   getQuote,
+  nextAvailableQuoteNumber,
 } from '@/lib/data';
 import type { QuoteDocInput } from '@/lib/types';
+import { quoteNumberBase } from '@/lib/quote-number';
 import { safeListHref } from '@/lib/list-state';
 import { sendNewProjectEmail } from '@/lib/email/send';
 
@@ -22,6 +24,26 @@ async function requireUser() {
   // Employees are time-clock-only — they may never touch quotes.
   if (user.role === 'employee') throw new Error('Not authorized.');
   return user;
+}
+
+/**
+ * The quote number to use for a customer code and issue date — `XXXMMDDYY`,
+ * with `-2`, `-3`, … appended if that number is already taken (a second quote
+ * for the same customer on the same day). Returns `null` when the customer has
+ * no abbreviation or the date is missing, in which case the builder leaves the
+ * field for the user to fill in.
+ *
+ * `quoteId` is the quote being edited, so its own number isn't counted as taken.
+ */
+export async function suggestQuoteNumberAction(
+  abbreviation: string | null,
+  issueDate: string | null,
+  quoteId?: number
+): Promise<{ number: string | null }> {
+  await requireUser();
+  const base = quoteNumberBase(abbreviation, issueDate);
+  if (!base) return { number: null };
+  return { number: await nextAvailableQuoteNumber(base, quoteId) };
 }
 
 export async function updateQuoteAction(id: number, formData: FormData) {
