@@ -966,6 +966,7 @@ Your City, ST 00000',
   await migrateCrewDays(pool);
   await migrateSubcontractedPhases(pool);
   await migrateWarehouseDays(pool);
+  await migrateReceipts(pool);
 }
 
 /* ====================================================================
@@ -1183,4 +1184,131 @@ function worksLegacyDay(
 ): boolean {
   if (!isWorkingDay(day, cal)) return false;
   return mask == null || (mask & (1 << new Date(day + 'T00:00:00').getDay())) !== 0;
+}
+
+/* ====================================================================
+ * Job receipts — what a job COST.
+ *
+ * A job has always known what it was sold for. What it cost to do was
+ * paper in somebody's truck: a materials run to the supply house, a tank
+ * of fuel, a blade that snapped. The Files tab could hold a photo of the
+ * receipt, but a project_files row is a filename — it cannot say who the
+ * receipt is from, what day it is from, or what it came to, so a job's
+ * spend could be attached but never read, totalled, or compared.
+ *
+ * Hence three tables rather than a column on project_files:
+ *
+ *   project_receipts    the receipt as a fact — vendor, day, category, money
+ *   receipt_line_items  what was on it, when somebody bothers to type it
+ *   receipt_images      the photo, kept OFF the receipt row on purpose
+ *
+ * The photo lives in its own 1:1 table, exactly as invoice_files does for
+ * an invoice PDF. That is not tidiness: a base64 data URL is a megabyte in
+ * a TEXT column, and a receipts table renders thirty rows at a time. With
+ * the blob on the receipt row, every listing would have to remember to
+ * enumerate columns and leave `data` out — the footgun listProjectFiles
+ * already has to carry a comment about. With it one join away, `SELECT r.*`
+ * is cheap forever and no later edit can accidentally make it expensive.
+ *
+ * Money is DOUBLE PRECISION because every other money column here is
+ * (projects.value, quotes.bid_value, quote_line_items.unit_price). NUMERIC
+ * would model cents better, but pg has no type parser registered for OID
+ * 1700, so it would arrive as a STRING and break money() and every sum
+ * that touched it — one correct column bought with a class of silent bugs.
+ * Values are rounded to cents on write instead.
+ * ==================================================================== */
+async function migrateReceipts(pool: Pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_receipts (
+      id            SERIAL PRIMARY KEY,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      -- Nullable on purpose. A photo taken at the counter IS a receipt before
+      -- anybody has typed what is on it, and the point of the camera button is
+      -- that it can be pressed with one hand while holding the paper. A row
+      -- with no vendor, no date and no total is the "needs details" state —
+      -- derived from these columns being empty rather than stored as a flag,
+      -- so there is no second piece of truth to fall out of step.
+      vendor        TEXT,
+      purchase_date DATE,
+      category      TEXT NOT NULL DEFAULT 'Other',
+      subtotal      DOUBLE PRECISION NOT NULL DEFAULT 0,
+      tax           DOUBLE PRECISION NOT NULL DEFAULT 0,
+      -- What the paper says, and never recomputed from subtotal + tax or from
+      -- the line items. A till roll's own arithmetic is the authority: the job
+      -- total has to equal the sum of the receipts in the folder, or the number
+      -- is no use to anybody reconciling it.
+      total         DOUBLE PRECISION NOT NULL DEFAULT 0,
+      note          TEXT,
+      -- How the fields got their values. Everything is typed today; if reading
+      -- receipts off the photo is added later it writes 'extracted', and
+      -- 'extracted_edited' once a human has corrected it — so the provenance
+      -- of a number is answerable without reshaping either table.
+      entry_source  TEXT NOT NULL DEFAULT 'manual',
+      -- Denormalised like project_files: the FK for who, the text for what they
+      -- were called, so listing receipts never joins users.
+      uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploader_name TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Declared as DROP/ADD rather than inline in CREATE TABLE so that adding a
+    -- sixth cost bucket later is one edit that also lands on databases created
+    -- before it — the shape schedule_tasks_hours_check already uses here.
+    ALTER TABLE project_receipts DROP CONSTRAINT IF EXISTS project_receipts_category_check;
+    ALTER TABLE project_receipts ADD CONSTRAINT project_receipts_category_check
+      CHECK (category IN ('Material','Fuel','Tools','Subcontractor','Other'));
+
+    ALTER TABLE project_receipts DROP CONSTRAINT IF EXISTS project_receipts_entry_source_check;
+    ALTER TABLE project_receipts ADD CONSTRAINT project_receipts_entry_source_check
+      CHECK (entry_source IN ('manual','extracted','extracted_edited'));
+
+    -- A refund is a credit note, not a receipt with a minus on it; nothing in
+    -- the UI can produce one, so a negative here is a typo worth refusing.
+    ALTER TABLE project_receipts DROP CONSTRAINT IF EXISTS project_receipts_amounts_check;
+    ALTER TABLE project_receipts ADD CONSTRAINT project_receipts_amounts_check
+      CHECK (subtotal >= 0 AND tax >= 0 AND total >= 0);
+
+    CREATE TABLE IF NOT EXISTS receipt_line_items (
+      id          SERIAL PRIMARY KEY,
+      receipt_id  INTEGER NOT NULL REFERENCES project_receipts(id) ON DELETE CASCADE,
+      -- The order they were typed, which is the order they appear on the paper.
+      position    INTEGER NOT NULL DEFAULT 0,
+      description TEXT NOT NULL,
+      quantity    DOUBLE PRECISION NOT NULL DEFAULT 1,
+      unit_price  DOUBLE PRECISION NOT NULL DEFAULT 0,
+      -- NULL falls back to quantity * unit_price when rendering, exactly as
+      -- quote_line_items.amount does, so a line can be entered either way.
+      amount      DOUBLE PRECISION,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- The photo. One receipt, one image: re-uploading replaces rather than
+    -- accumulates, the same contract invoice_files has with an invoice.
+    CREATE TABLE IF NOT EXISTS receipt_images (
+      receipt_id    INTEGER PRIMARY KEY REFERENCES project_receipts(id) ON DELETE CASCADE,
+      filename      TEXT NOT NULL,
+      mime          TEXT,
+      size          INTEGER NOT NULL DEFAULT 0,
+      data          TEXT NOT NULL,
+      -- A ~20 KB copy of the same image, shrunk in the browser, for the
+      -- table's thumbnail column. Without it a thirty-row table pulls thirty
+      -- full photos through a no-store route on every render — several
+      -- megabytes, over a phone connection, to draw thumbnails 40px wide.
+      -- NULL for PDFs and for anything the browser could not decode, which
+      -- the table draws as a file tile instead.
+      thumb         TEXT,
+      uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploader_name TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Covers the tab's only query: this job's receipts, newest paper first.
+    -- NULLS LAST so a receipt whose date hasn't been typed yet sorts to the
+    -- bottom rather than the top.
+    CREATE INDEX IF NOT EXISTS idx_receipts_project
+      ON project_receipts(project_id, purchase_date DESC NULLS LAST, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt
+      ON receipt_line_items(receipt_id, position);
+  `);
 }

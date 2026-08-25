@@ -28,6 +28,7 @@ export const PROJECT_TABS: ProjectTab[] = [
   { segment: 'time', label: 'Time' },
   { segment: 'notes', label: 'Notes' },
   { segment: 'files', label: 'Files' },
+  { segment: 'receipts', label: 'Receipts', managerOnly: true },
 ];
 
 /** Whether a role may open a given tab. */

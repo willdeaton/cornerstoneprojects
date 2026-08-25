@@ -309,6 +309,109 @@ export interface QuoteFile {
   data?: string;
 }
 
+/* ------------------------------------------------------------- Job receipts */
+
+/**
+ * The cost buckets a job's receipts are totalled by.
+ *
+ * Mirrored by the CHECK constraint on project_receipts.category — adding one
+ * here means adding it there too, which is why that constraint is declared as
+ * DROP/ADD in migrateReceipts rather than inline.
+ */
+export const RECEIPT_CATEGORIES = [
+  'Material',
+  'Fuel',
+  'Tools',
+  'Subcontractor',
+  'Other',
+] as const;
+export type ReceiptCategory = (typeof RECEIPT_CATEGORIES)[number];
+
+/**
+ * Whether the money on a receipt was typed or read off the photo.
+ *
+ * Everything is 'manual' today. The other two exist so that reading receipts
+ * automatically can be added later without a migration, and so a corrected
+ * number is distinguishable from one nobody has checked.
+ */
+export type ReceiptEntrySource = 'manual' | 'extracted' | 'extracted_edited';
+
+/**
+ * One receipt against a job.
+ *
+ * The image_* fields are metadata LEFT JOINed from receipt_images — never the
+ * blob itself, which only the image route reads.
+ */
+export interface ProjectReceipt {
+  id: number;
+  project_id: number;
+  vendor: string | null;
+  /** 'YYYY-MM-DD' — a DATE, so it is the day on the paper in every timezone. */
+  purchase_date: string | null;
+  category: ReceiptCategory;
+  subtotal: number;
+  tax: number;
+  total: number;
+  note: string | null;
+  entry_source: ReceiptEntrySource;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+  created_at: string;
+  updated_at: string;
+  image_filename: string | null;
+  image_mime: string | null;
+  image_size: number | null;
+  /** Whether a thumbnail exists, so the table knows to ask for the small one. */
+  has_thumb: boolean;
+}
+
+/** A line off a receipt. `amount` null means quantity x unit_price. */
+export interface ReceiptLineItem {
+  id: number;
+  receipt_id: number;
+  position: number;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  amount: number | null;
+}
+
+/** A receipt with its lines, as the Receipts tab renders it. */
+export interface ReceiptWithItems extends ProjectReceipt {
+  items: ReceiptLineItem[];
+}
+
+/** The photo itself. Read by the image route and nothing else. */
+export interface ReceiptImage {
+  receipt_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  data: string;
+  thumb: string | null;
+}
+
+export interface ReceiptLineItemInput {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  amount: number | null;
+}
+
+/** Everything a create or update writes, the photo aside. */
+export interface ReceiptInput {
+  project_id: number;
+  vendor: string | null;
+  purchase_date: string | null;
+  category: ReceiptCategory;
+  subtotal: number;
+  tax: number;
+  total: number;
+  note: string | null;
+  entry_source: ReceiptEntrySource;
+  items: ReceiptLineItemInput[];
+}
+
 export interface Note {
   id: number;
   project_id: number;
