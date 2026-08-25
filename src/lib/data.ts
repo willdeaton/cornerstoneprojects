@@ -13,6 +13,7 @@ import type {
   ProjectFile,
   ProjectInvoice,
   ProjectInvoiceWithFile,
+  ProjectValueChange,
   InvoiceFile,
   QuoteFile,
   QuoteStatus,
@@ -34,7 +35,7 @@ import type {
   BackupTimeEntry,
   BackupSchedulePhase,
 } from './backup-types';
-import type { InvoiceTally } from './billing';
+import { billingStage, contractLocked, tallyInvoices, type InvoiceTally } from './billing';
 import { hoursBetween } from './format';
 import { computeSchedule, shiftLabel, timeLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
@@ -435,7 +436,6 @@ export async function updateProject(
       | 'end_date'
       | 'location'
       | 'site_address'
-      | 'value'
       | 'name'
       | 'category'
       | 'quote_number'
@@ -444,7 +444,14 @@ export async function updateProject(
     >
   >
 ): Promise<void> {
-  const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+  // The contract value is not settable here, and the guard is at runtime as
+  // well as in the type above: the SET clause is built from these keys, so a
+  // caller spreading an object it did not fully control would otherwise write
+  // the one field that has to go through recordProjectValueChange — with a
+  // reason, and a history row. One write path, enforced rather than intended.
+  const entries = Object.entries(fields).filter(
+    ([k, v]) => v !== undefined && k !== 'value'
+  );
   if (entries.length === 0) return;
   const set = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
   const values = entries.map(([, v]) => v);
@@ -624,6 +631,143 @@ export async function markProjectBilling(projectId: number, paid: boolean): Prom
     [projectId, paid]
   );
   return raised.length;
+}
+
+/* ------------------------------------------- Contract value & change orders */
+
+/** What happened to a contract-value change — or why nothing did. */
+export type ValueChangeResult =
+  | { status: 'ok'; change: ProjectValueChange }
+  | { status: 'missing' }
+  | { status: 'locked'; stage: 'paid' | 'closed' }
+  | { status: 'noop'; value: number };
+
+/**
+ * Move a sold job's contract value and record why, in one transaction.
+ *
+ * `projects.value` is the live figure every reader already uses — the dashboard
+ * total, the billing desk's variance, the job header — so it is updated in
+ * place, and the row written beside it is what makes the move auditable. Both
+ * happen or neither does: a value that moved with no reason attached is the
+ * exact thing this exists to prevent.
+ *
+ * The stage guard is evaluated HERE rather than trusted from the caller,
+ * against the rows as they are right now — the dialog's copy of them may be
+ * minutes old. `FOR UPDATE` is what makes the logged `old_value` true: two
+ * change orders landing together serialize on the lock, so the second one's
+ * "was" is the first one's "now" and the history chains instead of both rows
+ * quoting the same stale figure.
+ */
+export async function recordProjectValueChange(input: {
+  project_id: number;
+  /** Already parsed and rounded to cents by the caller. */
+  new_value: number;
+  co_number: string | null;
+  reason: string;
+  changed_by: number | null;
+}): Promise<ValueChangeResult> {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query<
+      Pick<Project, 'value' | 'status' | 'completed_at' | 'billing_hold' | 'billing_closed_at'>
+    >(
+      `SELECT value, status, completed_at, billing_hold, billing_closed_at
+         FROM projects WHERE id = $1 FOR UPDATE`,
+      [input.project_id]
+    );
+    const project = locked.rows[0];
+    if (!project) {
+      await client.query('ROLLBACK');
+      return { status: 'missing' };
+    }
+
+    const invoices = await client.query<Pick<ProjectInvoice, 'amount' | 'billed' | 'paid'>>(
+      'SELECT amount, billed, paid FROM project_invoices WHERE project_id = $1',
+      [input.project_id]
+    );
+    const stage = billingStage(project, tallyInvoices(invoices.rows));
+    if (contractLocked(stage)) {
+      await client.query('ROLLBACK');
+      return { status: 'locked', stage };
+    }
+
+    // To the cent, and judged against the value as it actually is: a dialog
+    // submitted twice, or opened on a figure somebody else has since set, must
+    // not write a change of nothing.
+    if (Math.round(project.value * 100) === Math.round(input.new_value * 100)) {
+      await client.query('ROLLBACK');
+      return { status: 'noop', value: project.value };
+    }
+
+    await client.query('UPDATE projects SET value = $2, updated_at = now() WHERE id = $1', [
+      input.project_id,
+      input.new_value,
+    ]);
+    const inserted = await client.query<ProjectValueChange>(
+      `INSERT INTO project_value_changes
+         (project_id, old_value, new_value, co_number, reason, changed_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *, NULL::text AS changed_by_name`,
+      [
+        input.project_id,
+        project.value,
+        input.new_value,
+        input.co_number,
+        input.reason,
+        input.changed_by,
+      ]
+    );
+    await client.query('COMMIT');
+    return { status: 'ok', change: inserted.rows[0]! };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * What a job was sold for and how often that has moved — one row, for views
+ * that want the signal without paying for the history. `sold_at` is NULL on a
+ * job that has never been changed, which is every job until somebody records
+ * a change order.
+ */
+export async function projectValueRevision(
+  projectId: number
+): Promise<{ soldAt: number; changes: number } | null> {
+  const row = await one<{ sold_at: number | null; changes: number }>(
+    `SELECT
+       (SELECT old_value FROM project_value_changes
+         WHERE project_id = $1 ORDER BY created_at ASC, id ASC LIMIT 1) AS sold_at,
+       (SELECT COUNT(*)::int FROM project_value_changes WHERE project_id = $1) AS changes`,
+    [projectId]
+  );
+  if (!row || row.sold_at == null) return null;
+  return { soldAt: row.sold_at, changes: row.changes };
+}
+
+/**
+ * A job's contract-value history, newest first. The name is joined rather than
+ * copied — unlike a schedule change's task name, a user row is only ever
+ * removed, and `changed_by` going NULL is exactly what "we no longer know who"
+ * should read as.
+ */
+export async function listProjectValueChanges(
+  projectId: number,
+  limit = 50
+): Promise<ProjectValueChange[]> {
+  return q<ProjectValueChange>(
+    `SELECT c.*, u.name AS changed_by_name
+       FROM project_value_changes c
+       LEFT JOIN users u ON u.id = c.changed_by
+      WHERE c.project_id = $1
+      ORDER BY c.created_at DESC, c.id DESC
+      LIMIT $2`,
+    [projectId, limit]
+  );
 }
 
 /**

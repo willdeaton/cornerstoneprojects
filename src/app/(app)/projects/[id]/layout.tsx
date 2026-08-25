@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { money, shortDate } from '@/lib/format';
 import { OnHoldBadge, ProjectStatusBadge } from '@/components/ui';
 import { BackToList } from '@/components/ListMemory';
-import { loadProject, requireJobUser } from './job';
+import { loadProject, requireJobUser, canBill } from './job';
 import { tabsForRole } from './project-tabs';
 import { ProjectTabs } from './ProjectTabs';
 import { ProjectHeaderActions } from './ProjectHeaderActions';
@@ -91,7 +91,7 @@ export default async function ProjectLayout({
             </a>
           )}
         </div>
-        <ProjectHeaderActions project={project} />
+        <ProjectHeaderActions project={project} canChangeValue={canBill(user)} />
       </div>
 
       {/* Carried across every tab: what the job is worth, and the two dates it

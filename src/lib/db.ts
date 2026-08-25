@@ -963,6 +963,46 @@ Your City, ST 00000',
       CHECK (hours IS NULL OR (hours > 0 AND hours <= 24));
   `);
 
+  /* ==================================================================
+   * Change orders — why a sold job is no longer worth what we sold it
+   * for.
+   *
+   * projects.value is the contract value, and it moves: extra scope, a
+   * deleted line, a negotiated credit. It used to move as a bare text
+   * box in the Edit Project modal, which meant a job could be worth
+   * five thousand more than yesterday with nothing anywhere saying so.
+   * The billing desk has always flagged a job invoiced over its
+   * contract as "worth checking against a change order" — this is the
+   * table that check finally has something to read.
+   *
+   * Append-only, and the reason is NOT NULL for the same reason a
+   * schedule change's is: a bare "the value changed" is unreadable a
+   * fortnight later, and "added roof curb flashing per the owner's
+   * walkthrough" tells the next person what they are looking at. The
+   * value itself stays on projects — this is the history of it, not the
+   * source of it, so every existing reader of projects.value is
+   * untouched.
+   *
+   * changed_by goes NULL rather than cascading: the history outlives
+   * the person who typed it.
+   * ================================================================== */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_value_changes (
+      id         SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      old_value  DOUBLE PRECISION NOT NULL,
+      new_value  DOUBLE PRECISION NOT NULL,
+      -- The customer-facing change order this answers to, when there is one.
+      -- Optional: plenty of adjustments are agreed before the paperwork is.
+      co_number  TEXT,
+      reason     TEXT NOT NULL,
+      changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_value_changes_project
+      ON project_value_changes(project_id, created_at DESC);
+  `);
+
   await migrateCrewDays(pool);
   await migrateSubcontractedPhases(pool);
   await migrateWarehouseDays(pool);

@@ -1,6 +1,11 @@
 import { money } from '@/lib/format';
 import { BillingStageBadge } from '@/components/ui';
-import { billingVariance, BILLING_SLA, type BillingSummary } from '@/lib/billing';
+import {
+  billingVariance,
+  contractRevised,
+  BILLING_SLA,
+  type BillingSummary,
+} from '@/lib/billing';
 import { BillingStageControls } from './BillingStageControls';
 
 /**
@@ -23,12 +28,15 @@ export function BillingSection({
   holdReason,
   closedAt,
   closedByName,
+  soldAt,
 }: {
   projectId: number;
   summary: BillingSummary;
   holdReason: string | null;
   closedAt: string | null;
   closedByName: string | null;
+  /** What the job was sold for, when a change order has moved it since. */
+  soldAt?: number;
 }) {
   const closed = !!closedAt;
   const variance = billingVariance(summary);
@@ -61,7 +69,15 @@ export function BillingSection({
       {/* Five figures now, so the count follows the width: three across when
           the card has the page, two when it's the narrow sidebar column. */}
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-2">
-        <Figure label="Contract" value={money(summary.contract)} />
+        <Figure
+          label="Contract"
+          value={money(summary.contract)}
+          hint={
+            soldAt != null && contractRevised(summary.contract, soldAt)
+              ? `Sold at ${money(soldAt)}`
+              : undefined
+          }
+        />
         <Figure label="Invoiced" value={money(summary.invoiced, { cents: true })} />
         {/* Left to bill counts what has actually gone out, so an invoice
             raised and not sent still reads as work left to bill. Clamped at
@@ -136,7 +152,18 @@ export function BillingSection({
   );
 }
 
-function Figure({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Figure({
+  label,
+  value,
+  strong,
+  hint,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  /** A second line under the figure, for what it used to be. */
+  hint?: string;
+}) {
   return (
     <div>
       <dt className="text-xs font-semibold uppercase tracking-wide text-brand-gray">{label}</dt>
@@ -147,6 +174,7 @@ function Figure({ label, value, strong }: { label: string; value: string; strong
       >
         {value}
       </dd>
+      {hint && <p className="tnum mt-0.5 text-xs text-brand-gray">{hint}</p>}
     </div>
   );
 }

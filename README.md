@@ -57,6 +57,15 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **Contract vs. invoiced** — the queue calls out a job billed short of its
     contract value, one billed *over* it (worth checking for a change order),
     and money sitting on an invoice that was raised but never sent.
+  - **Change orders** — what a sold job is worth *does* move: extra scope, a
+    line deleted, a negotiated credit. Moving it is a deliberate act with a
+    required reason and an optional CO number, logged as history, so a job
+    answers "why is this worth more than we sold it for?" and the over-billed
+    warning above has something to check against. The job shows **sold at** next
+    to what it is worth now, and admins and managers are the only ones who can
+    move it. A job whose billing has settled — every invoice paid, or signed off
+    the desk — is locked: untick Paid, or reopen the billing, and then record the
+    change.
   - **On Hold** — a job that shouldn't be chased (retainage, a dispute, a
     customer waiting on paperwork) is parked with a reason, and stops being
     counted late. The reason is required — the point of a hold is that the next

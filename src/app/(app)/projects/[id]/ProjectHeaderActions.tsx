@@ -3,11 +3,21 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/Modal';
+import { money } from '@/lib/format';
 import type { Project } from '@/lib/types';
 import { updateProjectDetailsAction, deleteProjectAction } from '@/app/actions/projects';
+import { ContractValueControl } from '@/components/billing/ContractValueControl';
 
-export function ProjectHeaderActions({ project }: { project: Project }) {
+export function ProjectHeaderActions({
+  project,
+  canChangeValue,
+}: {
+  project: Project;
+  /** Admins and managers only — the contract value is a billing number. */
+  canChangeValue: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  const [valueOpen, setValueOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -45,9 +55,33 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
               <label className="label">Quote #</label>
               <input name="quote_number" className="input" defaultValue={project.quote_number ?? ''} placeholder="e.g. Q-2601" />
             </div>
+            {/* Read-only here on purpose. What a job is worth used to be a text
+                box on this form, so it could move with nothing recording that it
+                had; changing it is a change order now, with a reason. */}
             <div>
               <label className="label">Contract Value</label>
-              <input name="value" className="input" defaultValue={project.value} inputMode="decimal" />
+              <div className="input tnum flex items-center justify-between gap-2 bg-surface-sunken">
+                <span>{money(project.value, { cents: true })}</span>
+                {canChangeValue && (
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-brand-gray hover:text-brand-ink hover:underline"
+                    onClick={() => {
+                      // Never a dialog inside a dialog — Modal owns the page's
+                      // scroll lock, so two of them nested fight over it.
+                      setOpen(false);
+                      setValueOpen(true);
+                    }}
+                  >
+                    Change…
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-brand-gray">
+                {canChangeValue
+                  ? 'A change order — recorded with the reason for it.'
+                  : 'Only admins and managers can change what a job is worth.'}
+              </p>
             </div>
           </div>
           <div>
@@ -110,6 +144,15 @@ export function ProjectHeaderActions({ project }: { project: Project }) {
           </div>
         </form>
       </Modal>
+
+      {/* A sibling of the Edit modal, not a child of it: the Change… button
+          closes Edit before opening this. */}
+      <ContractValueControl
+        projectId={project.id}
+        projectName={project.name}
+        open={valueOpen}
+        onClose={() => setValueOpen(false)}
+      />
     </div>
   );
 }

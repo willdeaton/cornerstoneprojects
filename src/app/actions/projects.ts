@@ -123,15 +123,19 @@ export async function setProjectProgressAction(id: number, progress: number) {
  * due-date target. Moving a hard finish date from the schedule asks for a reason
  * (see setHardFinishDateAction); editing the job's own details is where it's set
  * up in the first place.
+ *
+ * The contract value is deliberately NOT here any more. It used to be a text
+ * box on this form, which meant what a job was worth could change with nothing
+ * recording that it had — so changing it is a change order now, with a reason,
+ * through `changeContractValueAction`. `updateProject` no longer accepts the
+ * field at all, so there is one write path and the compiler keeps it that way.
  */
 export async function updateProjectDetailsAction(id: number, formData: FormData) {
   await requireUser();
-  const value = parseFloat(String(formData.get('value') ?? '0').replace(/[$,]/g, ''));
   await updateProject(id, {
     name: String(formData.get('name') ?? '').trim() || undefined,
     quote_number: String(formData.get('quote_number') ?? '').trim() || null,
     category: String(formData.get('category') ?? '').trim() || null,
-    value: isNaN(value) ? undefined : value,
     location: String(formData.get('location') ?? '').trim() || null,
     site_address: String(formData.get('site_address') ?? '').trim() || null,
     start_date: String(formData.get('start_date') ?? '') || null,

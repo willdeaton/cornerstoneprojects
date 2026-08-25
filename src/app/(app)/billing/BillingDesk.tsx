@@ -4,8 +4,14 @@ import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import type { Project, ProjectInvoiceWithFile } from '@/lib/types';
 import { money, shortDate } from '@/lib/format';
-import { billingVariance, BILLING_STAGE_LABELS, type BillingSummary } from '@/lib/billing';
+import {
+  billingVariance,
+  contractLocked,
+  BILLING_STAGE_LABELS,
+  type BillingSummary,
+} from '@/lib/billing';
 import { BillingStageBadge } from '@/components/ui';
+import { ContractValueControl } from '@/components/billing/ContractValueControl';
 import { BillingStageControls } from '@/components/billing/BillingStageControls';
 import { InvoiceSection } from '@/components/billing/InvoiceSection';
 import { listJobInvoicesAction } from '@/app/actions/billing';
@@ -225,6 +231,17 @@ function BillingDeskRow({
             closedByName={row.closedByName}
             onChanged={onChanged}
           />
+
+          {/* The desk is where an over-billed job gets noticed, so it is also
+              where the change order that explains it gets recorded. */}
+          <div className="mt-3">
+            <ContractValueControl
+              projectId={p.id}
+              projectName={p.name}
+              locked={contractLocked(s.stage)}
+              onChanged={onChanged}
+            />
+          </div>
 
           {/* The variances belong with the ledger they're about once it's on
               screen, so they're stated here instead of on the collapsed row. */}
