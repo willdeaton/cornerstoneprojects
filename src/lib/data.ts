@@ -2332,10 +2332,40 @@ export async function managerChainContains(startId: number, targetId: number): P
   return !!row;
 }
 
+/* ------------------------------------------------------------ Quote numbers */
+
+/**
+ * The first free quote number starting from `base` (`XXXMMDDYY`). Two quotes
+ * raised for the same customer on the same day would otherwise collide, so the
+ * second one becomes `XXXMMDDYY-2`, the third `-3`, and so on.
+ *
+ * `excludeId` is the quote being edited — its own number never counts as taken.
+ */
+export async function nextAvailableQuoteNumber(
+  base: string,
+  excludeId?: number
+): Promise<string> {
+  const taken = await q<{ quote_number: string }>(
+    `SELECT quote_number FROM quotes
+      WHERE quote_number IS NOT NULL
+        AND upper(quote_number) LIKE upper($1) || '%'
+        AND ($2::int IS NULL OR id <> $2)`,
+    [base, excludeId ?? null]
+  );
+  const used = new Set(taken.map((r) => r.quote_number.trim().toUpperCase()));
+  if (!used.has(base.toUpperCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!used.has(candidate.toUpperCase())) return candidate;
+  }
+}
+
 /* -------------------------------------------------------------- Customers */
 
 export interface CustomerInput {
   name: string;
+  /** Unique three-letter code, stored uppercase; null when not set. */
+  abbreviation?: string | null;
   address?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -2368,9 +2398,16 @@ export async function listCustomersWithContacts(): Promise<CustomerWithContacts[
 
 export async function createCustomer(input: CustomerInput): Promise<number> {
   const row = await one<{ id: number }>(
-    `INSERT INTO customers (name, address, phone, email, notes)
-     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-    [input.name, input.address ?? null, input.phone ?? null, input.email ?? null, input.notes ?? null]
+    `INSERT INTO customers (name, abbreviation, address, phone, email, notes)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [
+      input.name,
+      input.abbreviation ?? null,
+      input.address ?? null,
+      input.phone ?? null,
+      input.email ?? null,
+      input.notes ?? null,
+    ]
   );
   return row!.id;
 }
@@ -2378,9 +2415,18 @@ export async function createCustomer(input: CustomerInput): Promise<number> {
 export async function updateCustomer(id: number, input: CustomerInput): Promise<void> {
   await q(
     `UPDATE customers
-        SET name = $1, address = $2, phone = $3, email = $4, notes = $5, updated_at = now()
-      WHERE id = $6`,
-    [input.name, input.address ?? null, input.phone ?? null, input.email ?? null, input.notes ?? null, id]
+        SET name = $1, abbreviation = $2, address = $3, phone = $4, email = $5,
+            notes = $6, updated_at = now()
+      WHERE id = $7`,
+    [
+      input.name,
+      input.abbreviation ?? null,
+      input.address ?? null,
+      input.phone ?? null,
+      input.email ?? null,
+      input.notes ?? null,
+      id,
+    ]
   );
 }
 

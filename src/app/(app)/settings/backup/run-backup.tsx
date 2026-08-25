@@ -198,6 +198,7 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
     'Customers',
     data.customers.map((c) => ({
       Name: c.name,
+      Abbreviation: c.abbreviation ?? '',
       Address: c.address ?? '',
       Phone: c.phone ?? '',
       Email: c.email ?? '',

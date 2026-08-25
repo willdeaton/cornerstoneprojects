@@ -234,7 +234,8 @@ export function QuoteDocument({
                   </table>
                   <div className="mt-2 flex justify-end">
                     <div className="flex w-64 justify-between border-t border-brand-green pt-1.5 text-sm">
-                      <span className="font-semibold text-brand-ink">{g.name} Total</span>
+                      {/* Just "Total" — the option's name heads the block above. */}
+                      <span className="font-semibold text-brand-ink">Total</span>
                       <span className="font-bold text-brand-ink">
                         {money(g.total, { cents: true })}
                       </span>

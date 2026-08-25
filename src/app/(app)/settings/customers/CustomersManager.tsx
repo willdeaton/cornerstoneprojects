@@ -4,12 +4,20 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/Modal';
 import type { CustomerWithContacts, CustomerContact } from '@/lib/types';
+import { ABBREVIATION_LENGTH, normalizeAbbreviation } from '@/lib/quote-number';
 import {
   saveCustomerAction,
   deleteCustomerAction,
   saveContactAction,
   deleteContactAction,
 } from '@/app/actions/catalog';
+
+/** Today as MMDDYY, so the abbreviation hint shows a real-looking quote number. */
+function sampleDateSuffix(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}${pad(d.getDate())}${String(d.getFullYear()).slice(2)}`;
+}
 
 type CustomerModal = { mode: 'new' } | { mode: 'edit'; customer: CustomerWithContacts } | null;
 type ContactModal =
@@ -56,7 +64,17 @@ export function CustomersManager({ customers }: { customers: CustomerWithContact
             <div key={c.id} className="card p-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                  <h3 className="font-semibold text-brand-ink">{c.name}</h3>
+                  <h3 className="flex flex-wrap items-center gap-2 font-semibold text-brand-ink">
+                    {c.name}
+                    {c.abbreviation && (
+                      <span
+                        className="rounded bg-brand-green/15 px-1.5 py-0.5 font-mono text-xs font-semibold tracking-wide text-brand-green-dark"
+                        title="Quote number prefix"
+                      >
+                        {c.abbreviation}
+                      </span>
+                    )}
+                  </h3>
                   <div className="mt-1 space-y-0.5 text-sm text-brand-gray">
                     {c.address && <p className="whitespace-pre-line">{c.address}</p>}
                     {c.notes && <p className="italic">{c.notes}</p>}
@@ -173,6 +191,7 @@ function CustomerFormModal({
   onSaved: () => void;
 }) {
   const [name, setName] = useState(customer?.name ?? '');
+  const [abbreviation, setAbbreviation] = useState(customer?.abbreviation ?? '');
   const [address, setAddress] = useState(customer?.address ?? '');
   const [notes, setNotes] = useState(customer?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +203,7 @@ function CustomerFormModal({
     const res = await saveCustomerAction({
       id: customer?.id,
       name,
+      abbreviation,
       address,
       notes,
     });
@@ -200,6 +220,21 @@ function CustomerFormModal({
         <div>
           <label className="label">Customer Name *</label>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="ARH-Highlands" />
+        </div>
+        <div>
+          <label className="label">Abbreviation</label>
+          <input
+            className="input font-mono uppercase tracking-widest"
+            value={abbreviation}
+            onChange={(e) => setAbbreviation(normalizeAbbreviation(e.target.value))}
+            maxLength={ABBREVIATION_LENGTH}
+            placeholder="ARH"
+          />
+          <p className="mt-1 text-xs text-brand-gray">
+            Exactly 3 letters, unique to this customer. Quote numbers are generated from it —
+            {abbreviation.length === ABBREVIATION_LENGTH ? ` ${abbreviation}` : ' ABC'}
+            {sampleDateSuffix()}.
+          </p>
         </div>
         <div>
           <label className="label">Address</label>

@@ -16,9 +16,18 @@ function fileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Summarise the current selection for the drop zone's label. */
+function describe(files: FileList | null): string {
+  if (!files || files.length === 0) return '';
+  if (files.length === 1) return files[0].name;
+  return `${files.length} files selected`;
+}
+
 /**
  * Upload + list supporting documentation on a quote. Internal reference only —
- * these files are never shown on the customer-facing quote PDF.
+ * these files are never shown on the customer-facing quote PDF. Files can be
+ * dropped straight onto the zone or picked by clicking it, exactly as on a
+ * project.
  */
 export function QuoteFiles({ quoteId, files }: { quoteId: number; files: QuoteFile[] }) {
   const [state, action, uploading] = useActionState<FileUploadState, FormData>(
@@ -27,7 +36,13 @@ export function QuoteFiles({ quoteId, files }: { quoteId: number; files: QuoteFi
   );
   const [pending, start] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState('');
+  // Drag events fire on child elements too, so count enter/leave pairs instead
+  // of toggling a boolean — otherwise the highlight flickers as the pointer
+  // moves across the zone's own text.
+  const dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
   const router = useRouter();
 
   // Refresh the list once an upload succeeds and reset the form. Depend on the
@@ -49,23 +64,65 @@ export function QuoteFiles({ quoteId, files }: { quoteId: number; files: QuoteFi
     });
   }
 
+  function endDrag() {
+    dragDepth.current = 0;
+    setDragging(false);
+  }
+
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    endDrag();
+    if (uploading) return;
+    const dropped = e.dataTransfer.files;
+    if (!dropped || dropped.length === 0) return;
+    // Hand the dropped files to the hidden input so the existing form action
+    // uploads them, then submit straight away — a drop means "upload this".
+    const input = inputRef.current;
+    if (!input) return;
+    input.files = dropped;
+    setFileName(describe(dropped));
+    formRef.current?.requestSubmit();
+  }
+
   return (
     <div>
       <form ref={formRef} action={action} className="mb-4">
         <input type="hidden" name="quote_id" value={quoteId} />
-        <label className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-black/15 bg-black/[0.02] px-4 py-6 text-center transition hover:border-brand-green hover:bg-brand-green/5">
+        <label
+          onDragEnter={(e) => {
+            e.preventDefault();
+            dragDepth.current += 1;
+            setDragging(true);
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            dragDepth.current -= 1;
+            if (dragDepth.current <= 0) endDrag();
+          }}
+          onDrop={onDrop}
+          className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed px-4 py-6 text-center transition ${
+            dragging
+              ? 'border-brand-green bg-brand-green/10'
+              : 'border-black/15 bg-black/[0.02] hover:border-brand-green hover:bg-brand-green/5'
+          }`}
+        >
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#98C73A" strokeWidth="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span className="text-sm font-semibold text-brand-ink">
-            {fileName || 'Choose a file'}
+            {dragging ? 'Drop to upload' : fileName || 'Drag & drop files here'}
           </span>
-          <span className="text-xs text-brand-gray">Documents, photos, PDFs · up to 10 MB</span>
+          <span className="text-xs text-brand-gray">
+            or click to browse · documents, photos, PDFs · up to 10 MB each
+          </span>
           <input
+            ref={inputRef}
             type="file"
             name="file"
+            multiple
             className="hidden"
-            onChange={(e) => setFileName(e.target.files?.[0]?.name ?? '')}
+            onChange={(e) => setFileName(describe(e.target.files))}
           />
         </label>
         {state.error && (
@@ -73,7 +130,7 @@ export function QuoteFiles({ quoteId, files }: { quoteId: number; files: QuoteFi
         )}
         <div className="mt-2 flex justify-end">
           <button type="submit" className="btn-primary" disabled={uploading || !fileName}>
-            {uploading ? 'Uploading…' : 'Upload File'}
+            {uploading ? 'Uploading…' : 'Upload'}
           </button>
         </div>
       </form>

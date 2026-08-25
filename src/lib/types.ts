@@ -119,6 +119,11 @@ export interface QuoteDocInput {
 export interface Customer {
   id: number;
   name: string;
+  /**
+   * Unique three-letter customer code (uppercase) used to prefix auto-generated
+   * quote numbers — `XXXMMDDYY`. Null on customers saved before codes existed.
+   */
+  abbreviation: string | null;
   address: string | null;
   phone: string | null;
   email: string | null;
