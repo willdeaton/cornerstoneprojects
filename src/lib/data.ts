@@ -77,45 +77,14 @@ export async function getQuote(id: number): Promise<Quote | undefined> {
   return one<Quote>('SELECT * FROM quotes WHERE id = $1', [id]);
 }
 
-export async function createQuote(quote: {
-  customer: string;
-  quote_number?: string | null;
-  project_name?: string | null;
-  category?: string | null;
-  bid_value: number;
-  date_received?: string | null;
-  week_of?: string | null;
-  source?: string;
-  notes?: string | null;
-}): Promise<number> {
-  const row = await one<{ id: number }>(
-    `INSERT INTO quotes (quote_number, customer, project_name, category, bid_value, date_received, week_of, source, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [
-      quote.quote_number ?? null,
-      quote.customer,
-      quote.project_name ?? null,
-      quote.category ?? null,
-      quote.bid_value,
-      quote.date_received ?? null,
-      quote.week_of ?? null,
-      quote.source ?? 'manual',
-      quote.notes ?? null,
-    ]
-  );
-  return row!.id;
-}
-
-export async function updateQuote(
-  id: number,
-  fields: Partial<Pick<Quote, 'quote_number' | 'customer' | 'project_name' | 'category' | 'bid_value' | 'date_received'>>
-): Promise<void> {
-  const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return;
-  const set = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
-  const values = entries.map(([, v]) => v);
-  await q(`UPDATE quotes SET ${set}, updated_at = now() WHERE id = $${entries.length + 1}`, [...values, id]);
-}
+/*
+ * A quote's header and its line items are only ever written together, by
+ * `createQuoteWithItems` / `updateQuoteWithItems` below. There is deliberately
+ * no header-only writer: `bid_value` is derived from the customer-facing lines,
+ * so anything that set it on its own would leave the headline price disagreeing
+ * with the lines behind it until the next document save quietly overwrote one
+ * of them.
+ */
 
 export async function updateQuoteStatus(id: number, status: QuoteStatus): Promise<void> {
   await q('UPDATE quotes SET status = $1, updated_at = now() WHERE id = $2', [status, id]);
@@ -209,7 +178,17 @@ export async function getQuoteWithItems(id: number): Promise<QuoteWithItems | un
   return { ...quote, line_items };
 }
 
-async function replaceItems(client: PoolClient, quoteId: number, items: LineItemInput[]) {
+/**
+ * Write a quote's line items, returning how many actually landed. The count is
+ * reported back to the builder so a row dropped on the way in can be shown to
+ * the user instead of passing for a clean save.
+ */
+async function replaceItems(
+  client: PoolClient,
+  quoteId: number,
+  items: LineItemInput[]
+): Promise<number> {
+  let saved = 0;
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const kind =
@@ -235,7 +214,9 @@ async function replaceItems(client: PoolClient, quoteId: number, items: LineItem
         kind === 'alternate' ? it.option_group?.trim() || null : null,
       ]
     );
+    saved++;
   }
+  return saved;
 }
 
 // Header columns written by both create and update, in a fixed order so the
@@ -268,7 +249,7 @@ function headerValues(input: QuoteDocInput, total: number): unknown[] {
 export async function createQuoteWithItems(
   input: QuoteDocInput,
   opts?: { source?: string; week_of?: string | null }
-): Promise<number> {
+): Promise<{ id: number; saved: number }> {
   const db = await getDb();
   const client = await db.connect();
   try {
@@ -285,9 +266,9 @@ export async function createQuoteWithItems(
       [...headerValues(input, total), opts?.source ?? 'manual', opts?.week_of ?? null]
     );
     const id = res.rows[0].id as number;
-    await replaceItems(client, id, input.items);
+    const saved = await replaceItems(client, id, input.items);
     await client.query('COMMIT');
-    return id;
+    return { id, saved };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -296,20 +277,41 @@ export async function createQuoteWithItems(
   }
 }
 
-export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Promise<void> {
+export async function updateQuoteWithItems(
+  id: number,
+  input: QuoteDocInput
+): Promise<{ saved: number }> {
   const db = await getDb();
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    // Only recompute bid_value from line items when the quote actually has
-    // them; otherwise preserve the stored value so editing a pipeline-only
-    // quote (imported / quick-added, no line items) doesn't zero its total.
+    // bid_value comes from the CUSTOMER-FACING lines, so what matters is
+    // whether this save carried any — not whether it carried items at all. A
+    // save of nothing but internal worksheet rows would otherwise recompute the
+    // headline as $0 and wipe the value off the pipeline and the dashboard.
+    //
+    // With no customer lines in hand there are two cases, and only one of them
+    // is worth zero: a quote that HAD them and has had them all removed really
+    // is empty now, while a quote that never had any (imported / quick-added,
+    // worksheet-only) must keep the value already stored on it.
+    const { base, groups } = groupQuoteLines(input.items);
     let total: number;
-    if (input.items.length > 0) {
+    if (base.length > 0 || groups.length > 0) {
       total = headlineBid(input.items);
     } else {
-      const existing = await client.query('SELECT bid_value FROM quotes WHERE id = $1', [id]);
-      total = (existing.rows[0]?.bid_value as number | undefined) ?? 0;
+      const existing = await client.query(
+        `SELECT q.bid_value,
+                EXISTS (
+                  SELECT 1 FROM quote_line_items
+                   WHERE quote_id = q.id
+                     AND (kind IS NULL OR kind IN ('display', 'alternate'))
+                ) AS had_lines
+           FROM quotes q WHERE q.id = $1`,
+        [id]
+      );
+      total = existing.rows[0]?.had_lines
+        ? 0
+        : ((existing.rows[0]?.bid_value as number | undefined) ?? 0);
     }
     await client.query(
       `UPDATE quotes SET
@@ -322,8 +324,9 @@ export async function updateQuoteWithItems(id: number, input: QuoteDocInput): Pr
       [...headerValues(input, total), id]
     );
     await client.query('DELETE FROM quote_line_items WHERE quote_id = $1', [id]);
-    await replaceItems(client, id, input.items);
+    const saved = await replaceItems(client, id, input.items);
     await client.query('COMMIT');
+    return { saved };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

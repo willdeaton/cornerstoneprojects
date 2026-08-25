@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import {
-  updateQuote,
   updateQuoteStatus,
   deleteQuote,
   convertQuoteToProject,
@@ -24,36 +23,19 @@ async function requireUser() {
   return user;
 }
 
-export async function updateQuoteAction(id: number, formData: FormData) {
-  await requireUser();
-  const bidRaw = String(formData.get('bid_value') ?? '').replace(/[$,]/g, '').trim();
-  const bid = parseFloat(bidRaw);
-  await updateQuote(id, {
-    quote_number: String(formData.get('quote_number') ?? '').trim() || null,
-    customer: String(formData.get('customer') ?? '').trim() || undefined,
-    project_name: String(formData.get('project_name') ?? '').trim() || null,
-    category: String(formData.get('category') ?? '').trim() || null,
-    bid_value: bidRaw === '' || isNaN(bid) ? undefined : bid,
-    date_received: String(formData.get('date_received') ?? '') || null,
-  });
-  revalidatePath('/quotes');
-  revalidatePath('/dashboard');
-}
-
-/**
- * Create a full quote document (header + line items). When `viewPdf` is true
- * the user is taken to the printable page; otherwise they return to the quotes
- * list so the quote can be saved without downloading a PDF.
- */
 /**
  * Create a quote document. `after` controls where the user lands: `'pdf'`
  * opens the printable page, `'list'` returns to the quotes list, and `'stay'`
- * returns `{ ok: true, id }` instead of redirecting so the builder can move
+ * returns `{ ok: true, id, … }` instead of redirecting so the builder can move
  * to the new quote's edit page without leaving the form.
  *
  * `returnTo` is the list URL the builder was opened from, so `'list'` comes
  * back to that tab rather than the default one. Ignored unless it is a plain
  * `/quotes` path.
+ *
+ * A `'stay'` return also carries `saved` — how many line items actually reached
+ * the database — so the builder can tell a clean save from one that quietly
+ * stored less than the screen shows.
  */
 export async function createQuoteDocAction(
   input: QuoteDocInput,
@@ -64,10 +46,11 @@ export async function createQuoteDocAction(
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
   if (!input.quote_number?.trim()) return { error: 'Quote # is required.' };
   if (!input.project_name?.trim()) return { error: 'Project / Description is required.' };
-  const id = await createQuoteWithItems(sanitizeDoc(input));
+  const doc = sanitizeDoc(input);
+  const { id, saved } = await createQuoteWithItems(doc);
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
-  if (after === 'stay') return { ok: true, id };
+  if (after === 'stay') return { ok: true, id, saved, sent: doc.items.length };
   redirect(after === 'pdf' ? `/quotes/${id}/print` : safeListHref(returnTo, '/quotes'));
 }
 
@@ -75,8 +58,9 @@ export async function createQuoteDocAction(
  * Update an existing quote document. `after` controls where the user lands:
  * `'pdf'` opens the printable page, `'list'` returns to the quotes list (see
  * `returnTo` above), and `'stay'` keeps them on the edit page (returning
- * `{ ok: true }` instead of redirecting) so a plain Save can persist without
- * leaving the form.
+ * `{ ok: true, saved, sent }` instead of redirecting) so a plain Save can
+ * persist without leaving the form — and so the builder can check that every
+ * line it sent was actually stored.
  */
 export async function updateQuoteDocAction(
   id: number,
@@ -87,11 +71,12 @@ export async function updateQuoteDocAction(
   await requireUser();
   if (!input.customer?.trim()) return { error: 'Customer is required.' };
   if (!input.project_name?.trim()) return { error: 'Project / Description is required.' };
-  await updateQuoteWithItems(id, sanitizeDoc(input));
+  const doc = sanitizeDoc(input);
+  const { saved } = await updateQuoteWithItems(id, doc);
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
   revalidatePath(`/quotes/${id}/print`);
-  if (after === 'stay') return { ok: true };
+  if (after === 'stay') return { ok: true, saved, sent: doc.items.length };
   redirect(after === 'pdf' ? `/quotes/${id}/print` : safeListHref(returnTo, '/quotes'));
 }
 
