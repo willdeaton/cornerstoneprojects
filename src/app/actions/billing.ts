@@ -11,8 +11,19 @@ import {
   setInvoiceFile,
   deleteInvoiceFile,
   invoiceBelongsToProject,
+  getProject,
+  recordProjectValueChange,
+  listProjectValueChanges,
 } from '@/lib/data';
-import type { ProjectInvoiceWithFile } from '@/lib/types';
+import {
+  billingSummary,
+  tallyInvoices,
+  originalContractValue,
+  CONTRACT_LOCK_REASON,
+  type BillingSummary,
+} from '@/lib/billing';
+import { money } from '@/lib/format';
+import type { ProjectInvoiceWithFile, ProjectValueChange } from '@/lib/types';
 
 /**
  * The billing desk. Only admins and managers get here — the A/R on every job
@@ -165,4 +176,92 @@ export async function removeInvoicePdfAction(
   await deleteInvoiceFile(invoiceId);
   revalidateBilling(projectId);
   return {};
+}
+
+/* ------------------------------------------- Contract value & change orders */
+
+/** Everything the change-order dialog needs, as of the moment it opens. */
+export interface ContractValueContext {
+  current: number;
+  /** Derived from the earliest change; equals `current` on an unchanged job. */
+  soldAt: number;
+  summary: BillingSummary;
+  changes: ProjectValueChange[];
+}
+
+/**
+ * Loaded when the dialog opens rather than passed down from the job header.
+ *
+ * The header is on every tab and has no business paying for a job's invoice
+ * rows, and the figures the dialog reasons about — what has been invoiced, what
+ * is left to bill — have to be the ones true now, not the ones true when the
+ * page was rendered. Same shape as the billing desk opening a job's ledger.
+ */
+export async function getContractValueContextAction(
+  projectId: number
+): Promise<ContractValueContext | null> {
+  await requireBiller();
+  const [project, invoices, changes] = await Promise.all([
+    getProject(projectId),
+    listProjectInvoices(projectId),
+    listProjectValueChanges(projectId),
+  ]);
+  if (!project) return null;
+  return {
+    current: project.value,
+    soldAt: originalContractValue(project.value, changes),
+    summary: billingSummary(project, tallyInvoices(invoices)),
+    changes,
+  };
+}
+
+/**
+ * Record a change to a sold job's contract value.
+ *
+ * Admins and managers only — the same line the Billing tab and the invoice
+ * ledger draw, and a tightening: this used to be a bare text input on the Edit
+ * Project form that any non-employee could retype, with nothing recording that
+ * they had.
+ *
+ * Every check that matters is here rather than in the dialog. The dialog hides
+ * the form on a locked job and disables Save on an empty reason, but that is
+ * courtesy — a stale tab, or a direct call, has to meet the same rules.
+ */
+export async function changeContractValueAction(
+  projectId: number,
+  input: { value: string; co_number: string; reason: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireBiller();
+
+  // Arrives as typed ("$27,500.00"), the same way invoice amounts do.
+  const parsed = parseFloat(String(input.value ?? '').replace(/[$,\s]/g, ''));
+  if (!Number.isFinite(parsed)) return { ok: false, error: 'Enter the new contract value.' };
+  if (parsed < 0) {
+    return {
+      ok: false,
+      error: "A contract value can't be negative — use 0 for work that is no longer billable.",
+    };
+  }
+  // Money is dollars and cents and the column is a float: round once, here, so
+  // the stored value, the history row and every variance agree on the figure.
+  const value = Math.round(parsed * 100) / 100;
+
+  const reason = String(input.reason ?? '').trim();
+  if (!reason) return { ok: false, error: 'Say why the contract value is changing.' };
+
+  const res = await recordProjectValueChange({
+    project_id: projectId,
+    new_value: value,
+    co_number: String(input.co_number ?? '').trim() || null,
+    reason,
+    changed_by: user.id,
+  });
+  if (res.status === 'missing') return { ok: false, error: 'That job no longer exists.' };
+  if (res.status === 'locked') return { ok: false, error: CONTRACT_LOCK_REASON[res.stage] };
+  if (res.status === 'noop') {
+    return { ok: false, error: `This job is already worth ${money(res.value)} — nothing changed.` };
+  }
+
+  revalidateBilling(projectId);
+  return { ok: true };
 }

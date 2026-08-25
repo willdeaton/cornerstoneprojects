@@ -194,6 +194,52 @@ export function onBillingDesk(stage: BillingStage): boolean {
 }
 
 /**
+ * A contract value that has settled and may no longer move.
+ *
+ * Once the money is all in, or the job has been signed off the desk, what it
+ * was worth is part of a settled record: moving the number then rewrites
+ * history instead of recording it, and opens a variance against paperwork
+ * nobody is going to look at again. Neither state is a trap — both are undone
+ * by the act that created them, which is what the messages below say.
+ *
+ * A shared predicate rather than a check inside the action, because the control
+ * that OFFERS the change and the action that PERFORMS it have to agree about
+ * when it is on offer. Narrowing, so the message map stays total.
+ */
+export function contractLocked(stage: BillingStage): stage is 'paid' | 'closed' {
+  return stage === 'paid' || stage === 'closed';
+}
+
+/** Why the value is locked, and the way back in. Named per stage, since the
+ *  two unlock differently: a close-out is reopened, a paid job is unpaid. */
+export const CONTRACT_LOCK_REASON: Record<'paid' | 'closed', string> = {
+  paid: 'Every invoice on this job has been paid. Untick Paid on an invoice to put the billing back in play, then record the change.',
+  closed: 'This job has been signed off the billing desk. Reopen its billing, then record the change.',
+};
+
+/**
+ * What the job was sold for: the value recorded before its earliest change, or
+ * the value it still carries when it has never been changed. Derived rather
+ * than stored, so there is no second copy to go stale.
+ *
+ * Reads the lowest id rather than trusting the caller's ordering — the table is
+ * append-only, so the smallest id is always the first change.
+ */
+export function originalContractValue(
+  current: number,
+  changes: { id: number; old_value: number }[]
+): number {
+  let first: { id: number; old_value: number } | null = null;
+  for (const c of changes) if (!first || c.id < first.id) first = c;
+  return first ? first.old_value : current;
+}
+
+/** Whether the contract value has moved since the job was sold, to the cent. */
+export function contractRevised(current: number, soldAt: number): boolean {
+  return Math.round(current * 100) !== Math.round(soldAt * 100);
+}
+
+/**
  * A variance worth saying out loud: the contract value and what's been raised
  * against it don't agree. Only meaningful once something has been invoiced —
  * a job with no invoices is short by its whole value, which is just "unbilled".

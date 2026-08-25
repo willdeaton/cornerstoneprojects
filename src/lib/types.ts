@@ -266,6 +266,28 @@ export interface ProjectInvoice {
 }
 
 /**
+ * One move of a job's contract value, and why.
+ *
+ * `projects.value` stays the live contract value every reader reads — this is
+ * its history, appended to and never edited. The reason is required because a
+ * value that changed with nothing said about it is the thing this table exists
+ * to stop; `co_number` is optional because the money is often agreed before
+ * the paperwork catches up.
+ */
+export interface ProjectValueChange {
+  id: number;
+  project_id: number;
+  old_value: number;
+  new_value: number;
+  co_number: string | null;
+  reason: string;
+  changed_by: number | null;
+  created_at: string;
+  /** Joined for display. Null once the person who typed it is deleted. */
+  changed_by_name: string | null;
+}
+
+/**
  * An invoice as the billing card reads it: the row plus what is known about
  * its attached PDF, never the bytes. Both fields are NULL when nothing has
  * been attached.

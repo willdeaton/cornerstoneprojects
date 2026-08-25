@@ -3,6 +3,7 @@ import {
   getProjectHubCounts,
   listInvoiceTallies,
   projectHours,
+  projectValueRevision,
 } from '@/lib/data';
 import { listScheduleTasks, listHolidays } from '@/lib/schedule-data';
 import { computeSchedule, projectedEnd } from '@/lib/schedule-math';
@@ -31,12 +32,15 @@ export default async function ProjectOverview({ params }: { params: Promise<{ id
   const project = await loadProject(idParam);
   const id = project.id;
 
-  const [hours, counts, tasks, holidays, tallies] = await Promise.all([
+  const [hours, counts, tasks, holidays, tallies, revision] = await Promise.all([
     projectHours(id),
     getProjectHubCounts(id),
     listScheduleTasks({ projectId: id }),
     listHolidays(),
     canBill(user) ? listInvoiceTallies([id]) : Promise.resolve(new Map()),
+    // What the job was sold for, when a change order has moved it since. One
+    // cheap indexed row, on the same gate as the invoice tallies.
+    canBill(user) ? projectValueRevision(id) : Promise.resolve(null),
   ]);
 
   // Projected finish = the latest end across the phases, dependency chains resolved.
@@ -163,6 +167,13 @@ export default async function ProjectOverview({ params }: { params: Promise<{ id
                     : `${money(billing.outstanding)} outstanding`
                 }
                 badge={<BillingStageBadge stage={billing.stage} />}
+                hint={
+                  revision
+                    ? `Sold at ${money(revision.soldAt)} · now ${money(project.value)} over ${
+                        revision.changes
+                      } change${revision.changes === 1 ? '' : 's'}`
+                    : undefined
+                }
               />
             )}
             <TabLink
@@ -230,22 +241,29 @@ function TabLink({
   label,
   value,
   badge,
+  hint,
 }: {
   href: string;
   label: string;
   value: string;
   badge?: React.ReactNode;
+  /** A second line under the value, for something worth knowing before you
+   *  open the tab — a contract value that has been revised, say. */
+  hint?: string;
 }) {
   return (
     <li>
       <Link
         href={href}
-        className="flex items-center justify-between gap-3 py-2.5 text-sm transition hover:text-brand-green-dark"
+        className="flex items-start justify-between gap-3 py-2.5 text-sm transition hover:text-brand-green-dark"
       >
         <span className="font-medium text-brand-ink">{label}</span>
-        <span className="flex items-center gap-2 text-right text-xs text-brand-gray">
-          {badge}
-          {value}
+        <span className="text-right text-xs text-brand-gray">
+          <span className="flex items-center justify-end gap-2">
+            {badge}
+            {value}
+          </span>
+          {hint && <span className="tnum mt-0.5 block">{hint}</span>}
         </span>
       </Link>
     </li>

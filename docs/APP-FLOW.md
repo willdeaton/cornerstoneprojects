@@ -139,6 +139,17 @@ hangs off:
   sent clears the date). The card is `src/components/billing/InvoiceSection.tsx`,
   and the Billing desk renders the same one inline — so this ledger is edited the
   same way from either place.
+- **Contract value & change orders** — `projects.value` is the one live contract
+  value every reader reads, but it only moves as a recorded act: a required
+  reason, an optional CO number, and a `project_value_changes` row per change,
+  written in the same transaction as the value under a `SELECT … FOR UPDATE` so
+  two change orders landing together chain instead of both quoting the stale
+  figure. **Sold at** is derived from the earliest row, never stored. Admins and
+  managers only, and refused outright once billing is `paid` or `closed` —
+  `contractLocked()` is a pure predicate in `src/lib/billing.ts`, so the control
+  that offers the change and the action that performs it can't disagree. It is
+  deliberately not on the Edit Project form any more, and `updateProject()` will
+  not write the field at all.
 - **Billing card** — the derived stage, aging, what's **left to bill** (contract
   less what has gone out) and the contract-vs-invoiced variance, plus the stage
   decisions this card offers (`BillingStageControls`, shared with the Billing
