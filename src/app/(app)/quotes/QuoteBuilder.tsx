@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { money, dateTime } from '@/lib/format';
 import { sanitizeRichText, isRichTextEmpty, richTextToPlain } from '@/lib/richtext';
@@ -24,7 +24,12 @@ import type {
   Category,
 } from '@/lib/types';
 import { COST_TYPES } from '@/lib/types';
-import { createQuoteDocAction, updateQuoteDocAction } from '@/app/actions/quotes';
+import {
+  createQuoteDocAction,
+  updateQuoteDocAction,
+  suggestQuoteNumberAction,
+} from '@/app/actions/quotes';
+import { ABBREVIATION_LENGTH, normalizeAbbreviation, quoteNumberBase } from '@/lib/quote-number';
 import { quickAddPricingItemAction, quickAddCustomerAction, quickAddContactAction } from '@/app/actions/catalog';
 import { clearQuoteDraft, quoteDraftKey } from '@/lib/quote-draft';
 import { useQuoteDraft } from './useQuoteDraft';
@@ -422,6 +427,48 @@ export function QuoteBuilder({
 
   const selectedCustomer = customers.find((c) => String(c.id) === customerId);
 
+  /* ---- auto-generated quote number: customer code + issue date ---- */
+
+  // A new quote numbers itself from the chosen customer's three-letter code and
+  // the issue date — XXXMMDDYY. Typing in the field turns the generator off so a
+  // hand-edited number is never overwritten, and an existing quote always keeps
+  // the number it was saved with.
+  const [autoNumber, setAutoNumber] = useState(!quote);
+  const customerAbbrev = selectedCustomer?.abbreviation ?? null;
+  // Whether this customer + date can produce a number at all. The server has the
+  // final say on the exact value, since it also has to dodge numbers already in
+  // use, but this tells us up front whether to expect one.
+  const canGenerateNumber = !!quoteNumberBase(customerAbbrev, header.issue_date);
+  // The number the server would hand out right now, `-2` suffix and all.
+  const [suggestedNumber, setSuggestedNumber] = useState<string | null>(null);
+
+  // Ask for a suggestion whenever the customer or the issue date changes, and
+  // drop a reply that lands after they've moved on again.
+  useEffect(() => {
+    if (!canGenerateNumber) {
+      setSuggestedNumber(null);
+      return;
+    }
+    let cancelled = false;
+    suggestQuoteNumberAction(customerAbbrev, header.issue_date, quote?.id)
+      .then((res) => {
+        if (!cancelled) setSuggestedNumber(res.number);
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestedNumber(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canGenerateNumber, customerAbbrev, header.issue_date, quote?.id]);
+
+  // Fill the field while the generator is on. Once the user types their own
+  // number this stops, and only the "use …" button below puts it back.
+  useEffect(() => {
+    if (!autoNumber || !suggestedNumber) return;
+    setHeader((h) => (h.quote_number === suggestedNumber ? h : { ...h, quote_number: suggestedNumber }));
+  }, [autoNumber, suggestedNumber]);
+
   // The stored customer isn't one of the saved records — offer it as a "current"
   // option so editing an older one-off quote doesn't silently drop the name.
   const hasUnsavedCurrent = !matchedCustomer && !!quote?.customer;
@@ -469,7 +516,7 @@ export function QuoteBuilder({
 
   // Add-customer / add-contact modal state.
   const [addMode, setAddMode] = useState<null | 'customer' | 'contact'>(null);
-  const blankAddForm = { name: '', title: '', email: '', phone: '', address: '', contactName: '' };
+  const blankAddForm = { name: '', abbreviation: '', title: '', email: '', phone: '', address: '', contactName: '' };
   const [addForm, setAddForm] = useState(blankAddForm);
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -532,6 +579,7 @@ export function QuoteBuilder({
       if (addMode === 'customer') {
         const res = await quickAddCustomerAction({
           name: addForm.name,
+          abbreviation: addForm.abbreviation || null,
           address: addForm.address || null,
           contact: addForm.contactName
             ? { name: addForm.contactName, title: addForm.title, email: addForm.email, phone: addForm.phone }
@@ -1200,7 +1248,42 @@ export function QuoteBuilder({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <label className="label">Quote # {quote ? '' : '*'}</label>
-            <input className="input" value={header.quote_number} onChange={set('quote_number')} placeholder="Q-2601" />
+            <input
+              className="input"
+              value={header.quote_number}
+              onChange={(e) => {
+                // A number typed by hand is the user's — stop generating.
+                setAutoNumber(false);
+                setHeader((h) => ({ ...h, quote_number: e.target.value }));
+              }}
+              placeholder={suggestedNumber ?? 'ABC010125'}
+            />
+            <p className="mt-1 text-xs text-brand-gray">
+              {autoNumber && canGenerateNumber ? (
+                <>Generated from the customer code and issue date. Type to override.</>
+              ) : suggestedNumber ? (
+                <>
+                  Generated number:{' '}
+                  <button
+                    type="button"
+                    className="font-semibold text-brand-green-dark hover:underline"
+                    onClick={() => {
+                      setAutoNumber(true);
+                      setHeader((h) => ({ ...h, quote_number: suggestedNumber }));
+                    }}
+                  >
+                    use {suggestedNumber}
+                  </button>
+                </>
+              ) : selectedCustomer ? (
+                <>
+                  Give {selectedCustomer.name} a 3-letter abbreviation under Settings → Customers to
+                  number quotes automatically.
+                </>
+              ) : (
+                <>Pick a customer with an abbreviation to number this quote automatically.</>
+              )}
+            </p>
           </div>
           <div>
             <label className="label">Issue Date</label>
@@ -1317,10 +1400,8 @@ export function QuoteBuilder({
                   + Add Line to this option
                 </button>
 
-                <TotalsPanel
-                  rows={block.entries.map((e) => e.row)}
-                  label={`${block.key.trim() || 'Option'} Total`}
-                />
+                {/* Just "Total" — the option's name is already on the input above it. */}
+                <TotalsPanel rows={block.entries.map((e) => e.row)} label="Total" />
               </div>
             ))}
 
@@ -1639,16 +1720,33 @@ export function QuoteBuilder({
         >
           <div className="space-y-4">
             {addMode === 'customer' && (
-              <div>
-                <label className="label">Customer Name *</label>
-                <input
-                  className="input"
-                  value={addForm.name}
-                  onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="ARH-Highlands"
-                  autoFocus
-                />
-              </div>
+              <>
+                <div>
+                  <label className="label">Customer Name *</label>
+                  <input
+                    className="input"
+                    value={addForm.name}
+                    onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="ARH-Highlands"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="label">Abbreviation</label>
+                  <input
+                    className="input font-mono uppercase tracking-widest"
+                    value={addForm.abbreviation}
+                    onChange={(e) =>
+                      setAddForm((f) => ({ ...f, abbreviation: normalizeAbbreviation(e.target.value) }))
+                    }
+                    maxLength={ABBREVIATION_LENGTH}
+                    placeholder="ARH"
+                  />
+                  <p className="mt-1 text-xs text-brand-gray">
+                    3 letters, unique to this customer — quote numbers are generated from it.
+                  </p>
+                </div>
+              </>
             )}
             <div>
               <label className="label">Contact Name{addMode === 'contact' ? ' *' : ''}</label>

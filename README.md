@@ -14,6 +14,16 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   weekly Excel/CSV file** (auto-detects Customer / Project / Category / Bid
   Value columns, with a preview before import). Mark a quote **Sold** to turn it
   into a project in one click.
+  - **Quote numbers name themselves** — picking a customer with a three-letter
+    abbreviation numbers the quote `XXXMMDDYY` (the code, then the issue date):
+    `ARH082526`. Change the issue date and the number follows; a second quote
+    for the same customer on the same day becomes `…-2`. Typing your own number
+    stops the generator, and the field offers the generated one back if you
+    want it. A customer with no abbreviation just leaves the field to you.
+  - **Supporting documents** — internal reference files (never on the customer
+    PDF) live under the quote's Internal Notes & Documents card. Drag them onto
+    the drop zone, several at a time, or click to browse — the same uploader a
+    project's Files tab uses.
 - **Active Projects** — sold work with status (Not Started / In Progress /
   Completed), progress, value, hours logged, and due dates.
 - **Project detail** — editable status & progress, **job notes**, and a
@@ -269,7 +279,9 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   access. Previewing only ever lowers access — it can never escalate.
 - **Settings** (admins & managers) — a tabbed area with **Company** (name,
   address, phone, email, and website shown on customer-facing quote PDFs),
-  **Email** (sender identity for automated notifications), and **Users**.
+  **Customers**, **Email** (sender identity for automated notifications), and
+  **Users**. A customer carries its address, its contacts, and a unique
+  three-letter **abbreviation** — the code new quotes are numbered from.
 
 ## Getting started
 
