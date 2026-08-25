@@ -11,6 +11,11 @@ import type {
   Note,
   TimeEntry,
   ProjectFile,
+  ProjectReceipt,
+  ReceiptWithItems,
+  ReceiptLineItem,
+  ReceiptImage,
+  ReceiptInput,
   ProjectInvoice,
   ProjectInvoiceWithFile,
   ProjectValueChange,
@@ -487,6 +492,9 @@ export interface ProjectHubCounts {
   crewNotes: number;
   files: number;
   timeEntries: number;
+  receipts: number;
+  /** Receipt spend on the job, so the overview can show it without loading rows. */
+  receiptTotal: number;
 }
 
 export async function getProjectHubCounts(projectId: number): Promise<ProjectHubCounts> {
@@ -497,6 +505,8 @@ export async function getProjectHubCounts(projectId: number): Promise<ProjectHub
     crew_notes: string;
     files: string;
     time_entries: string;
+    receipts: string;
+    receipt_total: string;
   }>(
     `SELECT
        (SELECT COUNT(*) FROM schedule_tasks  WHERE project_id = $1) AS phases,
@@ -504,7 +514,12 @@ export async function getProjectHubCounts(projectId: number): Promise<ProjectHub
        (SELECT COUNT(*) FROM notes           WHERE project_id = $1) AS notes,
        (SELECT COUNT(*) FROM crew_notes      WHERE project_id = $1) AS crew_notes,
        (SELECT COUNT(*) FROM project_files   WHERE project_id = $1) AS files,
-       (SELECT COUNT(*) FROM time_entries    WHERE project_id = $1) AS time_entries`,
+       (SELECT COUNT(*) FROM time_entries    WHERE project_id = $1) AS time_entries,
+       (SELECT COUNT(*) FROM project_receipts WHERE project_id = $1) AS receipts,
+       -- Summed in SQL rather than by loading the rows: the overview wants one
+       -- number, and this whole function exists so it doesn't pay for a listing.
+       (SELECT COALESCE(SUM(total), 0) FROM project_receipts
+         WHERE project_id = $1) AS receipt_total`,
     [projectId]
   );
   // COUNT(*) arrives as a string from pg (bigint), so every one is parsed.
@@ -515,6 +530,8 @@ export async function getProjectHubCounts(projectId: number): Promise<ProjectHub
     crewNotes: Number(row?.crew_notes ?? 0),
     files: Number(row?.files ?? 0),
     timeEntries: Number(row?.time_entries ?? 0),
+    receipts: Number(row?.receipts ?? 0),
+    receiptTotal: Number(row?.receipt_total ?? 0),
   };
 }
 
@@ -1080,6 +1097,230 @@ export async function addProjectFile(f: {
 
 export async function deleteProjectFile(id: number): Promise<void> {
   await q('DELETE FROM project_files WHERE id = $1', [id]);
+}
+
+/* ------------------------------------------------------------- Job receipts */
+
+/** The receipt columns worth listing — everything except nothing, since the
+ *  photo lives in its own table. Spelled out so the shape is visible here
+ *  rather than implied by `*`. */
+const RECEIPT_COLUMNS = `
+  r.id, r.project_id, r.vendor, r.purchase_date, r.category,
+  r.subtotal, r.tax, r.total, r.note, r.entry_source,
+  r.uploaded_by, r.uploader_name, r.created_at, r.updated_at,
+  i.filename AS image_filename, i.mime AS image_mime, i.size AS image_size,
+  (i.thumb IS NOT NULL) AS has_thumb`;
+
+/**
+ * Every receipt on a job, each with its line items.
+ *
+ * Two queries rather than one per receipt: the items for the whole job come
+ * back in a single pass and are stitched on by id, the same shape the backup
+ * builder uses to fetch files for many projects at once.
+ *
+ * Newest paper first, and a receipt whose date nobody has typed yet sorts last
+ * rather than to the top — it is unfinished, not urgent.
+ */
+export async function listProjectReceipts(projectId: number): Promise<ReceiptWithItems[]> {
+  const receipts = await q<ProjectReceipt>(
+    `SELECT ${RECEIPT_COLUMNS}
+       FROM project_receipts r
+       LEFT JOIN receipt_images i ON i.receipt_id = r.id
+      WHERE r.project_id = $1
+      ORDER BY r.purchase_date DESC NULLS LAST, r.id DESC`,
+    [projectId]
+  );
+  if (receipts.length === 0) return [];
+
+  const items = await q<ReceiptLineItem>(
+    `SELECT li.id, li.receipt_id, li.position, li.description,
+            li.quantity, li.unit_price, li.amount
+       FROM receipt_line_items li
+       JOIN project_receipts r ON r.id = li.receipt_id
+      WHERE r.project_id = $1
+      ORDER BY li.receipt_id, li.position, li.id`,
+    [projectId]
+  );
+
+  const byReceipt = new Map<number, ReceiptLineItem[]>();
+  for (const it of items) {
+    const list = byReceipt.get(it.receipt_id);
+    if (list) list.push(it);
+    else byReceipt.set(it.receipt_id, [it]);
+  }
+  return receipts.map((r) => ({ ...r, items: byReceipt.get(r.id) ?? [] }));
+}
+
+/** One receipt with its items — for re-opening it in the form. */
+export async function getReceipt(id: number): Promise<ReceiptWithItems | undefined> {
+  const receipt = await one<ProjectReceipt>(
+    `SELECT ${RECEIPT_COLUMNS}
+       FROM project_receipts r
+       LEFT JOIN receipt_images i ON i.receipt_id = r.id
+      WHERE r.id = $1`,
+    [id]
+  );
+  if (!receipt) return undefined;
+  const items = await q<ReceiptLineItem>(
+    `SELECT id, receipt_id, position, description, quantity, unit_price, amount
+       FROM receipt_line_items WHERE receipt_id = $1 ORDER BY position, id`,
+    [id]
+  );
+  return { ...receipt, items };
+}
+
+/** The photo's bytes. The only place the blob is read. */
+export async function getReceiptImage(receiptId: number): Promise<ReceiptImage | undefined> {
+  return one<ReceiptImage>('SELECT * FROM receipt_images WHERE receipt_id = $1', [receiptId]);
+}
+
+/** Whether a receipt belongs to a given job — the check before writing to it. */
+export async function receiptBelongsToProject(
+  receiptId: number,
+  projectId: number
+): Promise<boolean> {
+  const row = await one<{ id: number }>(
+    'SELECT id FROM project_receipts WHERE id = $1 AND project_id = $2',
+    [receiptId, projectId]
+  );
+  return !!row;
+}
+
+/**
+ * Write a receipt's line items, replacing whatever was there.
+ *
+ * Takes the client rather than using q() so the inserts join the caller's
+ * transaction — mirrors replaceItems for quote lines. Delete-and-reinsert is
+ * safe here because nothing references a line item's id.
+ */
+async function replaceReceiptItems(
+  client: PoolClient,
+  receiptId: number,
+  items: ReceiptInput['items']
+): Promise<void> {
+  await client.query('DELETE FROM receipt_line_items WHERE receipt_id = $1', [receiptId]);
+  for (const [i, it] of items.entries()) {
+    await client.query(
+      `INSERT INTO receipt_line_items
+         (receipt_id, position, description, quantity, unit_price, amount)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [receiptId, i, it.description, it.quantity, it.unit_price, it.amount]
+    );
+  }
+}
+
+const RECEIPT_WRITE_VALUES = (r: ReceiptInput) => [
+  r.vendor,
+  r.purchase_date,
+  r.category,
+  r.subtotal,
+  r.tax,
+  r.total,
+  r.note,
+  r.entry_source,
+];
+
+/** A receipt and its items in one transaction. Returns the new id. */
+export async function createReceiptWithItems(
+  input: ReceiptInput,
+  by: { user_id: number | null; user_name: string | null }
+): Promise<number> {
+  const db = await getDb();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const res = await client.query(
+      `INSERT INTO project_receipts
+         (project_id, vendor, purchase_date, category, subtotal, tax, total, note,
+          entry_source, uploaded_by, uploader_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING id`,
+      [input.project_id, ...RECEIPT_WRITE_VALUES(input), by.user_id, by.user_name]
+    );
+    const id = res.rows[0].id as number;
+    await replaceReceiptItems(client, id, input.items);
+    await client.query('COMMIT');
+    return id;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Replace a receipt's fields and its whole item set in one transaction.
+ *
+ * Leaves the photo alone — that is changed only through setReceiptImage or
+ * deleteReceiptImage, so editing the numbers can never drop the paper.
+ */
+export async function updateReceiptWithItems(id: number, input: ReceiptInput): Promise<void> {
+  const db = await getDb();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE project_receipts SET
+         vendor = $2, purchase_date = $3, category = $4, subtotal = $5,
+         tax = $6, total = $7, note = $8, entry_source = $9, updated_at = now()
+       WHERE id = $1`,
+      [id, ...RECEIPT_WRITE_VALUES(input)]
+    );
+    await replaceReceiptItems(client, id, input.items);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Attach or replace a receipt's photo. One receipt, one image. */
+export async function setReceiptImage(img: {
+  receipt_id: number;
+  filename: string;
+  mime: string | null;
+  size: number;
+  data: string;
+  thumb: string | null;
+  uploaded_by: number | null;
+  uploader_name: string | null;
+}): Promise<void> {
+  await q(
+    `INSERT INTO receipt_images
+       (receipt_id, filename, mime, size, data, thumb, uploaded_by, uploader_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (receipt_id) DO UPDATE SET
+       filename = EXCLUDED.filename,
+       mime = EXCLUDED.mime,
+       size = EXCLUDED.size,
+       data = EXCLUDED.data,
+       thumb = EXCLUDED.thumb,
+       uploaded_by = EXCLUDED.uploaded_by,
+       uploader_name = EXCLUDED.uploader_name,
+       created_at = now()`,
+    [
+      img.receipt_id,
+      img.filename,
+      img.mime,
+      img.size,
+      img.data,
+      img.thumb,
+      img.uploaded_by,
+      img.uploader_name,
+    ]
+  );
+}
+
+export async function deleteReceiptImage(receiptId: number): Promise<void> {
+  await q('DELETE FROM receipt_images WHERE receipt_id = $1', [receiptId]);
+}
+
+/** Items and the photo go with it, both ON DELETE CASCADE. */
+export async function deleteReceipt(id: number): Promise<void> {
+  await q('DELETE FROM project_receipts WHERE id = $1', [id]);
 }
 
 /* ------------------------------------------------------------------ Notes */

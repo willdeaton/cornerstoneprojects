@@ -170,6 +170,24 @@ hangs off:
   `invoice_files` behind `/api/invoices/[id]/pdf`, which is gated to
   admins/managers rather than to "not an employee" — the Files tab is a wider
   audience than the Billing tab.
+- **Receipts** — admins & managers only. What the job *cost*, as opposed to what
+  it was sold for: one `project_receipts` row per receipt (vendor, purchase date,
+  category, subtotal/tax/total), its lines in `receipt_line_items`, and the photo
+  in `receipt_images` (one per receipt, keyed by it, so a re-upload replaces it)
+  behind `/api/receipts/[id]/image`. Gated like the invoice PDF rather than like
+  the Files tab, for the same reason: job spend is billing information.
+  **Take photo** uses `capture="environment"`, so on a phone it opens the camera
+  straight away and the form comes up with the receipt on screen to read the
+  figures off — a photo is a receipt before anybody has typed what is on it, and
+  a row with no vendor, date or total shows as "needs details" (derived from the
+  empty fields, not a stored flag). Photos are shrunk to 1600px in the browser
+  before upload (`src/lib/image-downscale.ts`) — a 6 MB phone photo lands around
+  600 KB — with a ~20 KB thumbnail stored alongside so the table isn't pulling
+  full images to draw 40px squares. The typed **total is authoritative**: it is
+  never recomputed from subtotal + tax or from the lines, so the job total always
+  equals the sum of the paper; a disagreement is flagged, never corrected. Money
+  math lives in `src/lib/receipt-math.ts`, and the table's per-category subtotals
+  are computed from the rows already loaded — no coupling to the billing tables.
 - **Site address** — the full mappable address crews drive to, kept separate
   from `location` (the short "City, ST" label used on quotes and lists), with a
   Google Maps directions link.

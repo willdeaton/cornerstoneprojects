@@ -197,6 +197,20 @@ export default async function ProjectOverview({ params }: { params: Promise<{ id
                   : `${counts.files} file${counts.files === 1 ? '' : 's'}`
               }
             />
+            {/* Behind the same gate as Billing: what a job cost is the other
+                half of what it was sold for, and neither belongs on an
+                employee's view of the job. */}
+            {billing && (
+              <TabLink
+                href={`/projects/${id}/receipts`}
+                label="Receipts"
+                value={
+                  counts.receipts === 0
+                    ? 'None yet'
+                    : `${counts.receipts} · ${money(counts.receiptTotal, { cents: true })}`
+                }
+              />
+            )}
           </ul>
         </div>
       </div>
