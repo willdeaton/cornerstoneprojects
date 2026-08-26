@@ -27,13 +27,26 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
 - **Active Projects** — sold work with status (Not Started / In Progress /
   Completed), progress, value, hours logged, and due dates.
 - **Project detail** — editable status & progress, **job notes**, and a
-  per-job **time clock**.
+  per-job **time clock**. It is tabbed: Overview, Schedule, Billing, Time,
+  **Notes & Files** — what was said about the job and the paperwork that came
+  with it, since they are looked at in the same visit — and Receipts.
 - **Billing** — the desk between "the work is finished" and "the money is in",
   and a page that stands on its own: **opening a job's row bills it right
   there** — its invoice ledger, its stage decisions, all of it inline — so a
   pass down the queue never leaves the page. Marking a job **Completed** stamps
   its completion and puts it on the billing queue; from there it moves itself
   along as the invoices are ticked **Sent** and **Paid**.
+  - **The customer's PO, recorded before the billing** — a PO normally arrives
+    with the award, weeks before the first invoice, and a job whose PO was never
+    written down anywhere is a job that gets billed and then bounced. So it is
+    recorded against the **job** — number, what it authorizes, the day it came in
+    — from the Purchase Order card on the job's Billing tab or inline on the
+    billing desk, and every invoice raised afterwards starts out billed against
+    it. A finished job with nothing on file is flagged on the desk before anybody
+    raises an invoice, and a job invoiced past what its PO authorizes says so.
+    A job billed across two POs still overrides it per invoice — the invoice's
+    own PO is the truth for that invoice, and the job's is the default it starts
+    from.
   - **One row per invoice**, carrying everything the desk has to answer for:
     the invoice number, the customer's **PO number**, the **amount billed**,
     the **date it was sent**, whether it has been paid, and the **invoice PDF**
@@ -42,10 +55,11 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     rather than in the job's Files tab — an invoice is A/R paperwork.
   - **Mark billed / mark paid, with no invoicing details** — plenty of work is
     invoiced and collected outside this app, and a queue that demands an invoice
-    number, a PO and a send date before a finished job can leave it is a queue
-    people stop updating. One click marks every invoice on the job sent, or sent
-    and paid; a job with nothing raised against it gets one invoice for its
-    contract value, with no number, PO or PDF. It writes an ordinary invoice row
+    number and a send date before a finished job can leave it is a queue people
+    stop updating. One click marks every invoice on the job sent, or sent and
+    paid; a job with nothing raised against it gets one invoice for its contract
+    value, with no number and no PDF, billed against the job's PO if one is on
+    file. It writes an ordinary invoice row
     rather than a special "billed anyway" flag, so every figure and every stage
     follows from it exactly as if it had been typed — and the ledger is where it
     gets a number later, or gets undone.

@@ -143,8 +143,8 @@ export function BillingSection({
         {summary.count === 0 && !closed && (
           <p className="text-brand-gray">
             No invoices raised yet. Add the first one in the Invoicing card — its number, the
-            customer&apos;s PO, the amount and the PDF that went out — or mark the job billed above
-            if there is no invoice to record.
+            amount and the PDF that went out, billed against the job&apos;s PO above — or mark the
+            job billed above if there is no invoice to record.
           </p>
         )}
       </div>

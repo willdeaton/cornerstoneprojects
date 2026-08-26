@@ -9,6 +9,12 @@ import type { Role } from '@/lib/auth';
  * concern it had nothing to do with. Each tab is its own route now, loading
  * only its own rows.
  *
+ * Where two of them were one errand they were put back together: Notes & Files
+ * carries the internal notes, the crew notes and the job's attachments, because
+ * "what happened on this job" and "the paperwork that came with it" are looked
+ * at in the same visit — the photo of the damage and the note explaining it
+ * were never two tabs' worth of concern.
+ *
  * `managerOnly` is the tab's real access rule, applied by the tab's own page as
  * well as read here, so a hidden tab is also an unreachable one. Nothing is
  * gated by hiding a link alone.
@@ -26,8 +32,10 @@ export const PROJECT_TABS: ProjectTab[] = [
   { segment: 'schedule', label: 'Schedule' },
   { segment: 'billing', label: 'Billing', managerOnly: true },
   { segment: 'time', label: 'Time' },
-  { segment: 'notes', label: 'Notes' },
-  { segment: 'files', label: 'Files' },
+  // Notes and files are one tab: what was said about the job and the paperwork
+  // that came with it are the same errand. `/projects/[id]/files` still exists
+  // and redirects here, so links from before the merge keep working.
+  { segment: 'notes', label: 'Notes & Files' },
   { segment: 'receipts', label: 'Receipts', managerOnly: true },
 ];
 

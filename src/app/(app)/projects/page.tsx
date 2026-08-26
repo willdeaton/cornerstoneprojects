@@ -2,24 +2,12 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listProjects, projectHours, listInvoiceTallies } from '@/lib/data';
-import {
-  billingSummary,
-  EMPTY_TALLY,
-  onBillingDesk,
-  type InvoiceTally,
-} from '@/lib/billing';
+import { billingSummary, EMPTY_TALLY, type InvoiceTally } from '@/lib/billing';
 import type { ProjectStatus } from '@/lib/types';
-import { money, shortDate, duration } from '@/lib/format';
-import {
-  PageHeader,
-  OnHoldBadge,
-  ProjectStatusBadge,
-  ProgressBar,
-  EmptyState,
-  BillingStageBadge,
-} from '@/components/ui';
+import { PageHeader } from '@/components/ui';
 import { ListMemory } from '@/components/ListMemory';
 import { AddProjectButton } from './AddProjectButton';
+import { ProjectsTable, type ProjectRow } from './ProjectsTable';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +35,6 @@ export default async function ProjectsPage({
   );
   if (filter === 'active') projects = projects.filter((p) => p.status !== 'completed');
 
-  const total = projects.reduce((s, p) => s + p.value, 0);
   const hoursById = new Map(
     await Promise.all(projects.map(async (p) => [p.id, await projectHours(p.id)] as const))
   );
@@ -57,6 +44,31 @@ export default async function ProjectsPage({
     ? await listInvoiceTallies(projects.map((p) => p.id))
     : new Map();
 
+  // Flattened here so the table gets one plain, sortable array — the client
+  // side has no business re-deriving billing stages.
+  const rows: ProjectRow[] = projects.map((p) => {
+    const billing = canBill ? billingSummary(p, tallies.get(p.id) ?? EMPTY_TALLY) : null;
+    return {
+      id: p.id,
+      customer: p.customer,
+      name: p.name,
+      quote_number: p.quote_number,
+      category: p.category,
+      location: p.location,
+      value: p.value,
+      status: p.status,
+      progress: p.progress,
+      due_date: p.due_date,
+      on_hold: p.on_hold,
+      on_hold_reason: p.on_hold_reason,
+      on_hold_since: p.on_hold_since,
+      hours: hoursById.get(p.id) ?? 0,
+      billing: billing
+        ? { stage: billing.stage, urgency: billing.urgency, outstanding: billing.outstanding }
+        : null,
+    };
+  });
+
   return (
     <div>
       {/* Remembers this tab + scroll offset so "← Back to Projects" lands here. */}
@@ -65,7 +77,7 @@ export default async function ProjectsPage({
         <AddProjectButton />
       </PageHeader>
 
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="segmented">
           {TABS.map((t) => (
             <Link
@@ -77,79 +89,9 @@ export default async function ProjectsPage({
             </Link>
           ))}
         </div>
-        <p className="tnum text-sm text-brand-gray">
-          <span className="font-semibold text-brand-ink">{projects.length}</span> jobs ·{' '}
-          <span className="font-semibold text-brand-ink">{money(total)}</span>
-        </p>
       </div>
 
-      {projects.length === 0 ? (
-        <EmptyState
-          title="No projects here yet"
-          hint="Sell a quote from the Quotes tab, or add a project directly."
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {projects.map((p) => {
-            const hrs = hoursById.get(p.id) ?? 0;
-            // On a finished job the progress bar is always full, so the card
-            // gives that room to where the job stands on billing instead.
-            const billing = canBill
-              ? billingSummary(p, tallies.get(p.id) ?? EMPTY_TALLY)
-              : null;
-            const showBilling = billing != null && onBillingDesk(billing.stage);
-            return (
-              <Link
-                key={p.id}
-                href={`/projects/${p.id}`}
-                className="card-interactive group p-5"
-              >
-                <div className="mb-3 flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="eyebrow truncate">{p.customer}</p>
-                    <h3 className="brand-heading mt-1 text-brand-ink transition-colors duration-150 group-hover:text-brand-green-dark">
-                      {p.name}
-                    </h3>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    <ProjectStatusBadge status={p.status} />
-                    {p.on_hold && (
-                      <OnHoldBadge reason={p.on_hold_reason} since={p.on_hold_since} />
-                    )}
-                  </div>
-                </div>
-
-                {showBilling ? (
-                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-brand-gray">
-                    <BillingStageBadge stage={billing.stage} urgency={billing.urgency} />
-                    {billing.outstanding > 0 && (
-                      <span className="tnum">
-                        {money(billing.outstanding)} outstanding
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="mb-3">
-                    <div className="mb-1 flex justify-between text-xs text-brand-gray">
-                      <span>Progress</span>
-                      <span className="tnum font-semibold text-brand-ink">{p.progress}%</span>
-                    </div>
-                    <ProgressBar value={p.progress} />
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between border-t border-surface-line pt-3 text-sm">
-                  <span className="tnum font-semibold text-brand-ink">{money(p.value)}</span>
-                  <span className="tnum flex items-center gap-3 text-xs text-brand-gray">
-                    {hrs > 0 && <span>{hrs.toFixed(1)}h logged</span>}
-                    {p.due_date && <span>Due {shortDate(p.due_date)}</span>}
-                  </span>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+      <ProjectsTable rows={rows} canBill={canBill} />
     </div>
   );
 }

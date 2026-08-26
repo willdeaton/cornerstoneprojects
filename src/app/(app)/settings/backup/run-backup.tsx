@@ -138,6 +138,11 @@ function buildWorkbook(data: BackupPayload, XLSX: typeof import('xlsx')): ArrayB
         Completed: p.completed_at ?? '',
         'On Hold': p.on_hold ? p.on_hold_reason || 'Yes' : '',
         'On Hold Since': p.on_hold_since ?? '',
+        // The job's own PO — the paperwork billing was authorized by, which the
+        // per-invoice column can only show once an invoice exists.
+        'PO #': p.po_number ?? '',
+        'PO Amount': p.po_amount ?? '',
+        'PO Received': p.po_date ?? '',
         'Billing Stage': BILLING_STAGE_LABELS[billing.stage],
         Invoiced: billing.invoiced,
         'Left to Bill': Math.max(0, billing.leftToBill),
