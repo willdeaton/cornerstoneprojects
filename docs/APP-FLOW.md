@@ -130,6 +130,20 @@ hangs off:
 - **Status & progress** — setting status to `completed` stamps `completed_at`,
   which is what puts the job on the billing desk and starts its aging clock.
   (Reopening clears the stamp.) It also fires the job-completion email.
+- **Purchase order** — `projects.po_number` / `po_amount` / `po_date`: the
+  customer's PO for the JOB, recorded when it arrives rather than typed onto the
+  first invoice, which is normally weeks later. `po_amount` is NULL for a PO
+  written open against the contract — deliberately not 0, which authorizes
+  nothing. New invoice rows are filled in from it; `project_invoices.po_number`
+  stays the truth per invoice, so a job billed across two POs just overrides it
+  on the row that needs the other one. Written only by `setPurchaseOrderAction`
+  behind the billing gate, and the three fields move together (clearing the
+  number clears the figure and the date). The pure reads — `hasPurchaseOrder`,
+  `awaitingPurchaseOrder`, `poRemaining`, `poOverrun` — are in
+  `src/lib/billing.ts`, so the job's Billing tab and the desk flag the same jobs:
+  a finished job with nothing on file, and a job invoiced past what its PO
+  authorizes. Existing jobs were backfilled once from their earliest invoice's
+  PO (marker `project_po_backfilled_v1`), so a PO cleared afterwards stays clear.
 - **Invoices** — one `project_invoices` row per invoice: the invoice number, the
   customer's **PO number**, the amount, the day it was **sent** (`sent_on`), two
   independent flags — **billed** (it has gone out) and **paid** (money landed) —
@@ -157,19 +171,24 @@ hangs off:
   billed** / **mark paid** with no invoice detail entered at all. Closing a job
   out is not a button on this card — signing a job off the billing desk is the
   desk's own act — though a job already closed out can still be reopened here.
-- **Job notes** — internal, staff-facing.
-- **Crew notes** — separate table, written *to be read by the crew*: gate codes,
-  parking, who to ask for. Pinned notes stay on top. These surface on every
-  booked person's own schedule and in the schedule email.
+- **Notes & Files** — one tab (`/projects/[id]/notes`), three panels:
+  - **Job notes** — internal, staff-facing.
+  - **Crew notes** — separate table, written *to be read by the crew*: gate
+    codes, parking, who to ask for. Pinned notes stay on top. These surface on
+    every booked person's own schedule and in the schedule email.
+  - **Files** — see below. They were their own tab until they were merged in
+    here: the photo of the damage and the note explaining it are one errand.
+    `/projects/[id]/files` still exists and redirects, so older links land in
+    the right place.
 - **Schedule section** — the job's phases, its projected finish (derived), its
   hard finish date, whether it is **on hold** (and what it's waiting on), and its
   change history.
 - **Time** — every entry logged against this job, and total hours.
-- **Files** — attachments, stored as base64 in the database, streamed back via
-  `/api/files/[id]`. Invoice PDFs deliberately do *not* live here: they're in
-  `invoice_files` behind `/api/invoices/[id]/pdf`, which is gated to
-  admins/managers rather than to "not an employee" — the Files tab is a wider
-  audience than the Billing tab.
+- **Files** (on the Notes & Files tab) — attachments, stored as base64 in the
+  database, streamed back via `/api/files/[id]`. Invoice PDFs deliberately do
+  *not* live here: they're in `invoice_files` behind `/api/invoices/[id]/pdf`,
+  which is gated to admins/managers rather than to "not an employee" — Notes &
+  Files is a wider audience than the Billing tab.
 - **Receipts** — admins & managers only. What the job *cost*, as opposed to what
   it was sold for: one `project_receipts` row per receipt (vendor, purchase date,
   category, subtotal/tax/total), its lines in `receipt_line_items`, and the photo
@@ -220,16 +239,21 @@ Chasing*.
 
 It also calls out three money variances: a job billed **short** of its contract
 value, one billed **over** it (worth checking for a change order), and money
-raised on an invoice that was never actually sent.
+raised on an invoice that was never actually sent. And two PO flags, which are
+about paperwork rather than money: a finished job with **no customer PO on
+file** — not waiting on somebody to raise the invoice, waiting on the document
+that lets it go out — and a job invoiced past what its PO authorizes.
 
 **Left to bill** — contract value less what has actually gone out — is shown per
 job and totalled desk-wide. It is wider than the short-billed variance on
 purpose: an invoice raised but never sent is still work left to bill.
 
 **Mark billed / mark paid** is the short path for work invoiced and collected
-outside the app: no invoice number, no PO, no send date, no PDF. It marks every
+outside the app: no invoice number, no send date, no PDF. It marks every
 invoice on the job sent (and paid, when asked), and for a job with nothing
-raised against it, raises one invoice for the contract value. What it writes is
+raised against it, raises one invoice for the contract value, carrying the job's
+own PO — that one was recorded before any of this, so it is not detail anybody
+is being asked to type. What it writes is
 an ordinary `project_invoices` row — deliberately *not* a "billed anyway" flag —
 so the stage, the aging and every total follow from it with no special case
 anywhere, and it is undone by editing that row in the ledger like any other.
@@ -445,7 +469,10 @@ addresses resolve `personal_email → work_email → login email`. Bodies live i
                                ├── invoices ──► DERIVED billing stage ──► Billing queue
                                │   (billed/paid)     + aging from completed_at
                                │
+                               ├── PO (recorded before billing) ──► fills in new invoices
+                               │
                                ├── notes (internal) · crew notes (crew-facing) · files
+                               │   (one tab: Notes & Files)
                                │
                                └── time entries ──► Timesheets ──► weekly approval
                                      (net of breaks)              (manager email + token)
@@ -558,15 +585,18 @@ want.
 >
 > **Projects** — sold work, tabbed by status, with progress, value, hours logged
 > and due dates. The **project detail page is the hub everything hangs off**:
-> status and progress; **invoices** (one row each, carrying the invoice number,
-> the customer's PO, the amount, the date it was sent, independent billed/paid
+> status and progress; the customer's **purchase order for the job** — recorded
+> when it arrives, before any billing, and used to fill in every invoice raised
+> afterwards; **invoices** (one row each, carrying the invoice number, the
+> customer's PO, the amount, the date it was sent, independent billed/paid
 > flags and the invoice PDF — the same ledger card the Billing desk opens
 > inline); a billing card showing the derived stage, aging, what's left to bill
 > and the contract-vs-invoiced variance; internal
 > **job notes**; crew-facing **crew notes** (gate codes, parking, who to ask
 > for — these surface on every booked person's schedule and in the schedule
-> email); the job's schedule phases and projected finish; time logged; file
-> attachments; and a full mappable **site address** kept separate from the short
+> email) — both on one **Notes & Files** tab with the job's attachments; the
+> job's schedule phases and projected finish; time logged; and a full mappable
+> **site address** kept separate from the short
 > "City, ST" label used on lists and quotes.
 >
 > Setting a job to **completed** stamps a completion timestamp. That stamp is

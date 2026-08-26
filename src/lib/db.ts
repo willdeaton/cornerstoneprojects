@@ -458,6 +458,58 @@ Your City, ST 00000',
   `);
 
   /* ------------------------------------------------------------------
+   * The customer's purchase order for the JOB, as opposed to the PO written
+   * on one invoice.
+   *
+   * A PO arrives long before anything is billed — often before the work starts
+   * — and until it is on file the invoice can't go out at all. Kept on the
+   * project so it can be recorded the day it lands rather than typed from
+   * memory into the first invoice, and so the billing desk can see at a glance
+   * which finished jobs are waiting on paperwork instead of on someone to
+   * raise them.
+   *
+   *   po_number  — the customer's PO number.
+   *   po_amount  — what it authorizes, when the PO carries a figure. NULL for
+   *                a PO issued against the contract with no separate cap, and
+   *                that is not the same as zero: zero authorizes nothing.
+   *   po_date    — the day it was received.
+   *
+   * The per-invoice `project_invoices.po_number` stays exactly as it was: a
+   * job can be billed across more than one PO, so the invoice's own column
+   * remains the truth for that invoice. This is the job's default, which new
+   * invoices are filled in from.
+   * ------------------------------------------------------------------ */
+  await pool.query(`
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS po_number TEXT;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS po_amount DOUBLE PRECISION;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS po_date   DATE;
+  `);
+
+  // Backfill: jobs already billed against a PO knew the number all along — it
+  // was just only written on the invoices. Takes the earliest invoice's PO as
+  // the job's, which is the one it was sold under when there is more than one.
+  // Marker-guarded rather than self-guarding: a job whose PO is deliberately
+  // cleared afterwards must stay cleared, and re-running this each boot would
+  // put it back.
+  await pool.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM settings WHERE key = 'project_po_backfilled_v1') THEN
+        UPDATE projects p
+           SET po_number = i.po_number
+          FROM (
+            SELECT DISTINCT ON (project_id) project_id, po_number
+              FROM project_invoices
+             WHERE po_number IS NOT NULL AND btrim(po_number) <> ''
+             ORDER BY project_id, position, id
+          ) i
+         WHERE i.project_id = p.id AND p.po_number IS NULL;
+        INSERT INTO settings (key, value) VALUES ('project_po_backfilled_v1', '1')
+        ON CONFLICT (key) DO NOTHING;
+      END IF;
+    END $$;
+  `);
+
+  /* ------------------------------------------------------------------
    * The invoice PDF: one per invoice, so the row is keyed by the invoice
    * itself and a re-upload replaces what was there. The bytes are stored
    * inline as a base64 data URL, exactly like project_files.

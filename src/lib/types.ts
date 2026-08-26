@@ -212,6 +212,22 @@ export interface Project {
   invoice_numbers: string | null;
   invoice_notes: string | null;
   /**
+   * The customer's purchase order for the job — recorded when it arrives,
+   * which is normally well before anything is billed and often before the work
+   * starts. New invoices are filled in from it; a job billed across more than
+   * one PO overrides it per invoice, so `ProjectInvoice.po_number` stays the
+   * truth for that invoice.
+   */
+  po_number: string | null;
+  /**
+   * What the PO authorizes, when it carries a figure of its own. NULL means the
+   * PO is open against the contract value — deliberately not the same as 0,
+   * which authorizes nothing.
+   */
+  po_amount: number | null;
+  /** The day the PO was received (YYYY-MM-DD). */
+  po_date: string | null;
+  /**
    * When the job was marked complete — stamped automatically by the status
    * change, not typed. `end_date` is the date somebody entered for the work;
    * this is when the job actually arrived on the billing desk, and it's what

@@ -5,8 +5,10 @@ import Link from 'next/link';
 import type { Project, ProjectInvoiceWithFile } from '@/lib/types';
 import { money, shortDate } from '@/lib/format';
 import {
+  awaitingPurchaseOrder,
   billingVariance,
   contractLocked,
+  poOverrun,
   BILLING_STAGE_LABELS,
   type BillingSummary,
 } from '@/lib/billing';
@@ -14,6 +16,7 @@ import { BillingStageBadge } from '@/components/ui';
 import { ContractValueControl } from '@/components/billing/ContractValueControl';
 import { BillingStageControls } from '@/components/billing/BillingStageControls';
 import { InvoiceSection } from '@/components/billing/InvoiceSection';
+import { PurchaseOrderCard } from '@/components/billing/PurchaseOrderCard';
 import { listJobInvoicesAction } from '@/app/actions/billing';
 
 /**
@@ -114,6 +117,11 @@ function BillingDeskRow({
 }) {
   const { project: p, summary: s } = row;
   const variance = billingVariance(s);
+  // A finished job with no PO on file isn't waiting on somebody to raise the
+  // invoice — it's waiting on the paperwork that lets the invoice go out, which
+  // is a different job for a different person, so the row says which it is.
+  const needsPo = awaitingPurchaseOrder(s.stage, p);
+  const poOver = poOverrun(p, s.invoiced);
   const panelId = `billing-job-${p.id}`;
   const age =
     s.ageDays == null
@@ -194,12 +202,22 @@ function BillingDeskRow({
           </div>
         </div>
 
-        {(row.holdReason || variance || s.unbilled > 0) && !open && (
+        {(row.holdReason || variance || s.unbilled > 0 || needsPo || poOver != null) && !open && (
           <div className="mt-3 space-y-1 border-t border-surface-line pt-2 text-xs">
             {s.stage === 'on_hold' && row.holdReason && (
               <p className="text-brand-gray-dark">
                 <span className="font-semibold">On hold — </span>
                 {row.holdReason}
+              </p>
+            )}
+            {needsPo && (
+              <p className="text-amber-700">
+                No customer PO on file — record it before the invoice goes out.
+              </p>
+            )}
+            {poOver != null && (
+              <p className="text-amber-700">
+                Invoiced {money(poOver)} over PO {p.po_number} — needs a revised PO.
               </p>
             )}
             {s.unbilled > 0 && (
@@ -266,6 +284,19 @@ function BillingDeskRow({
               )}
             </div>
           )}
+
+          {/* The PO belongs above the ledger, because that is the order it
+              happens in: it is on file first, and every invoice raised below
+              starts out billed against it. */}
+          <div className="mt-4 border-t border-surface-line pt-4">
+            <PurchaseOrderCard
+              project={p}
+              invoiced={s.invoiced}
+              stage={s.stage}
+              variant="inline"
+              onChanged={onChanged}
+            />
+          </div>
 
           <div className="mt-4 border-t border-surface-line pt-4">
             {error ? (

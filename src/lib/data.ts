@@ -567,6 +567,31 @@ export async function setProjectOnHold(
 /* -------------------------------------------------------- Billing workflow */
 
 /**
+ * Record (or clear) the customer's PO for a job.
+ *
+ * Deliberately its own writer rather than three more keys on `updateProject`:
+ * the PO is billing paperwork, written only from behind the billing gate, and
+ * the three fields move together — clearing the number clears the figure and
+ * the date with it, because an amount authorized by no PO is not a fact about
+ * anything.
+ */
+export async function setProjectPurchaseOrder(
+  id: number,
+  po: { po_number: string | null; po_amount: number | null; po_date: string | null }
+): Promise<void> {
+  const cleared = !po.po_number;
+  await q(
+    `UPDATE projects
+        SET po_number = $1,
+            po_amount = $2,
+            po_date   = $3,
+            updated_at = now()
+      WHERE id = $4`,
+    [po.po_number, cleared ? null : po.po_amount, cleared ? null : po.po_date, id]
+  );
+}
+
+/**
  * Park or release a job's billing. A hold carries a reason — the point of it
  * is that the next person to look at the queue knows why nobody is chasing
  * this one — and releasing clears the reason with it.
@@ -642,9 +667,12 @@ export async function markProjectBilling(projectId: number, paid: boolean): Prom
   // Nothing raised against the job yet, so the mark has to raise it. The
   // amount is the contract value, read in the same statement rather than
   // fetched first — the job is what says what it is worth.
+  // The job's own PO comes along with it: it is the one piece of invoice
+  // detail we already have, and a row raised without it would lose paperwork
+  // somebody had deliberately recorded.
   const raised = await q<{ id: number }>(
-    `INSERT INTO project_invoices (project_id, amount, billed, sent_on, paid, position)
-     SELECT p.id, GREATEST(p.value, 0), TRUE, CURRENT_DATE, $2, 1
+    `INSERT INTO project_invoices (project_id, po_number, amount, billed, sent_on, paid, position)
+     SELECT p.id, p.po_number, GREATEST(p.value, 0), TRUE, CURRENT_DATE, $2, 1
        FROM projects p
       WHERE p.id = $1
      RETURNING id`,

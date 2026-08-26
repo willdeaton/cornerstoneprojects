@@ -73,13 +73,18 @@ export async function ensureSeed(pool: Pool) {
 
     // ---- Sold / in-progress work — matches "Sold / In-Progress by Status" -
     const projects = [
-      { quote_number: 'Q-2510', customer: 'ARH-Highlands', name: 'Highlands ARH – Phase 1 Flooring', category: 'Flooring', value: 98500, status: 'completed', progress: 100, location: 'Prestonsburg, KY', start_date: daysAgo(120), end_date: daysAgo(38), due_date: daysAgo(40) },
-      { quote_number: 'Q-2512', customer: 'Georgetown CH', name: 'Georgetown CH – East Wing Repaint', category: 'Painting', value: 72016, status: 'completed', progress: 100, location: 'Georgetown, KY', start_date: daysAgo(95), end_date: daysAgo(28), due_date: daysAgo(30) },
-      { quote_number: 'Q-2515', customer: 'Heritage Pool Supply', name: 'Heritage Pool – Showroom Refresh', category: 'Painting', value: 44500, status: 'completed', progress: 100, location: 'Lexington, KY', start_date: daysAgo(70), end_date: daysAgo(19), due_date: daysAgo(20) },
-      { quote_number: 'Q-2540', customer: 'Corbin MOB', name: 'Corbin MOB – Restroom Renovation', category: 'Renovation', value: 38105, status: 'in_progress', progress: 60, location: 'Corbin, KY', start_date: daysAgo(25), end_date: null, due_date: daysAgo(-15) },
-      { quote_number: 'Q-2545', customer: 'Bluegrass CH', name: 'Bluegrass CH – Common Area Flooring', category: 'Flooring', value: 19000, status: 'in_progress', progress: 35, location: 'Versailles, KY', start_date: daysAgo(12), end_date: null, due_date: daysAgo(-22) },
-      { quote_number: 'Q-2560', customer: 'Carl D. Perkins', name: 'Carl D. Perkins – Gymnasium Refinish', category: 'Flooring', value: 45750, status: 'not_started', progress: 0, location: 'Edmonton, KY', start_date: daysAgo(-10), end_date: null, due_date: daysAgo(-45) },
-      { quote_number: 'Q-2562', customer: 'Brandi Simon Law Office', name: 'Brandi Simon Law – Office Buildout', category: 'Renovation', value: 25000, status: 'not_started', progress: 0, location: 'Nicholasville, KY', start_date: daysAgo(-7), end_date: null, due_date: daysAgo(-38) },
+      // `po_*` is the customer's purchase order for the JOB, recorded when it
+      // arrives rather than typed onto the first invoice — so the demo carries
+      // one job billed against a PO in full, one still running with its PO
+      // already on file, and one finished with nothing on file at all, which
+      // is what the billing desk flags before anybody raises an invoice.
+      { quote_number: 'Q-2510', customer: 'ARH-Highlands', name: 'Highlands ARH – Phase 1 Flooring', category: 'Flooring', value: 98500, status: 'completed', progress: 100, location: 'Prestonsburg, KY', start_date: daysAgo(120), end_date: daysAgo(38), due_date: daysAgo(40), po_number: null, po_amount: null, po_date: null },
+      { quote_number: 'Q-2512', customer: 'Georgetown CH', name: 'Georgetown CH – East Wing Repaint', category: 'Painting', value: 72016, status: 'completed', progress: 100, location: 'Georgetown, KY', start_date: daysAgo(95), end_date: daysAgo(28), due_date: daysAgo(30), po_number: 'PO-88214', po_amount: 72016, po_date: daysAgo(100) },
+      { quote_number: 'Q-2515', customer: 'Heritage Pool Supply', name: 'Heritage Pool – Showroom Refresh', category: 'Painting', value: 44500, status: 'completed', progress: 100, location: 'Lexington, KY', start_date: daysAgo(70), end_date: daysAgo(19), due_date: daysAgo(20), po_number: 'PO-70552', po_amount: 44500, po_date: daysAgo(75) },
+      { quote_number: 'Q-2540', customer: 'Corbin MOB', name: 'Corbin MOB – Restroom Renovation', category: 'Renovation', value: 38105, status: 'in_progress', progress: 60, location: 'Corbin, KY', start_date: daysAgo(25), end_date: null, due_date: daysAgo(-15), po_number: 'PO-31908', po_amount: 38105, po_date: daysAgo(30) },
+      { quote_number: 'Q-2545', customer: 'Bluegrass CH', name: 'Bluegrass CH – Common Area Flooring', category: 'Flooring', value: 19000, status: 'in_progress', progress: 35, location: 'Versailles, KY', start_date: daysAgo(12), end_date: null, due_date: daysAgo(-22), po_number: null, po_amount: null, po_date: null },
+      { quote_number: 'Q-2560', customer: 'Carl D. Perkins', name: 'Carl D. Perkins – Gymnasium Refinish', category: 'Flooring', value: 45750, status: 'not_started', progress: 0, location: 'Edmonton, KY', start_date: daysAgo(-10), end_date: null, due_date: daysAgo(-45), po_number: null, po_amount: null, po_date: null },
+      { quote_number: 'Q-2562', customer: 'Brandi Simon Law Office', name: 'Brandi Simon Law – Office Buildout', category: 'Renovation', value: 25000, status: 'not_started', progress: 0, location: 'Nicholasville, KY', start_date: daysAgo(-7), end_date: null, due_date: daysAgo(-38), po_number: null, po_amount: null, po_date: null },
     ] as const;
 
     const projectIds: Record<string, number> = {};
@@ -89,9 +94,9 @@ export async function ensureSeed(pool: Pool) {
           // A finished job carries its completion stamp — the billing queue
           // ages against it, and seeding it keeps the demo data honest. In the
           // app it's written by the status change, never typed.
-          `INSERT INTO projects (quote_number, customer, name, category, value, status, progress, location, start_date, end_date, due_date, completed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-          [p.quote_number, p.customer, p.name, p.category, p.value, p.status, p.progress, p.location, p.start_date, p.end_date, p.due_date, p.status === 'completed' ? p.end_date : null]
+          `INSERT INTO projects (quote_number, customer, name, category, value, status, progress, location, start_date, end_date, due_date, completed_at, po_number, po_amount, po_date)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+          [p.quote_number, p.customer, p.name, p.category, p.value, p.status, p.progress, p.location, p.start_date, p.end_date, p.due_date, p.status === 'completed' ? p.end_date : null, p.po_number, p.po_amount, p.po_date]
         )
       ).rows[0].id as number;
       projectIds[p.name] = id;
