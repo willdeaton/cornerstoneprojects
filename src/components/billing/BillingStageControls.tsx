@@ -24,7 +24,9 @@ import {
  * without typing an invoice at all. That is a real way of working, not a
  * shortcut around the ledger: work invoiced and collected outside this app
  * still has to be able to leave the desk, and a queue that demands an invoice
- * number, a PO and a send date first is a queue people stop updating. What the
+ * number and a send date first is a queue people stop updating. (The job's own
+ * PO does come along on a row raised this way — it was recorded before any of
+ * this, so nothing is being asked for that isn't already known.) What the
  * mark writes is an ordinary invoice row, so the stage and every total follow
  * from it exactly as they would have by hand — and the ledger below is where it
  * gets a number later, or gets undone.
@@ -96,7 +98,7 @@ export function BillingStageControls({
             disabled={pending}
             title={
               nothingRaised
-                ? `Records ${money(summary.contract)} as sent, with no invoice number, PO or PDF`
+                ? `Records ${money(summary.contract)} as sent, with no invoice number or PDF — against the job's PO if one is on file`
                 : `Marks ${unsent} ${unsent === 1 ? 'invoice' : 'invoices'} as sent`
             }
             onClick={() => run(() => markBillingAction(projectId, 'billed'))}
@@ -158,7 +160,8 @@ export function BillingStageControls({
         <p className="mt-2 text-xs text-brand-gray">
           Marking a job with no invoices raised puts its contract value{' '}
           <strong className="text-brand-ink">{money(summary.contract)}</strong> on one invoice with
-          no number, PO or PDF. Fill the detail in below if you ever need it.
+          no number and no PDF, billed against the job&apos;s PO if one is on file. Fill the detail
+          in below if you ever need it.
         </p>
       )}
 

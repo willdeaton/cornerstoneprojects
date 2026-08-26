@@ -9,6 +9,7 @@ import {
 import { money } from '@/lib/format';
 import { loadProject, requireJobBiller } from '../job';
 import { BillingSection } from '@/components/billing/BillingSection';
+import { PurchaseOrderCard } from '@/components/billing/PurchaseOrderCard';
 import { InvoiceSection } from '@/components/billing/InvoiceSection';
 import { ContractValueControl } from '@/components/billing/ContractValueControl';
 import { ContractValueHistory } from '@/components/billing/ContractValueHistory';
@@ -50,6 +51,11 @@ export default async function ProjectBillingPage({
         <InvoiceSection project={project} invoices={invoices} />
       </div>
       <div className="space-y-6">
+        {/* Above the billing card, in the order the paperwork actually happens:
+            the customer's PO is in hand before anything goes out, and every
+            invoice raised below is filled in from it. */}
+        <PurchaseOrderCard project={project} invoiced={summary.invoiced} stage={summary.stage} />
+
         <BillingSection
           projectId={project.id}
           summary={summary}

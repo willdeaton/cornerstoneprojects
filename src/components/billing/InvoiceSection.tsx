@@ -178,7 +178,11 @@ export function InvoiceSection({
         key: nextKey.current--,
         id: null,
         invoice_number: '',
-        po_number: '',
+        // Billed against the job's PO by default — it was recorded before any
+        // of this, and retyping it per invoice is how the wrong one gets typed.
+        // Still per-invoice underneath, so a job billed across two POs just
+        // overwrites it on the row that needs the other one.
+        po_number: project.po_number ?? '',
         amount: '',
         billed: false,
         sent_on: '',
@@ -198,11 +202,14 @@ export function InvoiceSection({
   function save() {
     // Drop rows the user added but never filled in, keeping each kept row's
     // picked file alongside it — the upload needs the id this save hands back.
+    // A row carrying nothing but the job's own PO is one of those empty rows:
+    // it was filled in for the user, so it can't be what says they meant it.
+    const jobPo = (project.po_number ?? '').trim();
     const keep = rows.filter(
       (r) =>
         r.id != null ||
         r.invoice_number.trim() ||
-        r.po_number.trim() ||
+        (r.po_number.trim() && r.po_number.trim() !== jobPo) ||
         parseAmount(r.amount) > 0 ||
         r.file
     );

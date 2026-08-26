@@ -7,6 +7,7 @@ import {
   setProjectBillingHold,
   setProjectBillingClosed,
   markProjectBilling,
+  setProjectPurchaseOrder,
   listProjectInvoices,
   setInvoiceFile,
   deleteInvoiceFile,
@@ -118,6 +119,78 @@ export async function setBillingClosedAction(
   await setProjectBillingClosed(projectId, closed, closed ? user.id : null);
   revalidateBilling(projectId);
   return {};
+}
+
+/* ------------------------------------------------- The customer's PO */
+
+/** The PO as the card hands it over — every field as typed, or blank. */
+export interface PurchaseOrderInput {
+  po_number: string;
+  /** As typed ("$27,500.00"), like an invoice amount. Blank for an open PO. */
+  po_amount: string;
+  /** YYYY-MM-DD from a date input, or blank. */
+  po_date: string;
+}
+
+/** A date input's value, kept only if it really is one (YYYY-MM-DD). */
+function isoDate(raw: string | null | undefined): string | null {
+  const v = String(raw ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+
+/**
+ * Record the customer's PO for a job, or clear it.
+ *
+ * The point of it being here rather than on an invoice is timing: the PO
+ * normally lands well before anything is billed, and the number written on the
+ * first invoice is the number somebody had to go and find. Recorded on the job
+ * the day it arrives, it is on file before the billing starts and every invoice
+ * raised afterwards is filled in from it.
+ *
+ * An empty number clears the whole PO — a PO recorded against the wrong job has
+ * to be removable, and an authorized amount with no PO behind it is not a fact
+ * about anything, which is why the writer drops the figure and the date with it.
+ */
+export async function setPurchaseOrderAction(
+  projectId: number,
+  input: PurchaseOrderInput
+): Promise<{ ok: boolean; error?: string }> {
+  await requireBiller();
+
+  const number = String(input.po_number ?? '').trim();
+  const rawAmount = String(input.po_amount ?? '').replace(/[$,\s]/g, '');
+
+  let amount: number | null = null;
+  if (rawAmount) {
+    const parsed = parseFloat(rawAmount);
+    if (!Number.isFinite(parsed)) {
+      return {
+        ok: false,
+        error: "Enter what the PO authorizes, or leave it blank if it doesn't say.",
+      };
+    }
+    if (parsed < 0) return { ok: false, error: "A PO can't authorize a negative amount." };
+    // Rounded once, here, so the figure stored and every variance against it
+    // agree — the same rule the contract value goes in under.
+    amount = Math.round(parsed * 100) / 100;
+  }
+
+  // Nothing to hang an amount or a date on. Said rather than silently dropped:
+  // somebody who typed a figure and no number meant to record a PO.
+  if (!number && (amount != null || isoDate(input.po_date))) {
+    return { ok: false, error: 'Enter the PO number.' };
+  }
+
+  const project = await getProject(projectId);
+  if (!project) return { ok: false, error: 'That job no longer exists.' };
+
+  await setProjectPurchaseOrder(projectId, {
+    po_number: number || null,
+    po_amount: amount,
+    po_date: isoDate(input.po_date),
+  });
+  revalidateBilling(projectId);
+  return { ok: true };
 }
 
 /* ------------------------------------------------------ The invoice PDF */

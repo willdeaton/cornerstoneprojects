@@ -253,3 +253,50 @@ export function billingVariance(s: BillingSummary): 'short' | 'over' | null {
   if (diff < 0) return 'over';
   return null;
 }
+
+/* --------------------------------------------------- The customer's PO */
+
+/**
+ * The purchase-order fields of a job, so callers can pass a partial row — the
+ * billing desk holds whole projects, the PO card holds only these three.
+ */
+export type JobPurchaseOrder = Pick<Project, 'po_number' | 'po_amount' | 'po_date'>;
+
+/** Whether a PO has actually been recorded. A number is what makes it one. */
+export function hasPurchaseOrder(po: JobPurchaseOrder): boolean {
+  return !!po.po_number && po.po_number.trim() !== '';
+}
+
+/**
+ * A finished job with nothing on file to bill against.
+ *
+ * The PO is the paperwork that has to be in hand BEFORE an invoice goes out,
+ * so this is the one billing question that is worth asking about a job nobody
+ * has raised anything for yet. Once something has gone out the question is
+ * moot — the invoice carries its own PO, and asking again would be noise.
+ */
+export function awaitingPurchaseOrder(stage: BillingStage, po: JobPurchaseOrder): boolean {
+  if (hasPurchaseOrder(po)) return false;
+  return stage === 'ready_to_bill' || stage === 'not_ready';
+}
+
+/**
+ * What is left on the PO: what it authorizes, less what has been raised
+ * against the job. NULL when there is no PO, or when it carries no figure of
+ * its own — an open PO has nothing to run out of.
+ */
+export function poRemaining(po: JobPurchaseOrder, invoiced: number): number | null {
+  if (!hasPurchaseOrder(po) || po.po_amount == null) return null;
+  return po.po_amount - invoiced;
+}
+
+/**
+ * Invoiced past what the PO authorizes — the thing that gets an invoice sent
+ * back. Rounded to whole dollars, like the contract variance, so a cent of
+ * float drift never reads as a problem.
+ */
+export function poOverrun(po: JobPurchaseOrder, invoiced: number): number | null {
+  const left = poRemaining(po, invoiced);
+  if (left == null || Math.round(left) >= 0) return null;
+  return -left;
+}

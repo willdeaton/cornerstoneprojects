@@ -185,16 +185,12 @@ export default async function ProjectOverview({ params }: { params: Promise<{ id
             />
             <TabLink
               href={`/projects/${id}/notes`}
-              label="Notes"
+              label="Notes & Files"
               value={`${counts.notes} internal · ${counts.crewNotes} for the crew`}
-            />
-            <TabLink
-              href={`/projects/${id}/files`}
-              label="Files"
-              value={
+              hint={
                 counts.files === 0
-                  ? 'None attached'
-                  : `${counts.files} file${counts.files === 1 ? '' : 's'}`
+                  ? 'No files attached'
+                  : `${counts.files} file${counts.files === 1 ? '' : 's'} attached`
               }
             />
             {/* Behind the same gate as Billing: what a job cost is the other
