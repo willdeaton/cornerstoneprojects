@@ -240,7 +240,9 @@ export function AppShell({
       )}
 
       {/* Main content */}
-      <main className="flex-1 px-4 py-6 sm:px-8 lg:px-10 lg:py-8">
+      {/* min-w-0: a flex child defaults to its content's width, so a wide
+          table would stretch the page instead of scrolling inside its own card. */}
+      <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 lg:px-10 lg:py-8">
         <div className="mx-auto max-w-7xl">
           {user.viewingAs && <ViewAsBanner role={user.viewingAs} />}
           {children}
