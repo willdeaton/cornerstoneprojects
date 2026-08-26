@@ -165,7 +165,7 @@ export function AppShell({
       {/* Sidebar (desktop) — pinned to the viewport so it stays static and
           doesn't grow with long pages; only the main content scrolls. */}
       <aside
-        className={`sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto bg-brand-ink p-3 transition-[width] duration-200 ease-out lg:flex ${
+        className={`no-print sticky top-0 hidden h-screen shrink-0 flex-col overflow-y-auto bg-brand-ink p-3 transition-[width] duration-200 ease-out lg:flex ${
           collapsed ? 'w-[4.5rem]' : 'w-64'
         }`}
       >
@@ -219,7 +219,7 @@ export function AppShell({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="flex items-center justify-between bg-brand-ink px-4 py-3 lg:hidden">
+      <header className="no-print flex items-center justify-between bg-brand-ink px-4 py-3 lg:hidden">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={logoSrc} alt="Company logo" className="h-9 w-auto max-w-[150px] object-contain" />
         <button
@@ -231,7 +231,7 @@ export function AppShell({
         </button>
       </header>
       {open && (
-        <div className="border-t border-white/[0.07] bg-brand-ink px-4 pb-4 pt-2 lg:hidden">
+        <div className="no-print border-t border-white/[0.07] bg-brand-ink px-4 pb-4 pt-2 lg:hidden">
           <NavLinks mobile />
           <div className="mt-4">
             <UserCard user={user} collapsed={false} />
@@ -540,7 +540,7 @@ function ViewAsSwitcher({ active }: { active: Role }) {
 /** Amber banner shown across the top of every page while an admin is previewing. */
 function ViewAsBanner({ role }: { role: Role }) {
   return (
-    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div className="no-print mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
       <span className="flex items-center gap-2">
         <EyeIcon />
         <span>

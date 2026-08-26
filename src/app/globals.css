@@ -295,7 +295,21 @@ body {
   margin-bottom: 0;
 }
 
-/* Printable quote: hide app/toolbar chrome and print the document clean. */
+/* Print. Two shapes share this block: the quote document, which is already a
+   page and only wants the toolbar gone, and the list views (Projects, Billing),
+   which are screen furniture — app chrome, filter controls, scroll containers —
+   wrapped around a table that has to become a sheet of paper.
+
+   `.no-print` drops anything that only makes sense on screen; `.print-only`
+   brings in the context line a printout needs and a screen doesn't. Hidden by a
+   screen-only rule rather than shown by a print-only one, so print never has to
+   name a `display` and an element's own layout classes still apply there. */
+@media screen {
+  .print-only {
+    display: none;
+  }
+}
+
 @media print {
   .no-print {
     display: none !important;
@@ -306,6 +320,69 @@ body {
   @page {
     size: letter;
     margin: 0.5in;
+  }
+
+  /* Badges, status dots and progress bars carry meaning in their fill, so the
+     browser's ink-saving default would print the tables unreadable. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* The app shell's main column is padded and centred for a viewport it no
+     longer has. */
+  main {
+    padding: 0 !important;
+  }
+
+  /* A wide table lives in a horizontal scroller on screen, which on paper
+     would simply clip everything past the first 7.5 inches. Let it lay out at
+     the page width instead and shrink the type to suit. */
+  .print-wrap {
+    overflow: visible !important;
+  }
+  .print-table {
+    min-width: 0 !important;
+    width: 100% !important;
+    font-size: 9pt;
+  }
+  .print-table th,
+  .print-table td {
+    padding: 0.28rem 0.3rem !important;
+  }
+  /* Truncation is a screen affordance — on paper there is no hover to recover
+     the rest of the text, so let it wrap. */
+  .print-table .truncate,
+  .print-table .max-w-\[20rem\] {
+    max-width: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+  /* Rows split across a page break are unreadable; headers repeat instead. */
+  .print-table thead {
+    display: table-header-group;
+  }
+  .print-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  /* Cards are a screen surface: on paper the shadow greys the whole block and
+     the rounding fights the table's own hairlines. */
+  .card {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  /* The list views are columns-wide, not paragraphs-wide. Named pages are
+     ignored by browsers that don't implement them, which leaves the portrait
+     default above — the tables still print, just tighter. */
+  .print-landscape {
+    page: landscape;
+  }
+  @page landscape {
+    size: letter landscape;
+    margin: 0.4in;
   }
 }
 

@@ -5,6 +5,7 @@ import { listBillingProjects } from '@/lib/data';
 import { money } from '@/lib/format';
 import { billingSummary, type BillingStage } from '@/lib/billing';
 import { PageHeader, StatCard, EmptyState } from '@/components/ui';
+import { PrintButton } from '@/components/print';
 import { BillingDesk, type DeskRow } from './BillingDesk';
 
 export const dynamic = 'force-dynamic';
@@ -91,17 +92,20 @@ export default async function BillingPage({
     .reduce((t, r) => t + Math.max(0, r.summary.leftToBill), 0);
 
   return (
-    <div>
+    // The desk is columns-wide, not paragraphs-wide, so it prints landscape.
+    <div className="print-landscape">
       <PageHeader
         title="Billing"
         subtitle="Completed work, from ready-to-bill through to paid and closed — open a job to bill it"
       >
+        {/* Prints the desk exactly as it stands — tab, filters, sort and all. */}
+        <PrintButton title="Print this billing list" />
         <Link href="/projects?status=completed" className="btn-secondary">
           Completed Jobs
         </Link>
       </PageHeader>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 print:grid-cols-5 print:gap-2 lg:grid-cols-5">
         <StatCard
           label="Ready to Bill"
           value={money(readyValue)}
@@ -129,7 +133,7 @@ export default async function BillingPage({
         <StatCard label="Collected" value={money(collected)} accent="green" hint="Paid to date" />
       </div>
 
-      <div className="mt-6 mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="no-print mt-6 mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="segmented">
           {TABS.map((t) => (
             <Link
@@ -154,7 +158,7 @@ export default async function BillingPage({
           }
         />
       ) : (
-        <BillingDesk rows={shown} />
+        <BillingDesk rows={shown} tabLabel={tab.label} />
       )}
     </div>
   );

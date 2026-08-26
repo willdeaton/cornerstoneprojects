@@ -17,6 +17,7 @@ import {
   ProjectStatusBadge,
 } from '@/components/ui';
 import { readListFilters, writeListFilters } from '@/lib/list-state';
+import { PrintMeta } from '@/components/print';
 
 /**
  * One job as the list reads it: the project row, its logged hours, and where
@@ -158,7 +159,16 @@ function compare(a: ProjectRow, b: ProjectRow, key: SortKey): number {
   }
 }
 
-export function ProjectsTable({ rows, canBill }: { rows: ProjectRow[]; canBill: boolean }) {
+export function ProjectsTable({
+  rows,
+  canBill,
+  /** Which status tab this is — screen chrome, so the printout says it in words. */
+  tabLabel,
+}: {
+  rows: ProjectRow[];
+  canBill: boolean;
+  tabLabel?: string;
+}) {
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
@@ -261,7 +271,7 @@ export function ProjectsTable({ rows, canBill }: { rows: ProjectRow[]; canBill: 
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="no-print mb-4 flex flex-wrap items-center gap-3">
         <input
           type="search"
           className="input sm:w-72"
@@ -327,6 +337,19 @@ export function ProjectsTable({ rows, canBill }: { rows: ProjectRow[]; canBill: 
         </p>
       </div>
 
+      <PrintMeta
+        meta={[
+          tabLabel && `${tabLabel} jobs`,
+          `${filtered.length} ${filtered.length === 1 ? 'job' : 'jobs'}`,
+          `${money(total)} total value`,
+          canBill && outstanding > 0 && `${money(outstanding)} outstanding`,
+          search.trim() !== '' && `search "${search.trim()}"`,
+          activeCategory !== 'all' && activeCategory,
+          activeStage !== 'all' && BILLING_STAGE_LABELS[activeStage as BillingStage],
+          hold === 'on' ? 'on hold only' : hold === 'off' ? 'not on hold' : null,
+        ]}
+      />
+
       {filtered.length === 0 ? (
         <EmptyState
           title={rows.length === 0 ? 'No projects here yet' : 'No jobs match'}
@@ -338,8 +361,8 @@ export function ProjectsTable({ rows, canBill }: { rows: ProjectRow[]; canBill: 
         />
       ) : (
         <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1040px] text-sm">
+          <div className="print-wrap overflow-x-auto">
+            <table className="print-table w-full min-w-[1040px] text-sm">
               <thead>
                 <tr className="border-b border-surface-line text-left">
                   {columns.map((col) => {
@@ -366,7 +389,7 @@ export function ProjectsTable({ rows, canBill }: { rows: ProjectRow[]; canBill: 
                               indicator on every column is just noise. */}
                           <span
                             aria-hidden
-                            className={`text-[0.6rem] leading-none transition-opacity duration-150 ${
+                            className={`no-print text-[0.6rem] leading-none transition-opacity duration-150 ${
                               active ? 'opacity-100' : 'opacity-0'
                             }`}
                           >
