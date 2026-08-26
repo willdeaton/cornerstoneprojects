@@ -1,6 +1,5 @@
 import 'server-only';
 import type { Recipient } from './settings';
-import type { Project } from '../types';
 
 /*
  * ============================================================================
@@ -31,21 +30,6 @@ function money(n: number): string {
   });
 }
 
-/** A small "label: value" detail table, omitting rows with no value. */
-function detailTable(rows: [string, string | null | undefined][]): string {
-  const cells = rows
-    .filter(([, v]) => v != null && String(v).trim() !== '')
-    .map(
-      ([label, v]) => `
-        <tr>
-          <td style="padding:4px 16px 4px 0;${MUTED};white-space:nowrap;vertical-align:top">${label}</td>
-          <td style="padding:4px 0;font-weight:bold;color:#1f2421;vertical-align:top">${v}</td>
-        </tr>`
-    )
-    .join('');
-  return `<table style="border-collapse:collapse;margin:16px 0">${cells}</table>`;
-}
-
 /** Test email sent from the settings screen to the configured from_email. */
 export function buildTestEmail(): RenderedEmail {
   return {
@@ -61,29 +45,86 @@ export function buildTestEmail(): RenderedEmail {
   };
 }
 
+/** One job in a daily digest — a sale won, or a job finished. */
+export interface DigestJobLine {
+  /** Pre-formatted day the event happened, e.g. "Tue, Aug 26". */
+  day: string;
+  project: string;
+  customer: string;
+  value: number;
+  quoteNumber: string | null;
+  category: string | null;
+}
+
 /**
- * EVENT-DRIVEN: a quote was marked sold and converted into a project. Sent to
- * everyone subscribed to new-project notifications as a short status report on
- * the job that just entered the pipeline.
+ * The list half of a daily digest: one row per job, with the day it landed
+ * (the digest reports every job still unreported, so a stretch where nothing
+ * went out arrives as one email covering more than a single day). Job,
+ * customer and category are all typed by hand, so every cell goes through
+ * esc().
  */
-export function buildNewProjectEmail(recipient: Recipient, project: Project): RenderedEmail {
-  const hello = recipient.first_name ? `Hi ${recipient.first_name},` : 'Hi,';
+function digestTable(lines: DigestJobLine[]): string {
+  const th = `text-align:left;padding:8px 12px 8px 0;border-bottom:2px solid #1f2421;${MUTED};text-transform:uppercase;font-size:11px;letter-spacing:.04em`;
+  const td = 'padding:10px 12px 10px 0;border-bottom:1px solid #e4e6e4;vertical-align:top';
+  const head = ['Date', 'Job', 'Customer', 'Value']
+    .map((h, i) => `<th style="${th}${i === 3 ? ';text-align:right;padding-right:0' : ''}">${h}</th>`)
+    .join('');
+  const body = lines
+    .map(
+      (l) => `
+        <tr>
+          <td style="${td};white-space:nowrap;${MUTED}">${esc(l.day)}</td>
+          <td style="${td};font-weight:bold">
+            ${esc(l.project)}
+            ${l.quoteNumber ? `<br /><span style="font-weight:normal;${MUTED}">Quote ${esc(l.quoteNumber)}</span>` : ''}
+          </td>
+          <td style="${td}">
+            ${esc(l.customer)}
+            ${l.category ? `<br /><span style="${MUTED}">${esc(l.category)}</span>` : ''}
+          </td>
+          <td style="${td};text-align:right;padding-right:0;white-space:nowrap;font-weight:bold">${money(l.value)}</td>
+        </tr>`
+    )
+    .join('');
+  const total = lines.reduce((sum, l) => sum + (l.value || 0), 0);
+  const foot = `
+    <tr>
+      <td style="padding:10px 12px 0 0;${MUTED}" colspan="3">Total</td>
+      <td style="padding:10px 0 0;text-align:right;font-weight:bold;white-space:nowrap">${money(total)}</td>
+    </tr>`;
+  return `<table style="border-collapse:collapse;width:100%;margin:16px 0"><thead><tr>${head}</tr></thead><tbody>${body}${foot}</tbody></table>`;
+}
+
+/** "3 jobs totaling $42,000" — the one-line summary above the list. */
+function digestSummary(lines: DigestJobLine[]): string {
+  const total = lines.reduce((sum, l) => sum + (l.value || 0), 0);
+  const jobs = `${lines.length} ${lines.length === 1 ? 'job' : 'jobs'}`;
+  return `${jobs} totaling ${money(total)}`;
+}
+
+/**
+ * SCHEDULED (once a day): everything sold since the last digest, in one email.
+ * Sent to everyone subscribed to new-project notifications — a running record
+ * of what the pipeline won, rather than one email per quote converted.
+ */
+export function buildSoldWorkDigestEmail(
+  recipient: Recipient,
+  dayLabel: string,
+  lines: DigestJobLine[]
+): RenderedEmail {
+  const hello = recipient.first_name ? `Hi ${esc(recipient.first_name)},` : 'Hi,';
+  const summary = digestSummary(lines);
   return {
-    subject: `New project: ${project.name}`,
+    subject: `Sold work — ${dayLabel} (${summary})`,
     html: `
       <div style="${WRAP}">
         <p>${hello}</p>
-        <p>A quote was just marked <strong>sold</strong> and moved into projects.
-        Here's the status of the new job:</p>
-        ${detailTable([
-          ['Project', project.name],
-          ['Customer', project.customer],
-          ['Value', money(project.value)],
-          ['Quote #', project.quote_number],
-          ['Category', project.category],
-        ])}
+        <p>Here's the work we won: <strong>${summary}</strong> sold and moved
+        into projects.</p>
+        ${digestTable(lines)}
         <p style="${MUTED}">You're receiving this because you're subscribed to
-        new-project notifications.</p>
+        new-project notifications. It goes out once a day and covers everything
+        sold since the last one.</p>
         ${SIGNOFF}
       </div>
     `,
@@ -91,26 +132,27 @@ export function buildNewProjectEmail(recipient: Recipient, project: Project): Re
 }
 
 /**
- * EVENT-DRIVEN: a project was marked complete. Sent to everyone subscribed to
- * completion notifications.
+ * SCHEDULED (once a day): every job marked complete since the last digest, in
+ * one email. Sent to everyone subscribed to completion notifications.
  */
-export function buildJobCompletedEmail(recipient: Recipient, project: Project): RenderedEmail {
-  const hello = recipient.first_name ? `Hi ${recipient.first_name},` : 'Hi,';
+export function buildCompletedJobsDigestEmail(
+  recipient: Recipient,
+  dayLabel: string,
+  lines: DigestJobLine[]
+): RenderedEmail {
+  const hello = recipient.first_name ? `Hi ${esc(recipient.first_name)},` : 'Hi,';
+  const summary = digestSummary(lines);
   return {
-    subject: `Job completed: ${project.name}`,
+    subject: `Jobs completed — ${dayLabel} (${summary})`,
     html: `
       <div style="${WRAP}">
         <p>${hello}</p>
-        <p>The following job has been marked <strong>complete</strong>:</p>
-        ${detailTable([
-          ['Project', project.name],
-          ['Customer', project.customer],
-          ['Value', money(project.value)],
-          ['Quote #', project.quote_number],
-          ['Category', project.category],
-        ])}
+        <p>Here's the work we finished: <strong>${summary}</strong> marked
+        complete and ready to bill.</p>
+        ${digestTable(lines)}
         <p style="${MUTED}">You're receiving this because you're subscribed to
-        job-completion notifications.</p>
+        job-completion notifications. It goes out once a day and covers every
+        job completed since the last one.</p>
         ${SIGNOFF}
       </div>
     `,
@@ -143,7 +185,7 @@ function mapsUrl(address: string): string {
 }
 
 /**
- * A bordered table of scheduled work — the sibling of detailTable for lists.
+ * A bordered table of scheduled work — the sibling of digestTable for lists.
  * Job names, phase names and notes are all typed by hand, so every field goes
  * through esc() before it reaches the body.
  */

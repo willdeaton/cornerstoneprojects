@@ -1,6 +1,4 @@
 import 'server-only';
-import { getDb } from '../db';
-import type { Project } from '../types';
 import { sendEmail, hasApiKey } from './transport';
 import {
   getEmailSettings,
@@ -10,14 +8,22 @@ import {
 } from './settings';
 import {
   buildTestEmail,
-  buildNewProjectEmail,
-  buildJobCompletedEmail,
+  buildSoldWorkDigestEmail,
+  buildCompletedJobsDigestEmail,
   buildPasswordResetEmail,
   buildWelcomeEmail,
   buildScheduleEmail,
   renderWeeklyApprovalEmail,
+  type DigestJobLine,
+  type RenderedEmail,
   type ScheduleLine,
 } from './templates';
+import {
+  pendingDigestEvents,
+  markDigestEventsSent,
+  type DigestEvent,
+  type DigestKind,
+} from './digest-queue';
 import { listManagersWithReports, managerWeekSummary } from '../data';
 import {
   listScheduleTasks,
@@ -33,6 +39,7 @@ import {
   today as todayISO,
 } from '../schedule-math';
 import { issueApprovalToken } from '../time-approval-tokens';
+import { payrollTimeZone } from '../payroll-week';
 import { appOrigin } from '../app-origin';
 
 /*
@@ -119,60 +126,147 @@ export async function sendWelcomeEmail(
   }
 }
 
-/* --------------------------------------------- Event-driven subscription emails */
+/* ------------------------------------------- Scheduled: the two daily digests */
 
-async function loadProject(projectId: number): Promise<Project | undefined> {
-  const db = await getDb();
-  const { rows } = await db.query('SELECT * FROM projects WHERE id = $1', [projectId]);
-  return rows[0] as Project | undefined;
+/**
+ * Selling a quote and completing a job are the two moments the office wants to
+ * hear about, but hearing about each one the second it happens buried everyone
+ * on a busy afternoon. Both are now QUEUED (see digest-queue.ts) and reported
+ * once a day, one email per kind: a summary line plus the list of what was
+ * sold / what was finished.
+ */
+
+export interface SendDigestResult extends SendResult {
+  /** Jobs the email listed — 0 means there was nothing to report. */
+  jobs: number;
 }
 
 /**
- * EVENT-DRIVEN, best-effort. Called inline after a quote is sold and converted
- * into a project — emails everyone subscribed to new-project notifications a
- * short status report on the new job. Never throws: the conversion must
- * complete regardless of email outcome.
+ * "Tue, Aug 26". Rendered in the payroll timezone, the same clock the digest
+ * scheduler fires on, so the date in the subject is the crews' date rather
+ * than the server's.
  */
-export async function sendNewProjectEmail(projectId: number): Promise<SendResult> {
-  return sendProjectEvent(projectId, newProjectRecipients, buildNewProjectEmail, 'new-project');
+function digestDay(when: Date): string {
+  return when.toLocaleDateString('en-US', {
+    timeZone: payrollTimeZone(),
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function digestLine(e: DigestEvent): DigestJobLine {
+  return {
+    day: digestDay(new Date(e.created_at)),
+    project: e.name,
+    customer: e.customer,
+    value: e.value,
+    quoteNumber: e.quote_number,
+    category: e.category,
+  };
 }
 
 /**
- * EVENT-DRIVEN, best-effort. Called inline when a project is marked complete —
- * emails everyone subscribed to completion notifications. Never throws.
+ * SCHEDULED (once a day), best-effort. Drains one digest queue and sends the
+ * day's summary to everyone carrying the matching subscription flag.
+ *
+ * Events are stamped sent only when at least one email actually went out, so a
+ * misconfigured or unreachable send day rolls into the next digest instead of
+ * silently swallowing the news. Returns 'skipped' (not 'error') when email
+ * isn't configured, and when there was simply nothing to report.
  */
-export async function sendJobCompletedEmail(projectId: number): Promise<SendResult> {
-  return sendProjectEvent(projectId, completionRecipients, buildJobCompletedEmail, 'job-completed');
-}
-
-/** Shared body for the two event-driven, per-project subscription emails. */
-async function sendProjectEvent(
-  projectId: number,
+async function sendDigest(
+  kind: DigestKind,
   resolveRecipients: () => Promise<Recipient[]>,
-  render: (r: Recipient, p: Project) => { subject: string; html: string },
+  render: (r: Recipient, dayLabel: string, lines: DigestJobLine[]) => RenderedEmail,
+  keep: (e: DigestEvent) => boolean,
   label: string
-): Promise<SendResult> {
+): Promise<SendDigestResult> {
   try {
+    const events = await pendingDigestEvents(kind);
+    if (events.length === 0) {
+      return { status: 'skipped', count: 0, attempted: 0, jobs: 0, reason: 'Nothing to report.' };
+    }
+
+    // Events that no longer describe the job (a completed job reopened before
+    // the digest ran) are dropped, not reported — but they're still stamped, so
+    // completing that job again queues a fresh event for a later digest.
+    const stale = events.filter((e) => !keep(e));
+    const lines = events.filter(keep);
+    if (lines.length === 0) {
+      await markDigestEventsSent(stale.map((e) => e.id));
+      return {
+        status: 'skipped',
+        count: 0,
+        attempted: 0,
+        jobs: 0,
+        reason: 'Nothing left to report once reopened jobs were dropped.',
+      };
+    }
+
     const loaded = await loadConfigOrReason();
     if (!loaded.ok) {
-      console.warn(`[email] ${label} not sent: ${loaded.reason}`);
-      return { status: 'error', count: 0, attempted: 0, reason: loaded.reason };
+      console.warn(`[email] ${label} digest not sent: ${loaded.reason}`);
+      return { status: 'skipped', count: 0, attempted: 0, jobs: 0, reason: loaded.reason };
     }
-    const project = await loadProject(projectId);
-    if (!project) return { status: 'error', count: 0, attempted: 0, reason: 'project not found' };
 
     const recipients = await resolveRecipients();
     if (recipients.length === 0) {
-      console.warn(`[email] ${label}: no subscribed recipients (no-op).`);
-      return { status: 'sent', count: 0, attempted: 0 };
+      // Nobody subscribes to this digest, so the queue would grow forever.
+      await markDigestEventsSent(events.map((e) => e.id));
+      return {
+        status: 'skipped',
+        count: 0,
+        attempted: 0,
+        jobs: lines.length,
+        reason: 'No subscribed recipients.',
+      };
     }
-    const sent = await deliverEach(recipients, (r) => render(r, project), loaded.cfg);
-    return { status: 'sent', count: sent, attempted: recipients.length };
+
+    const dayLabel = digestDay(new Date());
+    const body = lines.map(digestLine);
+    const sent = await deliverEach(recipients, (r) => render(r, dayLabel, body), loaded.cfg);
+    if (sent === 0) {
+      return {
+        status: 'error',
+        count: 0,
+        attempted: recipients.length,
+        jobs: lines.length,
+        reason: `Every ${label} digest email failed to send; see server logs.`,
+      };
+    }
+    // Reported: this digest named them, so no later one should.
+    await markDigestEventsSent(events.map((e) => e.id));
+    return { status: 'sent', count: sent, attempted: recipients.length, jobs: lines.length };
   } catch (err) {
-    // Best-effort: never let an email failure bubble into the business action.
-    console.error(`[email] ${label} failed:`, err);
-    return { status: 'error', count: 0, attempted: 0, reason: (err as Error).message };
+    // Best-effort: the scheduler must never crash over an email problem.
+    console.error(`[email] ${label} digest failed:`, err);
+    return { status: 'error', count: 0, attempted: 0, jobs: 0, reason: (err as Error).message };
   }
+}
+
+/** SCHEDULED: the day's sold work — quotes marked sold and moved to projects. */
+export async function sendSoldWorkDigest(): Promise<SendDigestResult> {
+  return sendDigest(
+    'new_project',
+    newProjectRecipients,
+    buildSoldWorkDigestEmail,
+    // A sold job stays sold: nothing about the project can make the sale untrue.
+    () => true,
+    'sold-work'
+  );
+}
+
+/** SCHEDULED: the day's completed jobs. */
+export async function sendCompletedJobsDigest(): Promise<SendDigestResult> {
+  return sendDigest(
+    'job_completed',
+    completionRecipients,
+    buildCompletedJobsDigestEmail,
+    // Reopened since it was queued — don't report a job as finished when it isn't.
+    (e) => e.status === 'completed',
+    'completed-jobs'
+  );
 }
 
 /* ------------------------------------------------- On demand: schedule send */

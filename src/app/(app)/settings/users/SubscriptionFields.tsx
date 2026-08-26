@@ -15,13 +15,13 @@ export interface SubscriptionDefaults {
 const EMAIL_TYPES: { name: keyof SubscriptionDefaults; label: string; hint: string }[] = [
   {
     name: 'receives_new_project_emails',
-    label: 'New projects',
-    hint: 'Emailed when a quote is sold and moved into projects.',
+    label: 'Sold work',
+    hint: 'One email at the end of each day listing the work we won.',
   },
   {
     name: 'receives_completion_emails',
-    label: 'Job completions',
-    hint: 'Emailed when a job is marked complete.',
+    label: 'Completed jobs',
+    hint: 'One email at the end of each day listing the jobs marked complete.',
   },
 ];
 

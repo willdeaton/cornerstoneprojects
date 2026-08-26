@@ -18,7 +18,7 @@ import {
   deleteProjectInvoice,
   deleteInvoiceFile,
 } from '@/lib/data';
-import { sendJobCompletedEmail } from '@/lib/email/send';
+import { queueJobCompletedDigest } from '@/lib/email/digest-queue';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -70,9 +70,9 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
   await requireUser();
   const progress = status === 'completed' ? 100 : status === 'not_started' ? 0 : undefined;
   await updateProject(id, progress != null ? { status, progress } : { status });
-  // Best-effort completion notification when a job is marked complete; must not
-  // block the status update.
-  if (status === 'completed') await sendJobCompletedEmail(id);
+  // Queue it for the daily completed-jobs digest when a job is marked complete;
+  // must not block the status update.
+  if (status === 'completed') await queueJobCompletedDigest(id);
   revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
