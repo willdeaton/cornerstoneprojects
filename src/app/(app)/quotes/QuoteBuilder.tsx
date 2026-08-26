@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { money } from '@/lib/format';
+import { money, dateTime } from '@/lib/format';
 import { sanitizeRichText, isRichTextEmpty, richTextToPlain } from '@/lib/richtext';
 import { blockTotals } from '@/lib/quote-math';
 import { Modal } from '@/components/Modal';
@@ -31,6 +31,8 @@ import {
 } from '@/app/actions/quotes';
 import { ABBREVIATION_LENGTH, normalizeAbbreviation, quoteNumberBase } from '@/lib/quote-number';
 import { quickAddPricingItemAction, quickAddCustomerAction, quickAddContactAction } from '@/app/actions/catalog';
+import { clearQuoteDraft, quoteDraftKey } from '@/lib/quote-draft';
+import { useQuoteDraft } from './useQuoteDraft';
 import { QuoteFiles } from './QuoteFiles';
 
 /** Internal cost worksheet row — never printed on the customer PDF. */
@@ -178,12 +180,15 @@ interface RowEntry {
 function LineItemTable({
   entries,
   canRemove,
+  invalid,
   onChange,
   onMove,
   onRemove,
 }: {
   entries: RowEntry[];
   canRemove: boolean;
+  /** Rows a save is blocked on, by their index in the flat `displayRows` array. */
+  invalid?: Set<number>;
   onChange: (index: number, patch: Partial<DisplayRow>) => void;
   onMove: (index: number, dir: -1 | 1) => void;
   onRemove: (index: number) => void;
@@ -204,7 +209,12 @@ function LineItemTable({
           {entries.map(({ row, index }, pos) => (
             // Keyed by the row's index in the flat array, not its position in
             // this block, so the rich-text editors never swap contents.
-            <tr key={index} className="border-b border-black/5 last:border-0 align-top">
+            <tr
+              key={index}
+              className={`border-b border-black/5 last:border-0 align-top ${
+                invalid?.has(index) ? 'bg-red-50/60' : ''
+              }`}
+            >
               <td className="px-2 py-2">
                 <RichTextEditor
                   value={row.description}
@@ -214,8 +224,11 @@ function LineItemTable({
               </td>
               <td className="px-2 py-2">
                 <input
-                  className="input text-right"
+                  className={`input text-right ${
+                    invalid?.has(index) ? 'ring-1 ring-red-400' : ''
+                  }`}
                   inputMode="decimal"
+                  aria-invalid={invalid?.has(index) || undefined}
                   value={row.amount}
                   onChange={(e) => onChange(index, { amount: e.target.value })}
                   placeholder="0.00"
@@ -322,6 +335,19 @@ export function QuoteBuilder({
   const listHref = useListHref('quotes', '/quotes');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Rows a save is blocked on — a price with nothing to label it. Held by their
+  // index in `pricingRows` / `displayRows`, which is what the tables render by.
+  const [badPricing, setBadPricing] = useState<Set<number>>(new Set());
+  const [badDisplay, setBadDisplay] = useState<Set<number>>(new Set());
+  /**
+   * Clear the last failure. Called wherever a save begins, so the red rows from
+   * the previous attempt don't outlive it.
+   */
+  function clearProblems() {
+    setError(null);
+    setBadPricing(new Set());
+    setBadDisplay(new Set());
+  }
   // Collapsible cards. Line Items — the heart of the quote — starts open; the
   // supporting cards start collapsed so the form opens on the work that matters.
   // Collapsing only hides the inputs on screen, it never changes what gets saved.
@@ -344,6 +370,9 @@ export function QuoteBuilder({
   const [savePrompt, setSavePrompt] = useState<{ items: NewPriceItem[]; mode: SaveMode } | null>(null);
   const [selectedNew, setSelectedNew] = useState<Set<number>>(new Set());
   const [addingToBook, setAddingToBook] = useState(false);
+  // Descriptions already offered for the price book this session, so a "skip"
+  // isn't re-asked on every subsequent save.
+  const promptedRef = useRef<Set<string>>(new Set());
 
   // A plain Save on an existing quote now persists in place instead of leaving
   // the page. Once it has saved at least once, the "Cancel" button becomes
@@ -702,6 +731,44 @@ export function QuoteBuilder({
   const [savedSnapshot, setSavedSnapshot] = useState(snapshot);
   const dirty = snapshot !== savedSnapshot;
 
+  // The recovery net. Nothing here reaches the server — a quote is still only
+  // written when somebody presses Save — but the work in the form survives a
+  // closed tab, a stray Back, or a lost browser.
+  const draft = useQuoteDraft({
+    quoteId: quote?.id ?? 'new',
+    snapshot,
+    dirty,
+    updatedAt: quote?.updated_at ?? null,
+  });
+
+  /**
+   * Put a stashed draft back into the form. The snapshot is the builder's own
+   * serialization, but it has been round-tripped through storage since, so its
+   * shape is checked before anything is applied — a draft that doesn't parse is
+   * dropped rather than allowed to break the form it was meant to protect.
+   */
+  function restoreDraft() {
+    const snap = draft.restore();
+    if (!snap) return;
+    try {
+      const parsed = JSON.parse(snap) as {
+        header?: typeof header;
+        pricingRows?: PricingRow[];
+        displayRows?: DisplayRow[];
+      };
+      if (!parsed?.header || !Array.isArray(parsed.pricingRows) || !Array.isArray(parsed.displayRows)) {
+        return;
+      }
+      // Merge over the current header rather than replacing it, so a draft taken
+      // before a field was added doesn't leave that field undefined.
+      setHeader((h) => ({ ...h, ...parsed.header }));
+      setPricingRows(parsed.pricingRows.length ? parsed.pricingRows : [blankPricingRow()]);
+      setDisplayRows(parsed.displayRows.length ? parsed.displayRows : [blankDisplayRow()]);
+    } catch {
+      /* an unreadable draft is simply no draft */
+    }
+  }
+
   const pricingSubtotal = useMemo(
     () => pricingRows.reduce((s, r) => s + num(r.quantity) * num(r.unit_price), 0),
     [pricingRows]
@@ -839,37 +906,106 @@ export function QuoteBuilder({
   }
 
   /**
-   * Save entry point. Validates, then — on the quote's FIRST save only, if the
-   * worksheet has prices not yet in the book — opens the single "add to pricing
-   * list?" prompt before saving. Once a quote has been saved (i.e. we're
-   * editing an existing one), it saves straight away without asking again.
+   * A row carrying a price but no description is dropped on its way to the
+   * database, and its money goes with it — the base Total falls, and so does the
+   * quote's headline value. So stop the save and name the row instead: making
+   * somebody label a line is a far smaller cost than losing a price without
+   * telling them.
+   *
+   * Pricing-option rows are deliberately exempt. They are already kept unlabelled
+   * on purpose, precisely so a real price is never lost to a missing name.
    */
-  function save(mode: SaveMode) {
-    setError(null);
+  function validatePricedRows(): {
+    message: string;
+    pricing: Set<number>;
+    display: Set<number>;
+  } | null {
+    const pricing = new Set<number>();
+    const display = new Set<number>();
+    const named: string[] = [];
+
+    // A unit price with nothing to label it, whatever the quantity — a row
+    // priced at $0 is just an unfinished row, not a loss.
+    pricingRows.forEach((r, i) => {
+      if (r.description.trim() || num(r.unit_price) === 0) return;
+      pricing.add(i);
+    });
+
+    // Numbered as they read on screen: the base block counts its own rows.
+    let basePos = 0;
+    displayRows.forEach((r, i) => {
+      if (r.option !== null) return;
+      basePos++;
+      if (!isRichTextEmpty(r.description)) return;
+      if (num(r.amount) === 0) return;
+      display.add(i);
+      named.push(`Line ${basePos}`);
+    });
+
+    let worksheetPos = 0;
+    pricingRows.forEach((r, i) => {
+      worksheetPos++;
+      if (pricing.has(i)) named.push(`cost worksheet row ${worksheetPos}`);
+    });
+
+    if (named.length === 0) return null;
+    const shown = named.slice(0, 3).join(', ');
+    const rest = named.length - 3;
+    const subject = named.length === 1 ? `${shown} has` : `${shown}${rest > 0 ? ` and ${rest} more` : ''} have`;
+    return {
+      message: `${subject} a price but no description. Add one, or clear the price — otherwise it won't be saved.`,
+      pricing,
+      display,
+    };
+  }
+
+  /** Run both validations, showing the first failure. True when the save may go on. */
+  function validateForSave(): boolean {
+    clearProblems();
     const invalid = validateHeader();
     if (invalid) {
       setError(invalid);
-      return;
+      return false;
     }
-    if (!quote) {
-      const newItems = collectNewPricingItems();
-      if (newItems.length > 0) {
-        // Default every candidate to checked — the common case is "yes, save these".
-        setSelectedNew(new Set(newItems.map((_, i) => i)));
-        setSavePrompt({ items: newItems, mode });
-        return;
-      }
+    const priced = validatePricedRows();
+    if (priced) {
+      setError(priced.message);
+      setBadPricing(priced.pricing);
+      setBadDisplay(priced.display);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Save entry point. Validates, then — if the worksheet has prices not yet in
+   * the book — opens the single "add to pricing list?" prompt before saving.
+   * The prompt is offered on every save, not just a new quote's first one: a
+   * price typed in on a later edit is worth keeping too, and the candidates are
+   * already filtered against the book, so a save with nothing new asks nothing.
+   *
+   * `promptedRef` remembers what has already been offered this session, so
+   * somebody who said no isn't asked about the same rows again on every save.
+   */
+  function save(mode: SaveMode) {
+    if (!validateForSave()) return;
+    const newItems = collectNewPricingItems().filter(
+      (it) => !promptedRef.current.has(normDesc(it.description))
+    );
+    if (newItems.length > 0) {
+      for (const it of newItems) promptedRef.current.add(normDesc(it.description));
+      // Default every candidate to checked — the common case is "yes, save these".
+      setSelectedNew(new Set(newItems.map((_, i) => i)));
+      setSavePrompt({ items: newItems, mode });
+      return;
     }
     void doSave(mode);
   }
 
   async function doSave(mode: SaveMode) {
-    setError(null);
-    const invalid = validateHeader();
-    if (invalid) {
-      setError(invalid);
-      return;
-    }
+    // Re-checked here as well as in `save`, because the price-book prompt
+    // re-enters through this function rather than through `save`.
+    if (!validateForSave()) return;
     const items: LineItemInput[] = [
       ...pricingRows
         .filter((r) => r.description.trim())
@@ -948,6 +1084,18 @@ export function QuoteBuilder({
         setSaving(false);
         return;
       }
+      // The write reports how many line items reached the database. If that's
+      // short of what we sent, something was dropped on the way in — say so and
+      // leave the form dirty rather than showing a "Saved ✓" it hasn't earned.
+      const short =
+        res && 'saved' in res && typeof res.saved === 'number' && typeof res.sent === 'number'
+          ? res.sent - res.saved
+          : 0;
+
+      // A save that landed is the end of the draft: the work is in the database
+      // now, and a stale stash would offer to undo it.
+      draft.clear();
+
       // 'stay' saves in place and returns here; 'list'/'pdf' redirect
       // server-side (this component unmounts before we get here).
       if (mode === 'stay') {
@@ -955,10 +1103,20 @@ export function QuoteBuilder({
         // quote's edit page so the next Save updates it instead of creating
         // a duplicate. `saved=1` keeps the "Saved ✓" state across the swap.
         if (!quote && res && 'id' in res) {
+          // The builder remounts on the new route under the real quote's draft
+          // key, so clear the 'new' one first — otherwise a draft of the quote
+          // as it was before saving outlives the quote it was a draft of.
+          clearQuoteDraft(quoteDraftKey('new'));
           router.replace(`/quotes/${res.id}/edit?saved=1`);
           return;
         }
         setSaving(false);
+        if (short > 0) {
+          setError(
+            `Saved, but ${short} line${short === 1 ? '' : 's'} did not store. Check for rows with a price and no description.`
+          );
+          return;
+        }
         // Mark the just-saved state as the new clean baseline so the form no
         // longer reads as having unsaved edits, and flip Cancel → Close.
         setSavedSnapshot(snapshot);
@@ -988,6 +1146,26 @@ export function QuoteBuilder({
 
   return (
     <div className="space-y-6">
+      {/* Unsaved work found from a previous visit. Offered, never applied on its
+          own: the form on screen is what the database has, and it stays that way
+          until the user asks for the draft back. */}
+      {draft.offered && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+          <span className="text-brand-ink">
+            You have unsaved changes to this quote from{' '}
+            <span className="font-semibold">{dateTime(new Date(draft.offered.savedAt).toISOString())}</span>.
+          </span>
+          <div className="ml-auto flex gap-2">
+            <button type="button" className="btn-secondary" onClick={draft.dismiss}>
+              Discard
+            </button>
+            <button type="button" className="btn-primary" onClick={restoreDraft}>
+              Restore
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Customer / project details */}
       <div className="card p-5">
         <h2 className="brand-heading mb-4 text-sm text-brand-ink">Customer &amp; Project</h2>
@@ -1163,6 +1341,7 @@ export function QuoteBuilder({
             <LineItemTable
               entries={baseEntries}
               canRemove={baseEntries.length > 1}
+              invalid={badDisplay}
               onChange={updateDisplay}
               onMove={moveDisplay}
               onRemove={removeDisplay}
@@ -1275,7 +1454,7 @@ export function QuoteBuilder({
           <>
             <p className="mb-4 mt-1 text-xs text-brand-gray">
               Internal cost breakdown — <span className="font-semibold">not shown on the quote PDF</span>. Pick a saved
-              price from the Description dropdown, or type your own — when you first save the quote you&apos;ll be asked
+              price from the Description dropdown, or type your own — when you save you&apos;ll be asked
               whether to add any new prices to your pricing list. Then enter what the customer sees in Line Items above.
             </p>
             <div className="overflow-x-auto">
@@ -1293,10 +1472,16 @@ export function QuoteBuilder({
                 </thead>
                 <tbody>
                   {pricingRows.map((r, i) => (
-                    <tr key={i} className="border-b border-black/5 last:border-0 align-top">
+                    <tr
+                      key={i}
+                      className={`border-b border-black/5 last:border-0 align-top ${
+                        badPricing.has(i) ? 'bg-red-50/60' : ''
+                      }`}
+                    >
                       <td className="px-2 py-2">
                         <input
-                          className="input"
+                          className={`input ${badPricing.has(i) ? 'ring-1 ring-red-400' : ''}`}
+                          aria-invalid={badPricing.has(i) || undefined}
                           list="qb-pricebook"
                           value={r.description}
                           onChange={(e) => applyPriceBook(i, e.target.value)}
@@ -1677,6 +1862,9 @@ export function QuoteBuilder({
                 className="btn-secondary text-red-600"
                 onClick={() => {
                   setClosePrompt(false);
+                  // Discarding means discarding: leaving the stash behind would
+                  // offer the edits back the next time the quote is opened.
+                  draft.clear();
                   router.push(listHref);
                 }}
                 disabled={saving}
