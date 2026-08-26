@@ -352,8 +352,8 @@ To start fresh, drop and recreate the database (or `TRUNCATE` its tables).
 
 ## Email notifications
 
-Automated email (sender identity, per-user subscriptions, and event-driven
-new-project / job-completion notifications) is built in.
+Automated email (sender identity, per-user subscriptions, and the daily
+sold-work / completed-jobs digests) is built in.
 
 - **Sender identity** lives in a single settings row, edited under **Settings →
   Email Settings** (`from_name` / `from_email`). The from address must be a
@@ -365,14 +365,24 @@ new-project / job-completion notifications) is built in.
 - **Who receives what** is controlled per-user with subscription checkboxes in
   the user add/edit forms (Users page). Addresses resolve
   `personal_email → work_email → login email`.
-- **Event-driven emails** are sent inline from the action that triggers them —
-  no scheduler or cron config required:
-  - **New project** — sent when a quote is marked sold and converted into a
-    project (single or bulk convert).
-  - **Job completion** — sent when a project's status is set to *completed*.
+- **Daily digests** are the two subscription emails. Selling a quote or
+  completing a job no longer emails anybody on the spot — each one queues an
+  event, and once a day the queue goes out as ONE email per kind with a summary
+  line and the list behind it:
+  - **Sold work** — everything marked sold and converted into a project (single
+    or bulk convert), with the total value won.
+  - **Completed jobs** — every project whose status was set to *completed*, with
+    the total value finished.
 
-  Both are best-effort: an email failure never blocks the underlying action.
-  Send a test message with `POST /api/test-email`.
+  They send from **17:00** in the payroll timezone (`PAYROLL_TZ`, default
+  `America/Chicago`); set **`DIGEST_SEND_HOUR`** (0–23) to move that. A digest
+  covers everything still unreported, so a day the server was down or email was
+  unconfigured is carried into the next one rather than lost, and each row shows
+  the day it landed. A day with nothing to report sends nothing.
+
+  Queueing is best-effort: it never blocks the underlying action, and a job
+  deleted (or a completed job reopened) before the digest runs is dropped from
+  it. Send a test message with `POST /api/test-email`.
 
 Email body/HTML content is authored in `src/lib/email/templates.ts`.
 

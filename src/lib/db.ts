@@ -310,9 +310,10 @@ Your City, ST 00000',
     INSERT INTO email_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
     -- Per-user subscription flags: one boolean column per subscribable email
-    -- type. Both remaining emails are EVENT-DRIVEN:
-    --   receives_new_project_emails -> quote sold & converted into a project
-    --   receives_completion_emails  -> project marked complete
+    -- type. Both flags now drive a once-a-day DIGEST rather than a per-event
+    -- email (see email_digest_events below):
+    --   receives_new_project_emails -> the day's sold work
+    --   receives_completion_emails  -> the day's completed jobs
     ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_new_project_emails BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS receives_completion_emails  BOOLEAN NOT NULL DEFAULT false;
 
@@ -338,6 +339,28 @@ Your City, ST 00000',
     -- Ordered email-resolution chain: personal_email -> work_email -> email.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS personal_email TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS work_email     TEXT;
+
+    -- Outbox for the two daily digests. Marking a quote sold or a job complete
+    -- no longer emails anybody on the spot: it drops a row here, and the daily
+    -- digest scheduler collects every unsent row of a kind, sends ONE email
+    -- listing them, and stamps sent_at. Queueing rather than querying by
+    -- timestamp is what makes the digest exact — projects.updated_at moves on
+    -- any edit, so it can't tell what actually happened today, and a server that
+    -- was down at send time still reports the backlog on its next run.
+    CREATE TABLE IF NOT EXISTS email_digest_events (
+      id         SERIAL PRIMARY KEY,
+      kind       TEXT NOT NULL CHECK (kind IN ('new_project','job_completed')),
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      sent_at    TIMESTAMPTZ
+    );
+    -- One pending row per job per kind: a job completed, reopened and completed
+    -- again before the digest runs is still one line in it. The index is partial
+    -- so the same job can appear in a later digest once this one has gone out.
+    CREATE UNIQUE INDEX IF NOT EXISTS email_digest_events_pending_uniq
+      ON email_digest_events (kind, project_id) WHERE sent_at IS NULL;
+    CREATE INDEX IF NOT EXISTS email_digest_events_pending_idx
+      ON email_digest_events (kind, created_at) WHERE sent_at IS NULL;
 
     -- Retired with the scheduled/schedule-change emails: the per-job run locks
     -- and the schedule-change snapshot table are no longer used.

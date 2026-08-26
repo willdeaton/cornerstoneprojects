@@ -33,9 +33,9 @@ catalog, and a data export.
   first connection: `CREATE TABLE IF NOT EXISTS` + `ADD COLUMN IF NOT EXISTS`,
   plus marker-guarded backfills. There is no migration tool and no `migrations/`
   folder — the file *is* the schema history, and it is safe to re-run.
-- **One background job.** `src/instrumentation.ts` starts the weekly
-  time-approval email scheduler (Node runtime only). Everything else is
-  request-driven.
+- **Two background jobs.** `src/instrumentation.ts` starts the weekly
+  time-approval email scheduler and the daily sold-work / completed-jobs digest
+  scheduler (Node runtime only). Everything else is request-driven.
 
 ### The one architectural idea worth knowing
 
@@ -116,8 +116,8 @@ never printed.
 transaction that inserts a `projects` row (carrying quote number, customer,
 name, category, bid value, and a site address taken from the quote's project
 location or the customer's address), flips the quote to `sold`, and commits. It
-also fires the new-project email. This is the *only* bridge between the two
-halves of the app, and it's one-way.
+also queues the job for that day's sold-work digest. This is the *only* bridge
+between the two halves of the app, and it's one-way.
 
 ### Projects `/projects` and `/projects/[id]`
 Sold work, tabbed Active / Not Started / In Progress / Completed / All. The list
@@ -129,7 +129,9 @@ hangs off:
 
 - **Status & progress** — setting status to `completed` stamps `completed_at`,
   which is what puts the job on the billing desk and starts its aging clock.
-  (Reopening clears the stamp.) It also fires the job-completion email.
+  (Reopening clears the stamp.) It also queues the job for that day's
+  completed-jobs digest — and reopening it before the digest goes out drops it
+  from the digest too.
 - **Invoices** — one `project_invoices` row per invoice: the invoice number, the
   customer's **PO number**, the amount, the day it was **sent** (`sent_on`), two
   independent flags — **billed** (it has gone out) and **paid** (money landed) —
@@ -369,7 +371,8 @@ panel showing who's working and who's on break. Employees don't see that panel.
 person, with paid/unpaid totals, mark-as-paid (with a check number), manual
 entry and correction of anyone's time, and weekly approval.
 
-**Weekly approval** is the app's one scheduled job. Every user has a
+**Weekly approval** is one of the app's two scheduled jobs (the other is the
+daily digest pair, under [Email](#email)). Every user has a
 `manager_id`. A 5-minute tick checks the clock in `PAYROLL_TZ` (default
 `America/Chicago`) and, Mondays from 7am, emails each manager a day-by-day
 summary of every direct report's prior week with a tokenized **approve link**.
@@ -405,25 +408,46 @@ covering the month that just closed, downloadable straight from the reminder.
 
 ## Email
 
-All event-driven and inline — no cron for any of it except the Monday approval
-send. Transport is the **SendGrid v3 HTTP API**, not SMTP; the key comes from
-`SENDGRID_API_KEY` and is never stored in the database. Nothing sends unless
-both the key and a `from_email` are set. Every send is **best-effort per
-recipient** — one bad address never aborts a batch, and an email failure never
-blocks the action that triggered it.
+Mostly event-driven and inline; the two subscription emails and the Monday
+approval send are scheduled. Transport is the **SendGrid v3 HTTP API**, not
+SMTP; the key comes from `SENDGRID_API_KEY` and is never stored in the database.
+Nothing sends unless both the key and a `from_email` are set. Every send is
+**best-effort per recipient** — one bad address never aborts a batch, and an
+email failure never blocks the action that triggered it.
 
 | Email | Fires when |
 | --- | --- |
-| New project | a quote is marked sold and converted |
-| Job completion | a project's status is set to `completed` |
+| Sold work (daily digest) | once a day, listing every quote sold and converted since the last one |
+| Completed jobs (daily digest) | once a day, listing every job set to `completed` since the last one |
 | Welcome | an admin creates a user |
 | Password reset | requested from the login screen |
 | Schedule | a manager sends it out for a date range (each assignee gets only their own work) |
 | Weekly approval | Monday morning, per manager, scheduled |
 
-Recipients for the first two come from per-user subscription checkboxes;
+Recipients for the two digests come from per-user subscription checkboxes;
 addresses resolve `personal_email → work_email → login email`. Bodies live in
 `src/lib/email/templates.ts`.
+
+**The digests, in detail.** Selling a quote and completing a job used to email
+everyone on the spot, which meant a busy afternoon filled the office's inbox.
+Each now writes a row to `email_digest_events` — an outbox — and
+`lib/digest-scheduler.ts` drains it once a day into ONE email per kind: a
+summary line (jobs and total value) over the list of what was sold or finished.
+
+- **When.** A 5-minute tick fires from **17:00** in `PAYROLL_TZ`
+  (`DIGEST_SEND_HOUR` overrides the hour). A settings-table run-lock keyed by the
+  local date *and* the digest kind means exactly one worker sends each digest
+  each day, and it's released only when a send actually failed — so a day with
+  nothing to report is a finished day, not a retry.
+- **Why an outbox, not a query.** `projects.updated_at` moves on any edit, so it
+  can't tell "sold today" from "someone fixed a typo today". A queue can. It's
+  also what makes the digest lossless: rows are stamped sent only once an email
+  really went out, so a day the server was down or email was unconfigured is
+  carried into the next digest, with each row showing the day it landed.
+- **What drops out.** One pending row per job per kind (a partial unique index),
+  so completing a job twice before the digest is one line. A deleted job's row
+  cascades away, and a completed job reopened before the send is dropped from the
+  digest — completing it again queues it fresh for a later one.
 
 ## How it all interacts — the data spine
 
@@ -553,8 +577,8 @@ want.
 > **Quote → Project** is the only bridge between the two halves of the app, and
 > it's one-way: marking a quote Sold runs a single transaction that creates the
 > job (carrying quote number, customer, name, category, value, and a site
-> address taken from the quote), flips the quote to sold, and emails everyone
-> subscribed to new-project notifications.
+> address taken from the quote), flips the quote to sold, and queues the job for
+> that day's sold-work digest email.
 >
 > **Projects** — sold work, tabbed by status, with progress, value, hours logged
 > and due dates. The **project detail page is the hub everything hangs off**:
@@ -570,8 +594,8 @@ want.
 > "City, ST" label used on lists and quotes.
 >
 > Setting a job to **completed** stamps a completion timestamp. That stamp is
-> what puts it on the billing desk and starts its aging clock, and it fires a
-> job-completion email.
+> what puts it on the billing desk and starts its aging clock, and it queues the
+> job for that day's completed-jobs digest email.
 >
 > **Billing** (admins & managers) — a **queue you work in**: opening a job's row
 > brings its invoice ledger and its stage decisions down into the page, the same
@@ -688,12 +712,14 @@ want.
 > plus the quote PDFs and zips it. A monthly reminder nudges admins to pull the
 > month that just closed.
 >
-> **Email** — all event-driven and inline (only the Monday approval send is
-> scheduled), over a provider HTTP API rather than SMTP, with the key in an
-> environment variable and never in the database. Every send is best-effort per
-> recipient: one bad address never aborts a batch, and an email failure never
-> blocks the action that triggered it. Triggers: new project (quote sold), job
-> completion, welcome, password reset, schedule send, weekly approval.
+> **Email** — mostly event-driven and inline, over a provider HTTP API rather
+> than SMTP, with the key in an environment variable and never in the database.
+> Every send is best-effort per recipient: one bad address never aborts a batch,
+> and an email failure never blocks the action that triggered it. Triggers:
+> welcome, password reset, schedule send. Scheduled: the weekly approval send,
+> and two end-of-day digests — sold work and completed jobs — where selling a
+> quote or completing a job queues an outbox row and the day's queue goes out as
+> one email each, summary plus list.
 >
 > ## What to produce
 >

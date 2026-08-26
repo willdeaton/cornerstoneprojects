@@ -15,7 +15,7 @@ import {
 import type { QuoteDocInput } from '@/lib/types';
 import { quoteNumberBase } from '@/lib/quote-number';
 import { safeListHref } from '@/lib/list-state';
-import { sendNewProjectEmail } from '@/lib/email/send';
+import { queueNewProjectDigest } from '@/lib/email/digest-queue';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -183,8 +183,8 @@ export async function deleteQuoteAction(id: number) {
 export async function convertQuoteAction(id: number) {
   await requireUser();
   const projectId = await convertQuoteToProject(id);
-  // Best-effort new-project notification; must not block the conversion.
-  if (projectId) await sendNewProjectEmail(projectId);
+  // Queue it for the daily sold-work digest; must not block the conversion.
+  if (projectId) await queueNewProjectDigest(projectId);
   revalidatePath('/quotes');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
@@ -229,8 +229,8 @@ export async function bulkMarkQuotesSoldAction(ids: number[]) {
     const quote = await getQuote(id);
     if (quote && quote.status === 'open') {
       const projectId = await convertQuoteToProject(id);
-      // Best-effort new-project notification per converted quote.
-      if (projectId) await sendNewProjectEmail(projectId);
+      // One digest line per converted quote — they all land in one email.
+      if (projectId) await queueNewProjectDigest(projectId);
       count++;
     }
   }

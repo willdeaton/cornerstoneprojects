@@ -12,8 +12,9 @@ export default async function EmailSettingsPage() {
       <div className="card p-6">
         <h2 className="brand-heading mb-1 text-sm text-brand-gray">Email Settings</h2>
         <p className="mb-5 text-sm text-brand-gray">
-          Sender identity for automated notifications (new-project and job-completion
-          emails). Who receives each email type is controlled per-user on the Users tab.
+          Sender identity for automated notifications (the daily sold-work and
+          completed-jobs digests). Who receives each email type is controlled per-user
+          on the Users tab.
         </p>
         <EmailSettings />
       </div>
