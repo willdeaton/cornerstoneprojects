@@ -17,9 +17,9 @@ export default async function ScheduleSettingsPage() {
       <div className="mb-4">
         <h2 className="brand-heading text-sm text-brand-gray">Non-Working Days</h2>
         <p className="text-sm text-brand-gray">
-          Holidays and shutdown days. Saturdays and Sundays are already skipped everywhere; days
-          listed here are skipped too, so a phase&apos;s duration stretches around them and every
-          projected end date moves accordingly.
+          Holidays and shutdown days — click them straight off the calendar. Saturdays and Sundays
+          are already skipped everywhere; days blocked here are skipped too, so a phase&apos;s
+          duration stretches around them and every projected end date moves accordingly.
         </p>
       </div>
       <HolidaysManager holidays={holidays} />
