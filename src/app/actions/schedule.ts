@@ -36,8 +36,9 @@ import {
   createSubcontractor,
   updateSubcontractor,
   deleteSubcontractor,
-  addHoliday,
-  deleteHoliday,
+  addHolidays,
+  deleteHolidays,
+  type Holiday,
   addWarehouseDays,
   removeWarehouseDay,
   type CrewDayInput,
@@ -50,6 +51,7 @@ import {
   computeSchedule,
   crewBudget,
   isValidTime,
+  isWeekend,
   wouldCycle,
 } from '@/lib/schedule-math';
 import { shortDate } from '@/lib/format';
@@ -1070,18 +1072,31 @@ export async function deleteSubcontractorAction(id: number): Promise<ActionResul
 
 /* -------------------------------------------------------------- Holidays */
 
-export async function saveHolidayAction(day: string, label: string | null): Promise<ActionResult> {
-  await requireManager();
-  if (!day) return { ok: false, error: 'Pick a date.' };
-  await addHoliday(day, clean(label));
-  revalidatePath('/settings/schedule');
-  revalidateSchedule();
-  return { ok: true };
-}
+/** A 'YYYY-MM-DD' day, the only shape the DATE columns accept. */
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export async function deleteHolidayAction(day: string): Promise<ActionResult> {
+/**
+ * Save a run of calendar picks in one go: the days newly blocked and the days
+ * freed again. Weekends are dropped rather than rejected — they are already
+ * skipped everywhere, so blocking one would be a row that changes nothing.
+ */
+export async function saveHolidaysAction(
+  block: Holiday[],
+  unblock: string[]
+): Promise<ActionResult> {
   await requireManager();
-  await deleteHoliday(day);
+
+  const add = block
+    .filter((h) => DAY_RE.test(h.day) && !isWeekend(h.day))
+    .map((h) => ({ day: h.day, label: clean(h.label) }));
+  const remove = unblock.filter((d) => DAY_RE.test(d));
+
+  if (add.length === 0 && remove.length === 0) {
+    return { ok: false, error: 'Pick at least one day.' };
+  }
+
+  await addHolidays(add);
+  await deleteHolidays(remove);
   revalidatePath('/settings/schedule');
   revalidateSchedule();
   return { ok: true };

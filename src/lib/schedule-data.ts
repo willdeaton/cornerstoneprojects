@@ -640,16 +640,25 @@ export async function listHolidays(): Promise<Holiday[]> {
   return q<Holiday>('SELECT day, label FROM schedule_holidays ORDER BY day');
 }
 
-export async function addHoliday(day: string, label: string | null): Promise<void> {
+/**
+ * Block days as non-working. Written as one statement so picking a whole
+ * shutdown week out of the calendar is a single round trip; a day that is
+ * already blocked keeps its place and takes the new label.
+ */
+export async function addHolidays(rows: Holiday[]): Promise<void> {
+  if (rows.length === 0) return;
   await q(
-    `INSERT INTO schedule_holidays (day, label) VALUES ($1,$2)
+    `INSERT INTO schedule_holidays (day, label)
+     SELECT * FROM UNNEST($1::date[], $2::text[])
      ON CONFLICT (day) DO UPDATE SET label = EXCLUDED.label`,
-    [day, label]
+    [rows.map((r) => r.day), rows.map((r) => r.label)]
   );
 }
 
-export async function deleteHoliday(day: string): Promise<void> {
-  await q('DELETE FROM schedule_holidays WHERE day = $1', [day]);
+/** Unblock days, putting them back into the working-day math. */
+export async function deleteHolidays(days: string[]): Promise<void> {
+  if (days.length === 0) return;
+  await q('DELETE FROM schedule_holidays WHERE day = ANY($1::date[])', [days]);
 }
 
 /** The holiday list shaped as the working-day calendar the solver expects. */
