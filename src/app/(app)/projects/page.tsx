@@ -6,6 +6,7 @@ import { billingSummary, EMPTY_TALLY, type InvoiceTally } from '@/lib/billing';
 import type { ProjectStatus } from '@/lib/types';
 import { PageHeader } from '@/components/ui';
 import { ListMemory } from '@/components/ListMemory';
+import { PrintButton } from '@/components/print';
 import { AddProjectButton } from './AddProjectButton';
 import { ProjectsTable, type ProjectRow } from './ProjectsTable';
 
@@ -70,14 +71,17 @@ export default async function ProjectsPage({
   });
 
   return (
-    <div>
+    // The list is columns-wide, not paragraphs-wide, so it prints landscape.
+    <div className="print-landscape">
       {/* Remembers this tab + scroll offset so "← Back to Projects" lands here. */}
       <ListMemory listKey="projects" />
       <PageHeader title="Projects" subtitle="Sold work and where it stands">
+        {/* Prints the list exactly as it stands — tab, filters, sort and all. */}
+        <PrintButton title="Print the project list" />
         <AddProjectButton />
       </PageHeader>
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="no-print mb-4 flex flex-wrap items-center gap-3">
         <div className="segmented">
           {TABS.map((t) => (
             <Link
@@ -91,7 +95,11 @@ export default async function ProjectsPage({
         </div>
       </div>
 
-      <ProjectsTable rows={rows} canBill={canBill} />
+      <ProjectsTable
+        rows={rows}
+        canBill={canBill}
+        tabLabel={TABS.find((t) => t.key === filter)?.label ?? 'All'}
+      />
     </div>
   );
 }

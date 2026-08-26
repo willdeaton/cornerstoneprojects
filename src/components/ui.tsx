@@ -17,7 +17,10 @@ export function PageHeader({
         <h1 className="brand-heading text-2xl text-brand-ink sm:text-[1.75rem]">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-brand-gray">{subtitle}</p>}
       </div>
-      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+      {/* A page header's children are its actions — add, export, print. The
+          title and subtitle print; the buttons that produced the printout
+          don't. */}
+      {children && <div className="no-print flex flex-wrap items-center gap-2">{children}</div>}
     </div>
   );
 }

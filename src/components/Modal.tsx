@@ -35,7 +35,9 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center"
+      // A dialog is a screen thing: printing with one open should print the
+      // page behind it, not a floating panel over a blank sheet.
+      className="no-print fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center"
       onMouseDown={onClose}
     >
       {/* Scrim: brand ink rather than pure black, with a touch of blur so the
