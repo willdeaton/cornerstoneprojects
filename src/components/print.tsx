@@ -91,11 +91,14 @@ export function PrintMeta({
   );
 }
 
-function PrinterIcon() {
+/** The app's printer glyph. Exported so anything that offers a print — the
+ *  list-view button here, the per-employee timesheet link on Timesheets — shows
+ *  the same mark. */
+export function PrinterIcon({ size = 15 }: { size?: number }) {
   return (
     <svg
-      width="15"
-      height="15"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

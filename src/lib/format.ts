@@ -37,6 +37,14 @@ export function dateTime(iso: string | null | undefined): string {
   });
 }
 
+/** Clock time only, e.g. "7:02 AM" — for a column whose day is already known. */
+export function clockTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 /** Duration between two ISO timestamps (or now if end is null) as "3h 42m". */
 export function duration(startIso: string, endIso: string | null): string {
   const start = new Date(startIso.includes('T') ? startIso : startIso.replace(' ', 'T') + 'Z');

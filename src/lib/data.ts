@@ -1813,6 +1813,189 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
   return weeks_out;
 }
 
+/* ------------------------------------------------- Printable weekly timesheet */
+
+export interface TimesheetEntry {
+  id: number;
+  clock_in: string;
+  clock_out: string | null;
+  project_name: string | null;
+  customer: string | null;
+  note: string | null;
+  break_minutes: number;
+  net_hours: number;
+  paid: boolean;
+  check_number: string | null;
+}
+
+/** One calendar day of the printed week — present even with nothing logged. */
+export interface TimesheetDay {
+  /** YYYY-MM-DD */
+  date: string;
+  entries: TimesheetEntry[];
+  /** Net hours from the day's CLOSED shifts (an open shift counts as zero). */
+  hours: number;
+  break_minutes: number;
+}
+
+export interface EmployeeWeekTimesheet {
+  user_id: number;
+  user_name: string;
+  /** Hourly pay rate, when one is set — drives the gross-pay line. */
+  hourly_rate: number | null;
+  manager_name: string | null;
+  /** Monday of the week (YYYY-MM-DD), normalized from whatever date was asked for. */
+  week_start: string;
+  /** Sunday of the same week (YYYY-MM-DD). */
+  week_end: string;
+  /** Monday..Sunday, always seven days. */
+  days: TimesheetDay[];
+  total_hours: number;
+  paid_hours: number;
+  unpaid_hours: number;
+  total_break_minutes: number;
+  /** Shifts still on the clock — printed as in-progress and totalled as zero. */
+  open_count: number;
+  /** Distinct check number(s) recorded against the week's paid shifts. */
+  check_number: string | null;
+  approved_at: string | null;
+  approved_by_name: string | null;
+}
+
+/**
+ * One employee's Monday-start week, laid out day by day for the printable
+ * timesheet at `/timesheets/[userId]/[weekStart]/print`.
+ *
+ * Days and weeks are bucketed with date_trunc/to_char in the DATABASE's
+ * timezone — the same basis as adminTimeByWeek and setWeekPaid — so the sheet
+ * that comes off the printer carries exactly the hours the Timesheets page
+ * showed for that week. Open shifts are included so a mid-week printout shows
+ * them, but they contribute no hours (there is no net time until a shift
+ * closes), which is also how the review table totals a week.
+ *
+ * Returns null when there is no such user.
+ */
+export async function employeeWeekTimesheet(
+  userId: number,
+  weekStart: string
+): Promise<EmployeeWeekTimesheet | null> {
+  const user = await one<{
+    id: number;
+    name: string;
+    hourly_rate: number | null;
+    manager_name: string | null;
+  }>(
+    `SELECT u.id, u.name, u.hourly_rate, m.name AS manager_name
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  if (!user) return null;
+
+  // Normalize whatever date was asked for to that week's Monday, and lay out
+  // the seven days from it, in the database's timezone.
+  const week = await one<{ week_start: string; week_end: string }>(
+    `SELECT to_char(date_trunc('week', $1::date), 'YYYY-MM-DD') AS week_start,
+            to_char(date_trunc('week', $1::date) + INTERVAL '6 days', 'YYYY-MM-DD') AS week_end`,
+    [weekStart]
+  );
+  const monday = week!.week_start;
+
+  const dates = (
+    await q<{ d: string }>(
+      `SELECT to_char(gs, 'YYYY-MM-DD') AS d
+         FROM generate_series($1::date, $1::date + 6, INTERVAL '1 day') gs`,
+      [monday]
+    )
+  ).map((r) => r.d);
+
+  const rows = await q<{
+    id: number;
+    day: string;
+    project_name: string | null;
+    customer: string | null;
+    clock_in: string;
+    clock_out: string | null;
+    note: string | null;
+    paid: boolean;
+    check_number: string | null;
+    break_seconds: number;
+  }>(
+    `SELECT t.id, to_char(t.clock_in, 'YYYY-MM-DD') AS day,
+            p.name AS project_name, p.customer,
+            t.clock_in, t.clock_out, t.note, t.paid, t.check_number,
+            COALESCE((
+              SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
+              FROM time_breaks b WHERE b.time_entry_id = t.id
+            ), 0) AS break_seconds
+       FROM time_entries t
+       LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.user_id = $1
+        AND date_trunc('week', t.clock_in) = date_trunc('week', $2::date)
+      ORDER BY t.clock_in`,
+    [userId, monday]
+  );
+
+  const approval = await one<{ approved_at: string; approved_by_name: string | null }>(
+    `SELECT a.approved_at, ap.name AS approved_by_name
+       FROM time_week_approvals a
+       LEFT JOIN users ap ON ap.id = a.approved_by
+      WHERE a.user_id = $1 AND a.week_start = $2::date`,
+    [userId, monday]
+  );
+
+  const entries: (TimesheetEntry & { day: string })[] = rows.map((r) => {
+    const breakHours = r.break_seconds / 3600;
+    return {
+      day: r.day,
+      id: r.id,
+      clock_in: r.clock_in,
+      clock_out: r.clock_out,
+      project_name: r.project_name,
+      customer: r.customer,
+      note: r.note,
+      paid: r.paid,
+      check_number: r.check_number,
+      break_minutes: Math.round(r.break_seconds / 60),
+      net_hours: r.clock_out
+        ? Math.max(0, hoursBetween(r.clock_in, r.clock_out) - breakHours)
+        : 0,
+    };
+  });
+
+  const days: TimesheetDay[] = dates.map((date) => {
+    const mine = entries.filter((e) => e.day === date);
+    return {
+      date,
+      entries: mine.map(({ day: _day, ...e }) => e),
+      hours: mine.reduce((s, e) => s + e.net_hours, 0),
+      break_minutes: mine.reduce((s, e) => s + e.break_minutes, 0),
+    };
+  });
+
+  const closed = entries.filter((e) => e.clock_out);
+  const checks = [...new Set(closed.filter((e) => e.paid && e.check_number).map((e) => e.check_number as string))];
+
+  return {
+    user_id: user.id,
+    user_name: user.name,
+    hourly_rate: user.hourly_rate,
+    manager_name: user.manager_name,
+    week_start: monday,
+    week_end: week!.week_end,
+    days,
+    total_hours: closed.reduce((s, e) => s + e.net_hours, 0),
+    paid_hours: closed.filter((e) => e.paid).reduce((s, e) => s + e.net_hours, 0),
+    unpaid_hours: closed.filter((e) => !e.paid).reduce((s, e) => s + e.net_hours, 0),
+    total_break_minutes: entries.reduce((s, e) => s + e.break_minutes, 0),
+    open_count: entries.length - closed.length,
+    check_number: checks.length > 0 ? checks.join(', ') : null,
+    approved_at: approval?.approved_at ?? null,
+    approved_by_name: approval?.approved_by_name ?? null,
+  };
+}
+
 /** Mark a single time entry paid/unpaid. Unmarking clears the check number. */
 export async function setEntryPaid(entryId: number, paid: boolean, adminId: number): Promise<void> {
   await q(

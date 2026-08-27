@@ -395,6 +395,17 @@ panel showing who's working and who's on break. Employees don't see that panel.
 person, with paid/unpaid totals, mark-as-paid (with a check number), manual
 entry and correction of anyone's time, and weekly approval.
 
+**`/timesheets/[userId]/[weekStart]/print`** is one employee's week on a sheet
+of paper, reached from the printer icon on their row (and from *Print timesheet*
+under their shifts): company header, every day of the week whether or not
+anything was logged, each shift's in/out/break/job, day subtotals, the weekly
+total, rate and gross pay when a rate is set, paid-vs-unpaid with the check
+number, the approval, and employee/supervisor sign-off lines. `weekStart` can be
+any date inside the week — it's normalized to that week's Monday, so the review
+table's week key passes straight through. Same admin/manager gate as the review
+page (the sheet carries pay rates), and the same browser-print / html2pdf
+toolbar as the quote document.
+
 **Weekly approval** is one of the app's two scheduled jobs (the other is the
 daily digest pair, under [Email](#email)). Every user has a
 `manager_id`. A 5-minute tick checks the clock in `PAYROLL_TZ` (default
@@ -715,7 +726,9 @@ want.
 >
 > **Timesheets** (admins & managers) — 8 weeks of hours by week and person, paid
 > vs unpaid, mark-as-paid with a check number, manual entry and correction of
-> anyone's time, and weekly approval.
+> anyone's time, and weekly approval. Any employee's week prints as a signable
+> **timesheet** — day by day with breaks, day subtotals, the weekly total, gross
+> pay where a rate is set, and sign-off lines — either to the printer or as a PDF.
 >
 > **Weekly time approval** — the app's only scheduled job. Every user has a
 > manager. Monday mornings, each manager is emailed a day-by-day summary of

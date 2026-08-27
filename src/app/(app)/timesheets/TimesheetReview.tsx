@@ -1,10 +1,12 @@
 'use client';
 
 import { Fragment, useState, useTransition } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { AdminWeek } from '@/lib/data';
 import { shortDate, dateTime, duration, money } from '@/lib/format';
 import { approveWeekAction, setEntryPaidAction, setWeekPaidAction } from '@/app/actions/time';
+import { PrinterIcon } from '@/components/print';
 import {
   TimeEntryModal,
   type ProjectOption,
@@ -191,23 +193,38 @@ export function TimesheetReview({
                     <Fragment key={k}>
                       <tr className="border-b border-black/5">
                         <td className="px-5 py-3">
-                          <button
-                            className="flex items-center gap-2 font-semibold text-brand-ink hover:text-brand-green-dark"
-                            onClick={() => toggleExpand(k)}
-                          >
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2.5"
-                              className={`transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                          <div className="flex items-center gap-3">
+                            <button
+                              className="flex items-center gap-2 whitespace-nowrap font-semibold text-brand-ink hover:text-brand-green-dark"
+                              onClick={() => toggleExpand(k)}
                             >
-                              <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            {u.user_name}
-                          </button>
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.5"
+                                className={`transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                              >
+                                <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              {u.user_name}
+                            </button>
+                            {/* This person's week as a sheet of paper — the
+                                printable timesheet they sign, and the PDF
+                                payroll gets. Icon only: the row is already
+                                seven columns wide, and the same link is
+                                spelled out in the shifts below. */}
+                            <Link
+                              href={`/timesheets/${u.user_id}/${week.week_start}/print`}
+                              className="text-brand-gray transition hover:text-brand-green-dark"
+                              title={`Print ${u.user_name}'s timesheet for this week`}
+                              aria-label={`Print timesheet for ${u.user_name}`}
+                            >
+                              <PrinterIcon size={13} />
+                            </Link>
+                          </div>
                         </td>
                         <td className="px-3 py-3 text-right font-semibold text-brand-ink">
                           {u.total_hours.toFixed(1)}h
@@ -366,12 +383,21 @@ export function TimesheetReview({
                                 ))}
                                 <tr>
                                   <td colSpan={7} className="pt-2">
-                                    <button
-                                      className="text-xs font-semibold text-brand-green-dark hover:underline"
-                                      onClick={() => openAdd(u.user_id)}
-                                    >
-                                      + Add entry for {u.user_name}
-                                    </button>
+                                    <div className="flex items-center gap-4">
+                                      <button
+                                        className="text-xs font-semibold text-brand-green-dark hover:underline"
+                                        onClick={() => openAdd(u.user_id)}
+                                      >
+                                        + Add entry for {u.user_name}
+                                      </button>
+                                      <Link
+                                        href={`/timesheets/${u.user_id}/${week.week_start}/print`}
+                                        className="inline-flex items-center gap-1 text-xs font-semibold text-brand-gray hover:text-brand-green-dark hover:underline"
+                                      >
+                                        <PrinterIcon size={13} />
+                                        Print timesheet
+                                      </Link>
+                                    </div>
                                   </td>
                                 </tr>
                               </tbody>
