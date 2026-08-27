@@ -16,6 +16,7 @@ import type { QuoteDocInput } from '@/lib/types';
 import { quoteNumberBase } from '@/lib/quote-number';
 import { safeListHref } from '@/lib/list-state';
 import { queueNewProjectDigest } from '@/lib/email/digest-queue';
+import { quoteSyncStateAction } from './quote-sync';
 
 async function requireUser() {
   const user = await getCurrentUser();
@@ -83,6 +84,14 @@ export async function createQuoteDocAction(
  * `{ ok: true, saved, sent }` instead of redirecting) so a plain Save can
  * persist without leaving the form — and so the builder can check that every
  * line it sent was actually stored.
+ *
+ * One case overrides `after` entirely. A quote that has already been marked
+ * **Sold** has a job downstream carrying its figures, and revising it is the
+ * only way the two can come to disagree. When that happens the save lands but
+ * the redirect does not: the difference comes back as `sync`, along with the
+ * `next` href the save was headed for, so the builder can put the revision to
+ * the user before navigating away from the one screen that knows about it.
+ * Quotes that were never sold are untouched by any of this.
  */
 export async function updateQuoteDocAction(
   id: number,
@@ -98,8 +107,14 @@ export async function updateQuoteDocAction(
   revalidatePath('/quotes');
   revalidatePath('/dashboard');
   revalidatePath(`/quotes/${id}/print`);
+
+  const next = after === 'pdf' ? `/quotes/${id}/print` : safeListHref(returnTo, '/quotes');
+  // Null on a quote that was never sold, or whose job already agrees with it.
+  const sync = await quoteSyncStateAction(id);
+  if (sync) return { ok: true, saved, sent: doc.items.length, sync, next: after === 'stay' ? null : next };
+
   if (after === 'stay') return { ok: true, saved, sent: doc.items.length };
-  redirect(after === 'pdf' ? `/quotes/${id}/print` : safeListHref(returnTo, '/quotes'));
+  redirect(next);
 }
 
 /** Trim strings, coerce numbers, and drop blank line items before persisting. */
@@ -179,9 +194,22 @@ export async function deleteQuoteAction(id: number) {
   revalidatePath('/dashboard');
 }
 
-/** Convert a quote into a sold project and jump to it. */
+/**
+ * Convert a quote into a sold project and jump to it.
+ *
+ * Guarded on the quote still being open, the same way the bulk action is. The
+ * menu only offers this on an open quote, but a quote can be reopened and sold
+ * again — and a second conversion would leave two jobs, two schedules and two
+ * billing records behind one quote, with nothing downstream able to say which
+ * of them the quote is the source of.
+ */
 export async function convertQuoteAction(id: number) {
   await requireUser();
+  const quote = await getQuote(id);
+  if (!quote) return { error: 'That quote no longer exists.' };
+  if (quote.status !== 'open') {
+    return { error: 'That quote has already been marked sold or lost. Reopen it first.' };
+  }
   const projectId = await convertQuoteToProject(id);
   // Queue it for the daily sold-work digest; must not block the conversion.
   if (projectId) await queueNewProjectDigest(projectId);

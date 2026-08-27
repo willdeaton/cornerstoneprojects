@@ -15,13 +15,19 @@ function coLabel(coNumber: string): string {
  * Presentational and hook-free on purpose: the Billing tab renders it as a
  * server component, and the change dialog imports the same one so a change you
  * have just recorded appears in the same list you read before making it.
+ *
+ * Rows carry where they came from. A change order somebody sat down and
+ * recorded and a revision pushed through from a quote edited after the job
+ * sold are not the same event, and a fortnight later that difference is the
+ * whole story — so the second kind says so on its face.
  */
 export function ContractValueHistory({ changes }: { changes: ProjectValueChange[] }) {
   if (changes.length === 0) {
     return (
       <p className="text-sm text-brand-gray">
         The contract value hasn&apos;t moved since this job was sold. Every change to it is
-        recorded here with the reason it was given.
+        recorded here with the reason it was given — including the ones pushed through from a
+        quote revised after the sale.
       </p>
     );
   }
@@ -47,6 +53,14 @@ export function ContractValueHistory({ changes }: { changes: ProjectValueChange[
               </span>
               {c.co_number && (
                 <span className="badge bg-blue-100 text-blue-800">CO {coLabel(c.co_number)}</span>
+              )}
+              {c.source === 'quote' && (
+                <span
+                  className="badge bg-brand-ink/10 text-brand-ink"
+                  title="Pushed through from a quote revised after this job was sold"
+                >
+                  From quote
+                </span>
               )}
             </div>
             <p className="mt-1 text-sm font-medium text-brand-ink">{c.reason}</p>

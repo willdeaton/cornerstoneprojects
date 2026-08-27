@@ -1087,6 +1087,50 @@ Your City, ST 00000',
       ON project_value_changes(project_id, created_at DESC);
   `);
 
+  /* ==================================================================
+   * Post-sale quote revisions — keeping a sold job's numbers current.
+   *
+   * Selling a quote copies its figures onto a project, and that copy
+   * used to be the end of it: editing the quote afterwards moved the
+   * quote and left the job, the billing variance and the dashboard
+   * quoting a price nobody had agreed to any more.
+   *
+   * Two columns close that gap.
+   *
+   * `source` says where a value change came from. The history already
+   * records every move of a contract value; this is how a move pushed
+   * from a revised quote reads as one, instead of passing for a change
+   * order somebody sat down and typed.
+   *
+   * `quote_synced_value` is the quote's bid value as of the last time
+   * this job was reconciled with it — at conversion, or the last time
+   * somebody applied or dismissed a revision. Drift is
+   * `quotes.bid_value <> projects.quote_synced_value`, which is the
+   * whole point of storing it: comparing against `projects.value`
+   * instead would flag every job that has ever had a change order,
+   * because a CO is *supposed* to move the job away from the quote.
+   *
+   * Existing jobs are backfilled to the quote's current value — every
+   * job starts in sync. Any drift already out there predates the
+   * feature and cannot be reconstructed, and opening with a banner on
+   * every old job would train people to ignore it.
+   * ================================================================== */
+  await pool.query(`
+    ALTER TABLE project_value_changes
+      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+    ALTER TABLE project_value_changes DROP CONSTRAINT IF EXISTS project_value_changes_source_check;
+    ALTER TABLE project_value_changes ADD CONSTRAINT project_value_changes_source_check
+      CHECK (source IN ('manual', 'quote'));
+
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS quote_synced_value DOUBLE PRECISION;
+
+    UPDATE projects p
+       SET quote_synced_value = q.bid_value
+      FROM quotes q
+     WHERE p.quote_id = q.id
+       AND p.quote_synced_value IS NULL;
+  `);
+
   await migrateCrewDays(pool);
   await migrateSubcontractedPhases(pool);
   await migrateWarehouseDays(pool);

@@ -2,7 +2,13 @@ import 'server-only';
 import { cache } from 'react';
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser, type User } from '@/lib/auth';
-import { getProject } from '@/lib/data';
+import { getProject, getProjectSyncPair, listProjectInvoices } from '@/lib/data';
+import {
+  buildQuoteSyncState,
+  hasQuoteSyncDrift,
+  quoteSyncDiff,
+  type QuoteSyncState,
+} from '@/lib/quote-sync';
 import type { Project } from '@/lib/types';
 
 /**
@@ -48,3 +54,29 @@ export async function requireJobBiller(projectId: number): Promise<User> {
 export function canBill(user: User): boolean {
   return user.role === 'admin' || user.role === 'manager';
 }
+
+/**
+ * The post-sale quote revision waiting on this job, if there is one.
+ *
+ * Cached per request for the same reason `loadProject` is: the job's frame
+ * flags it on every tab and the Billing tab shows it again beside the money it
+ * would move, and one disagreement should cost one lookup. Returns `null` for
+ * the overwhelmingly common case — a job whose quote hasn't been touched since
+ * it sold — so the extra cost on a normal page load is two indexed reads.
+ *
+ * Employees never see it: they never reach these pages, and the loader says so
+ * itself rather than trusting that.
+ */
+export const loadQuoteRevision = cache(
+  async (projectId: number): Promise<QuoteSyncState | null> => {
+    const user = await getCurrentUser();
+    if (!user || user.role === 'employee') return null;
+    const pair = await getProjectSyncPair(projectId);
+    if (!pair) return null;
+    // Decided in memory first: a job whose quote hasn't been touched is the
+    // normal case, and it must not cost this page an invoice read per tab.
+    if (!hasQuoteSyncDrift(quoteSyncDiff(pair.quote, pair.project))) return null;
+    const invoices = await listProjectInvoices(pair.project.id);
+    return buildQuoteSyncState(pair.quote, pair.project, invoices, user.role);
+  }
+);

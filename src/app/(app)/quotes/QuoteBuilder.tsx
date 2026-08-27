@@ -29,6 +29,8 @@ import {
   updateQuoteDocAction,
   suggestQuoteNumberAction,
 } from '@/app/actions/quotes';
+import type { QuoteSyncState } from '@/lib/quote-sync';
+import { QuoteRevisionDialog } from '@/components/quotes/QuoteRevisionDialog';
 import { ABBREVIATION_LENGTH, normalizeAbbreviation, quoteNumberBase } from '@/lib/quote-number';
 import { quickAddPricingItemAction, quickAddCustomerAction, quickAddContactAction } from '@/app/actions/catalog';
 import { clearQuoteDraft, quoteDraftKey } from '@/lib/quote-draft';
@@ -335,6 +337,16 @@ export function QuoteBuilder({
   const listHref = useListHref('quotes', '/quotes');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Set when a save revised a quote that had already been sold: the job
+   * downstream is still carrying the old figures, and the dialog is where that
+   * gets answered. `next` is where the save was headed — held here rather than
+   * followed, so the question is asked before the builder navigates away from
+   * the only screen that knows it needs asking.
+   */
+  const [revision, setRevision] = useState<{ state: QuoteSyncState; next: string | null } | null>(
+    null
+  );
   // Rows a save is blocked on — a price with nothing to label it. Held by their
   // index in `pricingRows` / `displayRows`, which is what the tables render by.
   const [badPricing, setBadPricing] = useState<Set<number>>(new Set());
@@ -1095,6 +1107,26 @@ export function QuoteBuilder({
       // A save that landed is the end of the draft: the work is in the database
       // now, and a stale stash would offer to undo it.
       draft.clear();
+
+      // The quote was already sold, and this save moved it away from the job it
+      // became. The server held the redirect back for us so the revision can be
+      // put to the user first; whatever they decide, `next` is where the save
+      // was going.
+      if (res && 'sync' in res && res.sync) {
+        setSaving(false);
+        setSavedSnapshot(snapshot);
+        setHasSavedInPlace(true);
+        // A dropped line still gets said, under the dialog rather than
+        // instead of it: both are true, and the one about the job is the
+        // one that can't wait.
+        if (short > 0) {
+          setError(
+            `Saved, but ${short} line${short === 1 ? '' : 's'} did not store. Check for rows with a price and no description.`
+          );
+        }
+        setRevision({ state: res.sync, next: res.next ?? null });
+        return;
+      }
 
       // 'stay' saves in place and returns here; 'list'/'pdf' redirect
       // server-side (this component unmounts before we get here).
@@ -1886,6 +1918,26 @@ export function QuoteBuilder({
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Only ever reached from a save that revised an already-sold quote. */}
+      {revision && (
+        <QuoteRevisionDialog
+          state={revision.state}
+          open
+          onClose={() => {
+            // Left pending on purpose: the job goes on flagging it, so
+            // "decide later" is a deferral rather than a decision.
+            const next = revision.next;
+            setRevision(null);
+            if (next) router.push(next);
+          }}
+          onResolved={() => {
+            const next = revision.next;
+            setRevision(null);
+            if (next) router.push(next);
+          }}
+        />
       )}
     </div>
   );

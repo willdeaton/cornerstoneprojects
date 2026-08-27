@@ -19,6 +19,7 @@ import type {
   ProjectInvoice,
   ProjectInvoiceWithFile,
   ProjectValueChange,
+  ValueChangeSource,
   InvoiceFile,
   QuoteFile,
   QuoteStatus,
@@ -116,9 +117,15 @@ export async function convertQuoteToProject(id: number): Promise<number | null> 
       // The quote already knows where the work is, so the new job starts with an
       // address the crew can be sent to: the job's own location if the quote
       // named one, otherwise the customer's.
+      //
+      // `quote_synced_value` is the baseline every later revision is measured
+      // from — the job leaves here reconciled with the quote it came from, so
+      // the first thing that moves the quote is the first thing that shows as
+      // drift.
       `INSERT INTO projects
-         (quote_id, quote_number, customer, name, category, value, status, site_address)
-       VALUES ($1,$2,$3,$4,$5,$6,'not_started',$7) RETURNING id`,
+         (quote_id, quote_number, customer, name, category, value, status, site_address,
+          quote_synced_value)
+       VALUES ($1,$2,$3,$4,$5,$6,'not_started',$7,$8) RETURNING id`,
       [
         id,
         quote.quote_number,
@@ -127,6 +134,7 @@ export async function convertQuoteToProject(id: number): Promise<number | null> 
         quote.category,
         quote.bid_value,
         quote.project_location ?? quote.customer_address ?? null,
+        quote.bid_value,
       ]
     );
     const projectId = inserted.rows[0].id as number;
@@ -713,6 +721,15 @@ export async function recordProjectValueChange(input: {
   co_number: string | null;
   reason: string;
   changed_by: number | null;
+  /** Where this came from. Defaults to a hand-recorded change order. */
+  source?: ValueChangeSource;
+  /**
+   * The quote bid value this change reconciles the job to, for a revision
+   * pushed from a sold quote. Written in the SAME transaction as the value
+   * move: a job whose contract went up but whose baseline didn't would offer
+   * the same revision again the next time anybody looked at it.
+   */
+  sync_quote_value?: number | null;
 }): Promise<ValueChangeResult> {
   const pool = await getDb();
   const client = await pool.connect();
@@ -749,14 +766,18 @@ export async function recordProjectValueChange(input: {
       return { status: 'noop', value: project.value };
     }
 
-    await client.query('UPDATE projects SET value = $2, updated_at = now() WHERE id = $1', [
-      input.project_id,
-      input.new_value,
-    ]);
+    await client.query(
+      `UPDATE projects
+          SET value = $2,
+              quote_synced_value = COALESCE($3, quote_synced_value),
+              updated_at = now()
+        WHERE id = $1`,
+      [input.project_id, input.new_value, input.sync_quote_value ?? null]
+    );
     const inserted = await client.query<ProjectValueChange>(
       `INSERT INTO project_value_changes
-         (project_id, old_value, new_value, co_number, reason, changed_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (project_id, old_value, new_value, co_number, reason, changed_by, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *, NULL::text AS changed_by_name`,
       [
         input.project_id,
@@ -765,6 +786,7 @@ export async function recordProjectValueChange(input: {
         input.co_number,
         input.reason,
         input.changed_by,
+        input.source ?? 'manual',
       ]
     );
     await client.query('COMMIT');
@@ -816,6 +838,80 @@ export async function listProjectValueChanges(
       LIMIT $2`,
     [projectId, limit]
   );
+}
+
+/* ------------------------------------------- Post-sale quote revisions */
+
+/**
+ * A sold quote and the job it became, side by side — everything
+ * `quoteSyncDiff` needs and nothing else.
+ *
+ * Returns `null` when there is nothing to reconcile: no such quote, a quote
+ * that was never sold, or a sold quote whose project has since been deleted
+ * (`projects.quote_id` goes NULL rather than cascading, so the job outliving
+ * the link and the link outliving the job both land here).
+ */
+export async function getQuoteSyncPair(
+  quoteId: number
+): Promise<{ quote: Quote; project: Project } | null> {
+  const quote = await getQuote(quoteId);
+  if (!quote || quote.status !== 'sold') return null;
+  // `ORDER BY id` rather than trusting there to be one: a quote reopened and
+  // sold again before that was guarded could have left two jobs behind it, and
+  // the first one is the one the work has been going on against.
+  const project = await one<Project>(
+    'SELECT * FROM projects WHERE quote_id = $1 ORDER BY id LIMIT 1',
+    [quoteId]
+  );
+  return project ? { quote, project } : null;
+}
+
+/** The same pair, reached from the job — what the out-of-sync banner reads. */
+export async function getProjectSyncPair(
+  projectId: number
+): Promise<{ quote: Quote; project: Project } | null> {
+  const project = await getProject(projectId);
+  if (!project?.quote_id) return null;
+  const quote = await getQuote(project.quote_id);
+  return quote && quote.status === 'sold' ? { quote, project } : null;
+}
+
+/**
+ * Copy the agreed detail fields from a revised quote onto its job.
+ *
+ * Deliberately separate from the contract value: these are labels, and a job
+ * whose billing has settled can still have its address corrected. Only the
+ * keys the caller ticked are written, so a name somebody deliberately changed
+ * on the job survives a revision that only moved the address.
+ */
+export async function applyQuoteSyncFields(
+  projectId: number,
+  fields: Partial<Pick<Project, 'name' | 'customer' | 'category' | 'quote_number' | 'site_address'>>
+): Promise<void> {
+  const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (entries.length === 0) return;
+  const set = entries.map(([k], i) => `${k} = $${i + 1}`).join(', ');
+  await q(
+    `UPDATE projects SET ${set}, updated_at = now() WHERE id = $${entries.length + 1}`,
+    [...entries.map(([, v]) => v), projectId]
+  );
+}
+
+/**
+ * Move the job's reconciliation baseline to the quote's current bid value
+ * WITHOUT touching what the job is worth.
+ *
+ * This is "seen it, not taking it": a price corrected on the quote that was
+ * never a change to the work, or a revision the biller has decided to answer
+ * with a change order of their own. It clears the banner honestly — the job is
+ * reconciled with the quote as of now — and leaves the contract value, and its
+ * history, exactly as they were.
+ */
+export async function acknowledgeQuoteSync(projectId: number, quoteValue: number): Promise<void> {
+  await q('UPDATE projects SET quote_synced_value = $2, updated_at = now() WHERE id = $1', [
+    projectId,
+    quoteValue,
+  ]);
 }
 
 /**

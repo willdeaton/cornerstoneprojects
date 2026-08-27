@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { money, shortDate } from '@/lib/format';
 import { OnHoldBadge, ProjectStatusBadge } from '@/components/ui';
 import { BackToList } from '@/components/ListMemory';
-import { loadProject, requireJobUser, canBill } from './job';
+import { loadProject, loadQuoteRevision, requireJobUser, canBill } from './job';
+import { QuoteRevisionBanner } from '@/components/billing/QuoteRevisionBanner';
 import { tabsForRole } from './project-tabs';
 import { ProjectTabs } from './ProjectTabs';
 import { ProjectHeaderActions } from './ProjectHeaderActions';
@@ -28,6 +29,8 @@ export default async function ProjectLayout({
   const user = await requireJobUser();
   const { id } = await params;
   const project = await loadProject(id);
+  // Null unless this job's quote has been edited since it was sold.
+  const revision = await loadQuoteRevision(project.id);
 
   return (
     <div>
@@ -93,6 +96,16 @@ export default async function ProjectLayout({
         </div>
         <ProjectHeaderActions project={project} canChangeValue={canBill(user)} />
       </div>
+
+      {/* Above the figures it would move, and on every tab rather than only
+          Billing: a job quoting a price nobody has agreed to any more is worth
+          knowing about while you are scheduling it, not just while you are
+          invoicing it. */}
+      {revision && (
+        <div className="mb-6">
+          <QuoteRevisionBanner state={revision} />
+        </div>
+      )}
 
       {/* Carried across every tab: what the job is worth, and the two dates it
           is answerable to. The planned and projected dates live on Overview,
