@@ -117,7 +117,36 @@ transaction that inserts a `projects` row (carrying quote number, customer,
 name, category, bid value, and a site address taken from the quote's project
 location or the customer's address), flips the quote to `sold`, and commits. It
 also queues the job for that day's sold-work digest. This is the *only* bridge
-between the two halves of the app, and it's one-way.
+between the two halves of the app. Conversion is guarded on the quote still
+being open, so a quote reopened and sold a second time can't leave two jobs
+behind it.
+
+**Revising a sold quote** (`src/lib/quote-sync.ts`). Editing a quote *after* it
+sold is the one case where the quote and the job it became can disagree — and
+the job used to lose silently, carrying a price nobody had agreed to any more
+into the billing variance and the dashboard. It now works like this, and *only*
+for quotes already marked sold:
+
+- Saving such a quote holds the redirect and returns the difference, so the
+  builder can put it to the user before leaving the screen that knows about it.
+- The confirm dialog lists what drifted — the contract value, and the detail
+  fields conversion copied (job name, customer, category, quote #, site
+  address) — each individually tickable.
+- The price applies as a **delta**, not an overwrite: a job sold at $50,000 and
+  raised to $55,000 by a change order, whose quote is then revised to $52,000,
+  becomes $57,000. Overwriting with the quote's own total would erase the
+  change order.
+- Drift is measured against `projects.quote_synced_value` — the quote's bid
+  value at the last reconciliation — never against `projects.value`, which a
+  change order is entitled to move on its own.
+- It goes through `recordProjectValueChange` like any other change order: a
+  reason is required, the paid/closed lock is enforced, and the entry lands in
+  the job's existing **Contract Value History** badged `From quote`. That
+  history is the single place these are tracked.
+- A pending revision is flagged on the job (every tab) until it's applied or
+  dismissed, so a settled billing, a non-biller, or a "decide later" never
+  leaves the drift invisible. Dismissing reconciles the baseline without
+  touching what the job is worth.
 
 ### Projects `/projects` and `/projects/[id]`
 Sold work, tabbed Active / Not Started / In Progress / Completed / All. The list
@@ -507,7 +536,9 @@ summary line (jobs and total value) over the list of what was sold or finished.
 Read it as four one-way hand-offs:
 
 1. **Quote → Project** is the only bridge, and it's a single transaction that
-   can't half-happen.
+   can't half-happen. It is one-way with one deliberate exception: a quote
+   revised *after* it sold offers the difference back to the job, through the
+   change-order path and its history (see **Revising a sold quote**).
 2. **Project status → Billing** is a stamp (`completed_at`), and everything
    billing shows is derived from it plus the invoice rows.
 3. **Timeline → Crew Week** is plan → staff. The timeline says how much crew a
@@ -601,11 +632,14 @@ want.
 > using company info and logos from Settings, and can carry internal-only file
 > attachments that are never printed.
 >
-> **Quote → Project** is the only bridge between the two halves of the app, and
-> it's one-way: marking a quote Sold runs a single transaction that creates the
-> job (carrying quote number, customer, name, category, value, and a site
-> address taken from the quote), flips the quote to sold, and queues the job for
-> that day's sold-work digest email.
+> **Quote → Project** is the only bridge between the two halves of the app:
+> marking a quote Sold runs a single transaction that creates the job (carrying
+> quote number, customer, name, category, value, and a site address taken from
+> the quote), flips the quote to sold, and queues the job for that day's
+> sold-work digest email. Editing a quote *after* it sold offers the difference
+> back to the job — as a delta on its contract value, through the change-order
+> path, recorded in the job's Contract Value History and flagged on the job
+> until it's answered.
 >
 > **Projects** — sold work, tabbed by status, with progress, value, hours logged
 > and due dates. The **project detail page is the hub everything hangs off**:

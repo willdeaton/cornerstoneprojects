@@ -209,6 +209,16 @@ export interface Project {
   on_hold_reason: string | null;
   /** When it was parked, so a hold that has sat for a month reads as one. */
   on_hold_since: string | null;
+  /**
+   * The linked quote's `bid_value` as of the last time this job was reconciled
+   * with it: set when the quote was sold, and moved again each time a post-sale
+   * revision is applied or dismissed. NULL on a job that never came from a
+   * quote.
+   *
+   * Drift is this against the quote's current bid value — deliberately NOT
+   * against `value`, which a change order is entitled to move on its own.
+   */
+  quote_synced_value: number | null;
   invoice_numbers: string | null;
   invoice_notes: string | null;
   /**
@@ -299,9 +309,20 @@ export interface ProjectValueChange {
   reason: string;
   changed_by: number | null;
   created_at: string;
+  /**
+   * Where the change came from: `'manual'` is a change order somebody sat down
+   * and recorded, `'quote'` is one pushed from a revised quote after the job
+   * was sold. The history badges them differently — "the quote moved" and
+   * "we agreed a change" are not the same event, and a fortnight later the
+   * difference is the whole story.
+   */
+  source: ValueChangeSource;
   /** Joined for display. Null once the person who typed it is deleted. */
   changed_by_name: string | null;
 }
+
+/** @see ProjectValueChange.source */
+export type ValueChangeSource = 'manual' | 'quote';
 
 /**
  * An invoice as the billing card reads it: the row plus what is known about
