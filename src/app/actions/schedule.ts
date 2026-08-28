@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { announceScheduleChange } from '@/lib/schedule-live';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { getProject, updateProject } from '@/lib/data';
@@ -168,6 +169,10 @@ function revalidateSchedule(projectId?: number) {
   if (projectId) revalidatePath(`/projects/${projectId}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
+  // Clearing the caches only helps the next person to ask for the page. This
+  // is what reaches the people already looking at it: everyone with a schedule
+  // open is told to re-read, on whatever device they have it open on.
+  void announceScheduleChange(projectId);
 }
 
 /* ---------------------------------------------------------------- Phases */
@@ -1059,6 +1064,7 @@ export async function saveSubcontractorAction(
   }
   revalidatePath('/settings/subcontractors');
   revalidatePath('/schedule');
+  void announceScheduleChange();
   return { ok: true };
 }
 
@@ -1067,6 +1073,7 @@ export async function deleteSubcontractorAction(id: number): Promise<ActionResul
   await deleteSubcontractor(id);
   revalidatePath('/settings/subcontractors');
   revalidatePath('/schedule');
+  void announceScheduleChange();
   return { ok: true };
 }
 

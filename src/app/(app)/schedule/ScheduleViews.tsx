@@ -6,6 +6,7 @@ import { ScheduleBoard, type BoardProject } from './ScheduleBoard';
 import { CrewWeek } from './CrewWeek';
 import { ScheduleSaveBar } from './ScheduleSaveBar';
 import { useScheduleDraft } from './useScheduleDraft';
+import { useScheduleLive } from '@/components/useScheduleLive';
 import type { DraftJob } from './PublishModal';
 import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
@@ -91,6 +92,11 @@ export function ScheduleViews({
 }) {
   const [view, setView] = useState<View>('timeline');
   const draft = useScheduleDraft(tasks, holidays, warehouse);
+  // Somebody else saving reaches this board without anybody reloading it. Held
+  // off while this board is mid-save, so the two don't cross; pending edits
+  // survive the re-read either way, because the draft is replayed over
+  // whatever rows come back.
+  useScheduleLive({ paused: draft.saving });
 
   return (
     <div className="space-y-4">

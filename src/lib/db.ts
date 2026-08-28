@@ -1,5 +1,5 @@
 import 'server-only';
-import { Pool, types } from 'pg';
+import { Client, Pool, types } from 'pg';
 import { ensureSeed } from './seed';
 import { computeSchedule, eachDay, isWorkingDay } from './schedule-math';
 import type { DependsType } from './types';
@@ -39,6 +39,22 @@ function createPool(): Pool {
     connectionString: url,
     ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined,
     max: 10,
+  });
+}
+
+/**
+ * A connection of its own, outside the pool, for a client that sits on LISTEN.
+ *
+ * A listening connection is never given back — it blocks on the socket waiting
+ * for a NOTIFY — so it can't come out of the pool without permanently costing
+ * the app one of its ten. Same URL and SSL rules as the pool; the caller owns
+ * connecting it, and reconnecting it when it drops.
+ */
+export function createListenerClient(): Client {
+  const url = process.env.DATABASE_URL || DEFAULT_URL;
+  return new Client({
+    connectionString: url,
+    ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined,
   });
 }
 
