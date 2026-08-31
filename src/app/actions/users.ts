@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { announceScheduleChange } from '@/lib/schedule-live';
 import { redirect } from 'next/navigation';
 import { getCurrentUser, hashPassword } from '@/lib/auth';
 import type { Role } from '@/lib/auth';
@@ -225,6 +226,7 @@ export async function setUserSchedulableAction(id: number, schedulable: boolean)
   await setUserSchedulable(id, schedulable);
   revalidatePath('/settings/users');
   revalidatePath('/schedule');
+  void announceScheduleChange();
   return { ok: true };
 }
 

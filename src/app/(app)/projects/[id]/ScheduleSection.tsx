@@ -12,6 +12,7 @@ import {
   shiftLabel,
   workedSegments,
 } from '@/lib/schedule-math';
+import { useScheduleLive } from '@/components/useScheduleLive';
 import type { ScheduleChange, ScheduleTaskRow } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
 import {
@@ -66,6 +67,8 @@ export function ScheduleSection({
   const router = useRouter();
   const [editing, setEditing] = useState<{ task?: ScheduleTaskRow } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  // A job's own phases move when somebody moves them on the schedule board.
+  useScheduleLive();
 
   const { rows, projected, spanStart, spanDays } = useMemo(() => {
     const calendar = { holidays: new Set(holidays) };

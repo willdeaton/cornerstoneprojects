@@ -24,6 +24,7 @@ import { BOARD_BG, CARD, TEXT } from './tv-style';
 import { TvCrew } from './TvCrew';
 import { TvDay } from './TvDay';
 import { TvTimeline } from './TvTimeline';
+import { useScheduleLive } from '@/components/useScheduleLive';
 
 /** How often the board pulls fresh rows from the server. */
 const REFRESH_SECONDS = 90;
@@ -148,6 +149,11 @@ export function TvBoard({
   }, [paused, slides.length, rotateSeconds, index]);
 
   /* ------------------------------------------- Fresh data, and a fresh day */
+
+  // Pushed the instant anybody saves, rather than waiting out the poll below —
+  // which stays as it was, a backstop for a screen nobody will ever notice has
+  // gone quiet.
+  useScheduleLive();
 
   useEffect(() => {
     const id = setInterval(() => router.refresh(), REFRESH_SECONDS * 1000);

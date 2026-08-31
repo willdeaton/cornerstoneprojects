@@ -21,6 +21,7 @@ import {
 } from '@/lib/schedule-math';
 import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
+import { useScheduleLive } from '@/components/useScheduleLive';
 
 /**
  * An employee's own schedule, one week at a time.
@@ -51,6 +52,11 @@ export function MySchedule({
 }) {
   const [monday, setMonday] = useState<string>(() => weekStart(today()));
   const now = today();
+
+  // The week redraws itself when the office changes it — including on a phone
+  // that has been in a pocket since this morning, which is the whole point.
+  // The week being looked at is local state, so a re-read never moves it.
+  useScheduleLive();
 
   const weekDays = useMemo(() => eachDay(monday, addDays(monday, 6)), [monday]);
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);

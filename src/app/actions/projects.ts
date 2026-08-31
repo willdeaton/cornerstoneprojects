@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { announceScheduleChange } from '@/lib/schedule-live';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import type { ProjectStatus } from '@/lib/types';
@@ -106,6 +107,7 @@ export async function setProjectOnHoldAction(
   revalidatePath('/dashboard');
   // The schedule is where a hold is read most: both views badge the job.
   revalidatePath('/schedule');
+  void announceScheduleChange(id);
   return { ok: true };
 }
 
