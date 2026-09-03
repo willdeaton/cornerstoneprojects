@@ -14,6 +14,7 @@ import {
   listScheduleChanges,
   listTaskInputs,
   listHolidays,
+  loadWorkCalendar,
   listSubcontractors,
   getSubcontractor,
   listAssigneeContacts,
@@ -541,12 +542,14 @@ export interface CrewDayFields {
  *
  * The phase's own dates decide what's allowed: the day has to be inside its
  * window, and the phase can only hold crew_size x its days of bookings in
- * total. A weekend or holiday inside the window is a legitimate day to book —
- * the crew week only offers one once its weekend columns are open — and counts
- * as a day of the phase, so a Saturday worked to catch up brings its own crew
- * budget rather than spending the weekdays'. That budget is spent freely — four people on Monday and
- * one on Friday is a fine way to staff a 2-crew, 5-day phase — so nothing here
- * enforces an even spread; the crew week flags a heavy day and lets it stand.
+ * total. A weekend inside the window is a legitimate day to book — the crew
+ * week only offers one once its weekend columns are open — and counts as a day
+ * of the phase, so a Saturday worked to catch up brings its own crew budget
+ * rather than spending the weekdays'. A day marked off is not: a holiday or a
+ * shutdown day is a decision that nobody works, so a booking on one is refused.
+ * That budget is spent freely — four people on Monday and one on Friday is a
+ * fine way to staff a 2-crew, 5-day phase — so nothing here enforces an even
+ * spread; the crew week flags a heavy day and lets it stand.
  *
  * Staffing is not a timeline change and never asks for a reason, published or
  * not: who turns up is exactly what a manager is expected to keep adjusting.
@@ -574,9 +577,19 @@ export async function assignCrewDayAction(input: CrewDayFields): Promise<ActionR
     };
   }
 
-  // A weekend or holiday inside the window is allowed, and brings its own day
-  // of budget with it — the crew week only offers one when the weekends have
-  // been opened up, so landing here means somebody meant it.
+  // A day the office has marked off is closed: nothing gets booked on it. The
+  // crew week won't offer one, and this is what stops a board that predates the
+  // day being blocked from sneaking a booking past.
+  if (calendar.holidays.has(input.day)) {
+    return {
+      ok: false,
+      error: `${shortDate(input.day)} is marked off. Open the day back up on the crew week to book it.`,
+    };
+  }
+
+  // A weekend inside the window is allowed, and brings its own day of budget
+  // with it — the crew week only offers one when the weekend columns have been
+  // opened up, so landing here means somebody meant it.
   const budget = crewBudget(task, window, calendar, [input.day]);
   const res = await addCrewDay(
     task.id,
@@ -617,9 +630,11 @@ export interface CrewSpanFields {
  *
  * The phase's own rules still decide what lands: days outside its window are
  * dropped before anything is written, and the crew-day budget stops the rest.
- * Weekends and holidays inside the window are kept — booking a run of days
- * across one is how a weekend gets worked. A partial fill is a success, not an error — the message says how far
- * it got so the manager can spread the remainder themselves.
+ * Weekends inside the window are kept — booking a run of days across one is how
+ * a weekend gets worked — while days marked off are dropped, because a shutdown
+ * day is nobody's working day. A partial fill is a success, not an error: the
+ * message says how far it got so the manager can spread the remainder
+ * themselves.
  */
 export async function assignCrewSpanAction(input: CrewSpanFields): Promise<ActionResult> {
   const me = await requireManager();
@@ -633,11 +648,14 @@ export async function assignCrewSpanAction(input: CrewSpanFields): Promise<Actio
   const days = [...new Set(input.days ?? [])]
     .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
     .filter((d) => d >= window.start && d <= window.end)
+    // Days marked off drop out rather than failing the run: booking a fortnight
+    // across a holiday should book the fortnight and skip the holiday.
+    .filter((d) => !calendar.holidays.has(d))
     .sort();
   if (days.length === 0) {
     return {
       ok: false,
-      error: `${task.name} runs ${shortDate(window.start)} – ${shortDate(window.end)} — none of those days are on it.`,
+      error: `${task.name} runs ${shortDate(window.start)} – ${shortDate(window.end)} — none of those days are on it, or they are all marked off.`,
     };
   }
 
@@ -686,12 +704,13 @@ function cleanDays(days: string[] | undefined): string[] {
 /**
  * Put one person in the warehouse for a run of days.
  *
- * There is nothing here to check a day against. The warehouse is standing work
- * — no window, no crew budget, no dependency chain — which is exactly why it's
- * a card that is always there rather than a phase of a job: any day is a
- * legitimate day to be in the warehouse, weekends included, and it can never
- * be over-staffed. Days somebody already has are skipped rather than failing
- * the run.
+ * There is almost nothing here to check a day against. The warehouse is
+ * standing work — no window, no crew budget, no dependency chain — which is
+ * exactly why it's a card that is always there rather than a phase of a job:
+ * any day is a legitimate day to be in the warehouse, weekends included, and it
+ * can never be over-staffed. The one exception is a day the office has marked
+ * off: a shutdown day closes the warehouse too, so those days drop out. Days
+ * somebody already has are skipped rather than failing the run.
  *
  * Warehouse days are not a job's dates, so nothing here touches a job's
  * publish state: there is no customer commitment to baseline and no crew to
@@ -704,8 +723,20 @@ export async function bookWarehouseDaysAction(
   if (!Number.isInteger(input.user_id) || input.user_id <= 0) {
     return { ok: false, error: 'Pick somebody to put in the warehouse.' };
   }
-  const days = cleanDays(input.days);
-  if (days.length === 0) return { ok: false, error: 'Pick a day.' };
+  const asked = cleanDays(input.days);
+  if (asked.length === 0) return { ok: false, error: 'Pick a day.' };
+
+  const calendar = await loadWorkCalendar();
+  const days = asked.filter((d) => !calendar.holidays.has(d));
+  if (days.length === 0) {
+    return {
+      ok: false,
+      error:
+        asked.length === 1
+          ? `${shortDate(asked[0])} is marked off — nobody is in the warehouse that day.`
+          : 'Those days are all marked off — nobody is in the warehouse on them.',
+    };
+  }
 
   const booked = await addWarehouseDays(input.user_id, days);
   revalidateSchedule();
@@ -1104,6 +1135,42 @@ export async function saveHolidaysAction(
 
   await addHolidays(add);
   await deleteHolidays(remove);
+  revalidatePath('/settings/schedule');
+  revalidateSchedule();
+  return { ok: true };
+}
+
+/**
+ * Mark one day off, or open it back up again — the crew week's day header.
+ *
+ * The same rows the calendar under Settings writes, reached from where the
+ * question actually comes up: somebody staffing the week around Thanksgiving
+ * shouldn't have to leave the schedule to say the office is shut. Off is off
+ * everywhere at once — every phase's duration skips the day, every projected
+ * date shifts around it, and nobody can be booked on it.
+ *
+ * Bookings already on the day are left alone. They are a record of what was
+ * planned before the day was closed, and quietly deleting somebody's day is
+ * worse than showing it and letting a manager clear it: the crew week marks
+ * such a day "worked" so it can't hide.
+ */
+export async function setDayOffAction(
+  day: string,
+  off: boolean,
+  label?: string | null
+): Promise<ActionResult> {
+  await requireManager();
+  if (!DAY_RE.test(day ?? '')) return { ok: false, error: 'Pick a day.' };
+  if (isWeekend(day)) {
+    return {
+      ok: false,
+      error: 'Saturdays and Sundays are always off — every duration skips them already.',
+    };
+  }
+
+  if (off) await addHolidays([{ day, label: clean(label) }]);
+  else await deleteHolidays([day]);
+
   revalidatePath('/settings/schedule');
   revalidateSchedule();
   return { ok: true };

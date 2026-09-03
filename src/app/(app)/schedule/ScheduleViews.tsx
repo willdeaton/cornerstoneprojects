@@ -54,6 +54,7 @@ export function ScheduleViews({
   workers,
   subs,
   holidays,
+  holidayLabels = {},
   published,
   crewNotes = [],
   changeCounts,
@@ -72,6 +73,8 @@ export function ScheduleViews({
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
+  /** What each blocked day was blocked for, keyed by day. */
+  holidayLabels?: Record<string, string | null>;
   published: Record<number, PublishedInfo>;
   /**
    * The notes written on each job for whoever works it, so a job card opened
@@ -136,6 +139,7 @@ export function ScheduleViews({
           workers={workers}
           subs={subs}
           holidays={holidays}
+          holidayLabels={holidayLabels}
           published={published}
           crewNotes={crewNotes}
           draft={draft}

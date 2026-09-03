@@ -19,7 +19,9 @@ export default async function ScheduleSettingsPage() {
         <p className="text-sm text-brand-gray">
           Holidays and shutdown days — click them straight off the calendar. Saturdays and Sundays
           are already skipped everywhere; days blocked here are skipped too, so a phase&apos;s
-          duration stretches around them and every projected end date moves accordingly.
+          duration stretches around them and every projected end date moves accordingly. Nobody
+          can be booked on a blocked day, and a single day can also be marked off by clicking its
+          date on the crew week.
         </p>
       </div>
       <HolidaysManager holidays={holidays} />

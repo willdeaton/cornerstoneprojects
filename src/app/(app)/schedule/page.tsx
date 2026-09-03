@@ -47,6 +47,9 @@ export default async function SchedulePage() {
   ]);
   const tasks = [...liveTasks, ...finishedTasks];
   const holidayDays = holidays.map((h) => h.day);
+  /** What each blocked day was blocked for — the crew week says it on the day. */
+  const holidayLabels: Record<string, string | null> = {};
+  for (const h of holidays) holidayLabels[h.day] = h.label;
   /** Jobs in `tasks` that are finished — history, and read-only wherever shown. */
   const finishedProjects = [...new Set(finishedTasks.map((t) => t.project_id))];
 
@@ -166,6 +169,7 @@ export default async function SchedulePage() {
         }))}
         subs={subs.map((s) => ({ id: s.id, name: s.name, trade: s.trade }))}
         holidays={holidayDays}
+        holidayLabels={holidayLabels}
         published={published}
         crewNotes={crewNotes}
         changeCounts={changes}

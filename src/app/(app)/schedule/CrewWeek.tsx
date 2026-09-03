@@ -3,7 +3,6 @@
 import { Fragment, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { shortDate } from '@/lib/format';
 import {
-  DAY_LABELS,
   addDays,
   computeSchedule,
   crewBudget,
@@ -32,6 +31,7 @@ import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
 import type { DraftPerson } from '@/lib/schedule-draft';
 import type { ScheduleDraft } from './useScheduleDraft';
 import { CrewJobCard, type CardFocus } from './CrewJobCard';
+import { DayOffControl } from './DayOffControl';
 import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
@@ -242,6 +242,7 @@ export function CrewWeek({
   workers,
   subs,
   holidays,
+  holidayLabels = {},
   published = {},
   crewNotes = [],
   draft,
@@ -253,6 +254,8 @@ export function CrewWeek({
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
+  /** What each blocked day was blocked for, so a day off says why on the header. */
+  holidayLabels?: Record<string, string | null>;
   /** Publish state per job id, so a card can say a change needs a reason. */
   published?: Record<number, PublishedInfo>;
   /**
@@ -418,6 +421,17 @@ export function CrewWeek({
     return out;
   }, [cards, warehouse, rangeFrom, rangeTo]);
 
+  /** How many people are booked on each day in view — job days and warehouse. */
+  const bookedByDay = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const days of byPerson.values()) {
+      for (const [day, items] of days) {
+        if (items.length > 0) out.set(day, (out.get(day) ?? 0) + 1);
+      }
+    }
+    return out;
+  }, [byPerson]);
+
   // A weekend column shows when the weekends have been opened up, or when that
   // particular Saturday or Sunday already has somebody on it. Otherwise a normal
   // fortnight stays ten columns wide and nobody reads a weekend into the plan.
@@ -426,9 +440,9 @@ export function CrewWeek({
       rangeDays.filter((d) => {
         if (!isWeekend(d)) return true;
         if (showWeekends) return true;
-        return [...byPerson.values()].some((days) => (days.get(d)?.length ?? 0) > 0);
+        return (bookedByDay.get(d) ?? 0) > 0;
       }),
-    [rangeDays, byPerson, showWeekends]
+    [rangeDays, bookedByDay, showWeekends]
   );
 
   /** One band per week over the columns, so each week is labelled above its days. */
@@ -534,12 +548,12 @@ export function CrewWeek({
   const bandFinished = bandCards.filter((c) => c.finished).length;
   const bandLive = bandCards.length - bandFinished;
   const heading = weeks === 1 ? weekLabel(rangeFrom) : rangeLabel(rangeFrom, rangeTo);
-  /** Weekend and holiday days somebody is actually booked on, in view. */
+  /** Weekend and blocked days somebody is actually booked on, in view. */
   const workedOffDays = columns.filter(
-    (d) =>
-      !isWorkingDay(d, calendar) &&
-      [...byPerson.values()].some((days) => (days.get(d)?.length ?? 0) > 0)
+    (d) => !isWorkingDay(d, calendar) && (bookedByDay.get(d) ?? 0) > 0
   );
+  /** Days marked off — a holiday or a shutdown — inside the weeks on screen. */
+  const daysOff = columns.filter((d) => isDayOff(d));
 
   /** Is this person already on this phase that day? */
   function isBooked(card: PhaseCard, day: string, person: Person): boolean {
@@ -561,11 +575,28 @@ export function CrewWeek({
   }
 
   /**
+   * Has this day been marked off — a holiday or a shutdown day?
+   *
+   * Not the same question as "is this a working day": a weekend is a day the
+   * crew doesn't normally work but can be sent out on, and gets its own column
+   * and its own budget when it is. A day marked off is a decision that nobody
+   * works it, so nothing can be booked on it at all.
+   */
+  function isDayOff(day: string): boolean {
+    return calendar.holidays.has(day);
+  }
+
+  /** What a day was marked off for, when somebody said. */
+  function offLabel(day: string): string | null {
+    return holidayLabels[day] ?? null;
+  }
+
+  /**
    * Room left on a phase for one more day of somebody.
    *
-   * A weekend or holiday nobody is on yet is an extra day of work rather than a
-   * slice of the planned ones, so it brings its own crew_size of budget with it
-   * — the same rule the server applies when the booking lands.
+   * A weekend nobody is on yet is an extra day of work rather than a slice of
+   * the planned ones, so it brings its own crew_size of budget with it — the
+   * same rule the server applies when the booking lands.
    */
   function hasRoom(card: PhaseCard, day: string): boolean {
     if (!card.budget.full) return true;
@@ -573,17 +604,22 @@ export function CrewWeek({
   }
 
   /**
-   * A day this phase can take crew on: inside the phase's window, not already
-   * full, and not the sub who holds the phase — their days come with the
-   * contract, so there's nothing here to give or take. Weekends count, which is
-   * how a weekend gets worked; they're only ever offered on a column the
-   * manager has opened up.
+   * A day this phase can take crew on: inside the phase's window, not marked
+   * off, not already full, and not the sub who holds the phase — their days
+   * come with the contract, so there's nothing here to give or take. Weekends
+   * count, which is how a weekend gets worked; they're only ever offered on a
+   * column the manager has opened up.
+   *
+   * A day already booked stays takeable whatever else is true, so a booking
+   * made before the day was closed can still be clicked back off.
    */
   function canTake(card: PhaseCard, day: string, person: Person): boolean {
     if (!isStaffable(card)) return false;
     if (person.kind === 'sub' && card.task.subcontractor_id === person.refId) return false;
     if (day < card.window.start || day > card.window.end) return false;
-    return isBooked(card, day, person) || hasRoom(card, day);
+    if (isBooked(card, day, person)) return true;
+    if (isDayOff(day)) return false;
+    return hasRoom(card, day);
   }
 
   /** Is this person in the warehouse that day? */
@@ -607,11 +643,16 @@ export function CrewWeek({
    * Can this be booked on that person's day at all?
    *
    * A phase answers with its window and its budget. The warehouse answers with
-   * one rule: our own people only. Subs are contracted to a job's phase on the
-   * timeline, and the warehouse is not a job — there is nothing to contract.
+   * two rules: our own people only — subs are contracted to a job's phase on the
+   * timeline, and the warehouse is not a job — and not on a day marked off,
+   * because a shutdown day shuts the warehouse as well.
    */
   function takesDay(target: Target, day: string, person: Person): boolean {
-    if (target === WAREHOUSE) return person.kind === 'user';
+    // A day marked off closes the warehouse too — but somebody already in there
+    // that day can still be taken back out.
+    if (target === WAREHOUSE) {
+      return person.kind === 'user' && (!isDayOff(day) || inWarehouse(day, person));
+    }
     const card = cardByTask.get(target);
     return !!card && canTake(card, day, person);
   }
@@ -652,15 +693,20 @@ export function CrewWeek({
   }
 
   /**
-   * Put one person in the warehouse for a run of days. Nothing to check but
-   * whose days they are: the card never fills up, and any day — weekend
-   * included, once its column is open — is a day somebody can be in there.
+   * Put one person in the warehouse for a run of days. Barely anything to check:
+   * the card never fills up, and any day — weekend included, once its column is
+   * open — is a day somebody can be in there. Only a day marked off isn't: a
+   * shutdown day shuts the warehouse too.
    */
   function bookWarehouse(person: Person, days: string[]) {
     setError(null);
-    const bookable = days.filter((d) => !inWarehouse(d, person));
+    const bookable = days.filter((d) => !inWarehouse(d, person) && !isDayOff(d));
     if (bookable.length === 0) {
-      setError(`${person.name} is already in the warehouse on those days.`);
+      setError(
+        days.some((d) => isDayOff(d))
+          ? `${person.name} is already in the warehouse on those days, or they are marked off.`
+          : `${person.name} is already in the warehouse on those days.`
+      );
       return;
     }
     draft.queue({
@@ -722,7 +768,7 @@ export function CrewWeek({
           ? `${card.task.name} is fully staffed — ${card.budget.capacity} crew ${
               card.budget.capacity === 1 ? 'day' : 'days'
             } planned. Take somebody off a day, or raise the crew it needs on the timeline.`
-          : `Nothing to book there — ${person.name} is already on those days of ${card.task.name}, or the phase doesn't run then.`
+          : `Nothing to book there — ${person.name} is already on those days of ${card.task.name}, or the phase doesn't run then, or the days are marked off.`
       );
       return;
     }
@@ -946,10 +992,15 @@ export function CrewWeek({
               : `${bookedPeople} ${bookedPeople === 1 ? 'person' : 'people'} booked`}
             {understaffed > 0 &&
               ` · ${understaffed} ${understaffed === 1 ? 'phase still needs' : 'phases still need'} crew`}
+            {/* A weekend somebody was sent out on, or a day that was booked
+                before it was marked off — either way, work on a day that isn't
+                a working day. */}
             {workedOffDays.length > 0 &&
-              ` · ${workedOffDays.length} ${
-                workedOffDays.length === 1 ? 'weekend day' : 'weekend days'
+              ` · ${workedOffDays.length} non-working ${
+                workedOffDays.length === 1 ? 'day' : 'days'
               } worked`}
+            {daysOff.length > 0 &&
+              ` · ${daysOff.length} ${daysOff.length === 1 ? 'day' : 'days'} off`}
           </span>
         </p>
       </div>
@@ -1110,24 +1161,28 @@ export function CrewWeek({
               <div className="sticky left-0 z-20 bg-[#fafafa] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
                 Employee
               </div>
+              {/* The day itself is the switch that closes it: click a date and
+                  it's off for everybody — a holiday or a shutdown day — with
+                  every duration skipping it and nothing bookable on it. */}
               {columns.map((d) => {
                 const off = !isWorkingDay(d, calendar);
                 const worked = off && workedOffDays.includes(d);
                 return (
                   <div
                     key={d}
-                    className={`px-2 py-1.5 text-[11px] font-semibold ${weekEdge(d)} ${
-                      d === now
-                        ? 'text-brand-green-dark'
-                        : worked
-                          ? 'text-amber-700'
-                          : off
-                            ? 'text-brand-gray/60'
-                            : 'text-brand-gray'
+                    className={`min-w-0 px-2 py-1.5 ${weekEdge(d)} ${
+                      isDayOff(d) ? 'bg-black/[.03]' : ''
                     }`}
                   >
-                    {DAY_LABELS[fromDay(d).getDay()]} {fromDay(d).getDate()}
-                    {off && <span className="ml-1 font-normal">{worked ? '(worked)' : '(off)'}</span>}
+                    <DayOffControl
+                      day={d}
+                      weekend={isWeekend(d)}
+                      off={isDayOff(d)}
+                      label={offLabel(d)}
+                      worked={worked}
+                      isToday={d === now}
+                      booked={bookedByDay.get(d) ?? 0}
+                    />
                   </div>
                 );
               })}
@@ -1330,19 +1385,23 @@ export function CrewWeek({
                               title={
                                 contractedHere
                                   ? `${p.name} has this phase — their days follow it, change it on the timeline`
-                                  : !takes
-                                    ? undefined
-                                    : activeWarehouse
-                                      ? on
-                                        ? `Take ${p.name} out of the warehouse that day`
-                                        : `Put ${p.name} in the warehouse${
-                                            off ? ' (a non-working day)' : ''
-                                          }\nDrag sideways to book a run of days`
-                                      : on
-                                        ? `Take ${p.name} off ${activeCard!.task.name}${finishedHint(activeCard!)}`
-                                        : `Book ${p.name} on ${activeCard!.task.project_name} — ${activeCard!.task.name}${
-                                            off ? ' (a non-working day — an extra day of work)' : ''
-                                          }\nDrag sideways to book a run of days${finishedHint(activeCard!)}`
+                                  : isDayOff(d) && !on
+                                    ? `${shortDate(d)} is marked off${
+                                        offLabel(d) ? ` — ${offLabel(d)}` : ''
+                                      }: nothing can be booked on it. Click the date in the header to open it back up.`
+                                    : !takes
+                                      ? undefined
+                                      : activeWarehouse
+                                        ? on
+                                          ? `Take ${p.name} out of the warehouse that day`
+                                          : `Put ${p.name} in the warehouse${
+                                              off ? ' (a non-working day)' : ''
+                                            }\nDrag sideways to book a run of days`
+                                        : on
+                                          ? `Take ${p.name} off ${activeCard!.task.name}${finishedHint(activeCard!)}`
+                                          : `Book ${p.name} on ${activeCard!.task.project_name} — ${activeCard!.task.name}${
+                                              off ? ' (a non-working day — an extra day of work)' : ''
+                                            }\nDrag sideways to book a run of days${finishedHint(activeCard!)}`
                               }
                             >
                               {takes && !on && items.length === 0 && (
