@@ -2,6 +2,7 @@ import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { employeeWeekTimesheet } from '@/lib/data';
 import { getCompanyInfo } from '@/lib/company';
+import { payrollTimeZone } from '@/lib/payroll-week';
 import { PrintToolbar } from './PrintToolbar';
 import { TimesheetDocument } from './TimesheetDocument';
 
@@ -15,6 +16,10 @@ export const dynamic = 'force-dynamic';
  * `weekStart` is any date inside the wanted week — the data layer normalizes it
  * to that week's Monday, so a link can pass the review table's week key
  * straight through.
+ *
+ * The payroll timezone goes in with the sheet: this page renders on the server,
+ * whose clock is UTC, and a timesheet has to read in the crew's own hours to
+ * match what the Timesheets page showed.
  */
 export default async function TimesheetPrintPage({
   params,
@@ -42,7 +47,7 @@ export default async function TimesheetPrintPage({
   return (
     <div className="min-h-screen bg-neutral-100">
       <PrintToolbar backHref="/timesheets" fileName={pdfFileName} />
-      <TimesheetDocument sheet={sheet} company={company} />
+      <TimesheetDocument sheet={sheet} company={company} timeZone={payrollTimeZone()} />
     </div>
   );
 }

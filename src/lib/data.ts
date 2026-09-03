@@ -1,6 +1,7 @@
 import 'server-only';
 import type { PoolClient } from 'pg';
 import { getDb } from './db';
+import { payrollTimeZone } from './payroll-week';
 import type {
   Quote,
   QuoteLineItem,
@@ -1772,8 +1773,12 @@ export interface AdminWeek {
 /**
  * Time entries for the last `weeks` weeks, grouped by ISO week (Mon-start)
  * and then by employee, with break-adjusted net hours and paid status.
+ *
+ * Weeks are cut in the payroll timezone — see the note on `employeeWeekTimesheet`
+ * for why that, and not the database's zone, is the basis everywhere.
  */
 export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
+  const tz = payrollTimeZone();
   const rows = await q<{
     id: number;
     user_id: number;
@@ -1793,7 +1798,7 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
     `SELECT t.id, t.user_id, u.name AS user_name, u.hourly_rate,
             t.project_id, p.name AS project_name, p.customer,
             t.clock_in, t.clock_out, t.note, t.paid, t.check_number,
-            to_char(date_trunc('week', t.clock_in), 'YYYY-MM-DD') AS week_start,
+            to_char(date_trunc('week', t.clock_in AT TIME ZONE $2), 'YYYY-MM-DD') AS week_start,
             COALESCE((
               SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.break_end, t.clock_out, now()) - b.break_start)))
               FROM time_breaks b WHERE b.time_entry_id = t.id
@@ -1801,9 +1806,11 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
      FROM time_entries t
      JOIN users u ON u.id = t.user_id
      LEFT JOIN projects p ON p.id = t.project_id
-     WHERE t.clock_in >= date_trunc('week', CURRENT_DATE) - (($1::int - 1) * INTERVAL '1 week')
+     WHERE (t.clock_in AT TIME ZONE $2)
+             >= date_trunc('week', (now() AT TIME ZONE $2)::date)
+                - (($1::int - 1) * INTERVAL '1 week')
      ORDER BY t.clock_in DESC`,
-    [weeks]
+    [weeks, tz]
   );
 
   // Weekly approvals in the same window, keyed by "week:user" for the merge.
@@ -1817,8 +1824,9 @@ export async function adminTimeByWeek(weeks = 8): Promise<AdminWeek[]> {
             ap.name AS approved_by_name
      FROM time_week_approvals a
      LEFT JOIN users ap ON ap.id = a.approved_by
-     WHERE a.week_start >= date_trunc('week', CURRENT_DATE) - (($1::int - 1) * INTERVAL '1 week')`,
-    [weeks]
+     WHERE a.week_start >= date_trunc('week', (now() AT TIME ZONE $2)::date)
+                            - (($1::int - 1) * INTERVAL '1 week')`,
+    [weeks, tz]
   );
   const approvals = new Map(
     approvalRows.map((a) => [`${a.week_start}:${a.user_id}`, a] as const)
@@ -1962,12 +1970,17 @@ export interface EmployeeWeekTimesheet {
  * One employee's Monday-start week, laid out day by day for the printable
  * timesheet at `/timesheets/[userId]/[weekStart]/print`.
  *
- * Days and weeks are bucketed with date_trunc/to_char in the DATABASE's
- * timezone — the same basis as adminTimeByWeek and setWeekPaid — so the sheet
- * that comes off the printer carries exactly the hours the Timesheets page
- * showed for that week. Open shifts are included so a mid-week printout shows
- * them, but they contribute no hours (there is no net time until a shift
- * closes), which is also how the review table totals a week.
+ * Days and weeks are bucketed in the payroll timezone (PAYROLL_TZ, default
+ * America/Chicago) — the same basis as adminTimeByWeek, setWeekPaid and the
+ * approval emails — so the sheet that comes off the printer carries exactly the
+ * hours the Timesheets page showed for that week. The database and the app
+ * server both run on UTC, so bucketing in their zone put an evening shift on
+ * the next day's row (and a Sunday-evening one in the next week entirely);
+ * a crew's calendar day is the one they worked, not UTC's.
+ *
+ * Open shifts are included so a mid-week printout shows them, but they
+ * contribute no hours (there is no net time until a shift closes), which is
+ * also how the review table totals a week.
  *
  * Returns null when there is no such user.
  */
@@ -1989,8 +2002,10 @@ export async function employeeWeekTimesheet(
   );
   if (!user) return null;
 
+  const tz = payrollTimeZone();
+
   // Normalize whatever date was asked for to that week's Monday, and lay out
-  // the seven days from it, in the database's timezone.
+  // the seven days from it.
   const week = await one<{ week_start: string; week_end: string }>(
     `SELECT to_char(date_trunc('week', $1::date), 'YYYY-MM-DD') AS week_start,
             to_char(date_trunc('week', $1::date) + INTERVAL '6 days', 'YYYY-MM-DD') AS week_end`,
@@ -2018,7 +2033,7 @@ export async function employeeWeekTimesheet(
     check_number: string | null;
     break_seconds: number;
   }>(
-    `SELECT t.id, to_char(t.clock_in, 'YYYY-MM-DD') AS day,
+    `SELECT t.id, to_char(t.clock_in AT TIME ZONE $3, 'YYYY-MM-DD') AS day,
             p.name AS project_name, p.customer,
             t.clock_in, t.clock_out, t.note, t.paid, t.check_number,
             COALESCE((
@@ -2028,9 +2043,9 @@ export async function employeeWeekTimesheet(
        FROM time_entries t
        LEFT JOIN projects p ON p.id = t.project_id
       WHERE t.user_id = $1
-        AND date_trunc('week', t.clock_in) = date_trunc('week', $2::date)
+        AND date_trunc('week', t.clock_in AT TIME ZONE $3) = date_trunc('week', $2::date)
       ORDER BY t.clock_in`,
-    [userId, monday]
+    [userId, monday, tz]
   );
 
   const approval = await one<{ approved_at: string; approved_by_name: string | null }>(
@@ -2108,7 +2123,10 @@ export async function setEntryPaid(entryId: number, paid: boolean, adminId: numb
 /** Mark every closed entry for a user in a given ISO week paid/unpaid,
  *  recording the payroll check number when marking paid (cleared when
  *  unmarking). When marking paid without a check number, any check number
- *  already recorded on an entry is preserved rather than erased. */
+ *  already recorded on an entry is preserved rather than erased.
+ *
+ *  The week is cut in the payroll timezone, so the entries marked are exactly
+ *  the ones the review table counted under that week. */
 export async function setWeekPaid(
   userId: number,
   weekStart: string,
@@ -2117,6 +2135,7 @@ export async function setWeekPaid(
   checkNumber?: string | null
 ): Promise<void> {
   const check = paid ? (checkNumber?.trim() || null) : null;
+  const tz = payrollTimeZone();
   await q(
     `UPDATE time_entries
      SET paid = $1,
@@ -2125,8 +2144,8 @@ export async function setWeekPaid(
          check_number = CASE WHEN $1 THEN COALESCE($5, check_number) ELSE NULL END
      WHERE user_id = $3
        AND clock_out IS NOT NULL
-       AND date_trunc('week', clock_in) = date_trunc('week', $4::date)`,
-    [paid, adminId, userId, weekStart, check]
+       AND date_trunc('week', clock_in AT TIME ZONE $6) = date_trunc('week', $4::date)`,
+    [paid, adminId, userId, weekStart, check, tz]
   );
 }
 
@@ -2177,10 +2196,9 @@ export interface ManagerWeekSummary {
  * weekly total, shift notes, and whether the week is already approved.
  * Reports with no time still appear (all-zero days) so nothing is missed.
  *
- * Days and weeks are bucketed with date_trunc/to_char in the DATABASE's
- * timezone — the same basis as adminTimeByWeek and setWeekPaid — so the
- * emailed week and the in-app timesheet week always agree. (PAYROLL_TZ only
- * decides WHEN the Monday email fires, not how hours are bucketed.)
+ * Days and weeks are bucketed in the payroll timezone — the same basis as
+ * adminTimeByWeek, employeeWeekTimesheet and setWeekPaid — so the emailed week
+ * and the in-app timesheet week always agree.
  */
 export async function managerWeekSummary(
   managerId: number,
@@ -2203,6 +2221,8 @@ export async function managerWeekSummary(
     [managerId]
   );
 
+  const tz = payrollTimeZone();
+
   const days: string[] = (
     await q<{ d: string }>(
       `SELECT to_char(gs, 'YYYY-MM-DD') AS d
@@ -2215,7 +2235,7 @@ export async function managerWeekSummary(
 
   const entryRows = reportIds.length
     ? await q<{ user_id: number; day: string; note: string | null; net_hours: number }>(
-        `SELECT t.user_id, to_char(t.clock_in, 'YYYY-MM-DD') AS day, t.note,
+        `SELECT t.user_id, to_char(t.clock_in AT TIME ZONE $3, 'YYYY-MM-DD') AS day, t.note,
                 (GREATEST(0,
                   EXTRACT(EPOCH FROM (t.clock_out - t.clock_in))
                   - COALESCE((
@@ -2226,9 +2246,9 @@ export async function managerWeekSummary(
          FROM time_entries t
          WHERE t.user_id = ANY($1::int[])
            AND t.clock_out IS NOT NULL
-           AND date_trunc('week', t.clock_in) = date_trunc('week', $2::date)
+           AND date_trunc('week', t.clock_in AT TIME ZONE $3) = date_trunc('week', $2::date)
          ORDER BY t.clock_in`,
-        [reportIds, monday]
+        [reportIds, monday, tz]
       )
     : [];
 
