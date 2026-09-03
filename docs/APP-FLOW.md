@@ -336,6 +336,17 @@ Rules that fall out of this model:
   already booked on one, so a normal fortnight is ten columns wide. A worked
   weekend is bookable, ringed amber, and brings its *own* extra day of budget
   rather than eating the weekdays'.
+- **Days off are set from the day itself.** Click a date in the crew week's day
+  header and it's marked off — a holiday or a shutdown day, with an optional
+  label ("Thanksgiving") — writing the same `schedule_holidays` row the
+  Non-Working Days calendar under Settings does (`setDayOffAction`), so every
+  duration skips it, every projected date shifts around it, and every open board
+  re-reads. A day marked off is **blocked, not discouraged**: no phase and no
+  warehouse day can be booked on one, in the grid or at the server
+  (`assignCrewDayAction`, `assignCrewSpanAction`, `bookWarehouseDaysAction`),
+  which is what separates it from a weekend. Bookings made *before* the day was
+  closed are left alone and the header marks the day "worked", so nobody's day
+  quietly disappears; clicking the date again opens it back up.
 - **Subcontracted phases** — the sub is chosen on the *timeline*, because that's
   when the work is contracted. Their days are derived from the phase window, so
   a phase that slips takes them with it and there's nothing to re-book. A
@@ -715,6 +726,10 @@ want.
 >   fortnight is ten columns wide. A worked weekend brings its *own* extra day of
 >   budget rather than eating the weekdays'. Durations stay measured in working
 >   days, and holidays drop out of the math entirely.
+> - A day is marked off by clicking its date on the crew week (or off the
+>   Non-Working Days calendar in Settings). Off means off: durations skip it,
+>   dates shift around it, and nothing can be booked on it — unlike a weekend,
+>   which can be worked deliberately.
 > - A subcontractor is picked on the **timeline**, because that's when the work is
 >   contracted — not booked day by day. A subcontracted phase can still carry a
 >   headcount for the supervisor we send.
