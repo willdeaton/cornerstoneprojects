@@ -15,18 +15,28 @@ import { clockTime, money, shortDate } from '@/lib/format';
  * timesheet's job is to account for the whole week, and a blank Wednesday is
  * information. Days with more than one shift get their own subtotal, since the
  * day is the unit somebody checks against a schedule.
+ *
+ * Clock times are rendered in `timeZone` (the payroll timezone, passed in by
+ * the page) rather than the renderer's own zone. This document is rendered on
+ * the server, where "local" is the container's clock — UTC on every host we
+ * deploy to — so leaving it implicit printed every shift hours away from the
+ * time the Timesheets page showed for it.
  */
 
 /** 'Mon', 'Tue', … for a YYYY-MM-DD date, read as a plain calendar date. */
 function weekday(date: string): string {
-  return new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+  return new Date(date + 'T00:00:00Z').toLocaleDateString('en-US', {
+    weekday: 'short',
+    timeZone: 'UTC',
+  });
 }
 
 /** 'Aug 25' — the year lives in the week range in the header. */
 function dayAndMonth(date: string): string {
-  return new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
+  return new Date(date + 'T00:00:00Z').toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
+    timeZone: 'UTC',
   });
 }
 
@@ -37,9 +47,12 @@ function hours(n: number): string {
 export function TimesheetDocument({
   sheet,
   company,
+  timeZone,
 }: {
   sheet: EmployeeWeekTimesheet;
   company: CompanyInfo;
+  /** Payroll timezone the shift times are read in, e.g. 'America/Chicago'. */
+  timeZone: string;
 }) {
   const range = `${shortDate(sheet.week_start)} – ${shortDate(sheet.week_end)}`;
   const daysWorked = sheet.days.filter((d) => d.entries.length > 0).length;
@@ -94,7 +107,7 @@ export function TimesheetDocument({
           </p>
           <p className="font-semibold text-brand-ink">
             {sheet.approved_at
-              ? `Approved${sheet.approved_by_name ? ` by ${sheet.approved_by_name}` : ''} · ${shortDate(sheet.approved_at)}`
+              ? `Approved${sheet.approved_by_name ? ` by ${sheet.approved_by_name}` : ''} · ${shortDate(sheet.approved_at, timeZone)}`
               : 'Not yet approved'}
           </p>
           <p className="text-brand-gray">
@@ -141,10 +154,10 @@ export function TimesheetDocument({
                       {idx === 0 ? `${weekday(day.date)} ${dayAndMonth(day.date)}` : ''}
                     </td>
                     <td className="whitespace-nowrap py-1.5 pr-2 text-brand-ink">
-                      {clockTime(en.clock_in)}
+                      {clockTime(en.clock_in, timeZone)}
                     </td>
                     <td className="whitespace-nowrap py-1.5 pr-2 text-brand-ink">
-                      {en.clock_out ? clockTime(en.clock_out) : 'On the clock'}
+                      {en.clock_out ? clockTime(en.clock_out, timeZone) : 'On the clock'}
                     </td>
                     <td className="whitespace-nowrap py-1.5 pr-2 text-right text-brand-gray">
                       {en.break_minutes > 0 ? `${en.break_minutes}m` : '—'}

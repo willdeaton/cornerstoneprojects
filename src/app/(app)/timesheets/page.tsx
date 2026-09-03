@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { adminTimeByWeek, listProjects, listActiveWorkers } from '@/lib/data';
+import { payrollTimeZone } from '@/lib/payroll-week';
 import { PageHeader, StatCard } from '@/components/ui';
 import { TimesheetReview } from './TimesheetReview';
 import { TimeTabs } from '../TimeTabs';
@@ -39,6 +40,7 @@ export default async function TimesheetsPage() {
         projects={projects.map((p) => ({ id: p.id, name: p.name, customer: p.customer }))}
         users={users.map((u) => ({ id: u.id, name: u.name }))}
         isAdmin={me.role === 'admin'}
+        timeZone={payrollTimeZone()}
       />
     </div>
   );

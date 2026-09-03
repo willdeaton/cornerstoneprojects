@@ -14,10 +14,14 @@ import {
   type TimeEntryInit,
 } from '@/components/TimeEntryModal';
 
+/** 'Aug 24, 2026 – Aug 30, 2026' for a Monday. Plain calendar-date arithmetic,
+ *  done at UTC midnight so the Sunday it lands on doesn't depend on the
+ *  viewer's own zone. */
 function weekRange(weekStart: string): string {
-  const start = new Date(weekStart + 'T00:00:00');
-  const end = new Date(start.getTime() + 6 * 864e5);
-  return `${shortDate(weekStart)} – ${shortDate(end.toISOString().slice(0, 10))}`;
+  const end = new Date(new Date(weekStart + 'T00:00:00Z').getTime() + 6 * 864e5)
+    .toISOString()
+    .slice(0, 10);
+  return `${shortDate(weekStart)} – ${shortDate(end)}`;
 }
 
 export function TimesheetReview({
@@ -25,11 +29,15 @@ export function TimesheetReview({
   projects,
   users,
   isAdmin,
+  timeZone,
 }: {
   weeks: AdminWeek[];
   projects: ProjectOption[];
   users: UserOption[];
   isAdmin: boolean;
+  /** Payroll timezone the weeks were cut in, so the shift times on screen read
+   *  the same as the ones on the printed sheet. See clockTime in lib/format. */
+  timeZone: string;
 }) {
   const [pending, start] = useTransition();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -321,10 +329,12 @@ export function TimesheetReview({
                               <tbody>
                                 {u.entries.map((en) => (
                                   <tr key={en.id} className="border-t border-black/5">
-                                    <td className="py-2 text-brand-ink">{dateTime(en.clock_in)}</td>
+                                    <td className="py-2 text-brand-ink">
+                                      {dateTime(en.clock_in, timeZone)}
+                                    </td>
                                     <td className="py-2 text-brand-gray">
                                       {en.clock_out ? (
-                                        dateTime(en.clock_out)
+                                        dateTime(en.clock_out, timeZone)
                                       ) : (
                                         <span className="text-brand-green-dark">Active</span>
                                       )}
