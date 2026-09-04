@@ -38,8 +38,6 @@ export default async function TimePage() {
                     projectName: active.project_name,
                     customer: active.customer,
                     clockIn: active.clock_in,
-                    onBreak: active.on_break,
-                    breakStart: active.break_start,
                   }
                 : null
             }
@@ -76,22 +74,14 @@ export default async function TimePage() {
                   <li key={e.id} className="flex items-center justify-between">
                     <div>
                       <p className="flex items-center gap-2 text-sm font-semibold text-brand-ink">
-                        <span
-                          className={`h-2 w-2 animate-pulse rounded-full ${
-                            e.on_break ? 'bg-status-progress' : 'bg-brand-green'
-                          }`}
-                        />
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-brand-green" />
                         {e.user_name}
                       </p>
                       <p className="pl-4 text-xs text-brand-gray">
-                        {e.on_break ? 'On lunch break' : e.project_name ?? 'General (no job)'}
+                        {e.project_name ?? 'General (no job)'}
                       </p>
                     </div>
-                    <span
-                      className={`text-sm font-semibold ${
-                        e.on_break ? 'text-amber-700' : 'text-brand-green-dark'
-                      }`}
-                    >
+                    <span className="text-sm font-semibold text-brand-green-dark">
                       {duration(e.clock_in, null)}
                     </span>
                   </li>

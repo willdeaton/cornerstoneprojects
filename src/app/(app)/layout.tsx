@@ -23,9 +23,7 @@ export default async function AuthedLayout({ children }: { children: React.React
       clockedInTo={
         active
           ? {
-              project: active.on_break
-                ? 'On lunch break'
-                : active.project_name ?? 'General (no job)',
+              project: active.project_name ?? 'General (no job)',
               customer: active.customer ?? '',
             }
           : null

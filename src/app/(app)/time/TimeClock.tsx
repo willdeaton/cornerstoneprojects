@@ -2,15 +2,11 @@
 
 import { useState, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  clockInAction,
-  clockOutAction,
-  switchJobAction,
-  startBreakAction,
-  endBreakAction,
-} from '@/app/actions/time';
+import { clockInAction, clockOutAction, switchJobAction } from '@/app/actions/time';
+import { Modal } from '@/components/Modal';
 import { duration } from '@/lib/format';
 import { isValidSynopsis, SYNOPSIS_ERROR } from '@/lib/synopsis';
+import { LUNCH_OPTIONS } from '@/lib/lunch';
 
 interface ActiveInfo {
   id: number;
@@ -18,8 +14,6 @@ interface ActiveInfo {
   projectName: string | null;
   customer: string | null;
   clockIn: string;
-  onBreak: boolean;
-  breakStart: string | null;
 }
 
 const GENERAL = 'general';
@@ -41,6 +35,11 @@ export function TimeClock({
   const [error, setError] = useState<string | null>(null);
   const [, tick] = useState(0);
   const router = useRouter();
+
+  // Clock-out lunch prompt: 'ask' is the yes/no question, 'length' is the
+  // follow-up asking how long the lunch was.
+  const [lunchStep, setLunchStep] = useState<'ask' | 'length' | null>(null);
+  const [lunchMinutes, setLunchMinutes] = useState<number>(LUNCH_OPTIONS[0].minutes);
 
   // The value of the job <select> shown while clocked in: the current job
   // stays selected by default, so "Switch job" is disabled until the worker
@@ -76,13 +75,24 @@ export function TimeClock({
     run(() => clockInAction(projectId), 'Could not clock in.');
   }
 
-  function clockOut() {
+  /** Clocking out is a two-step flow: check the synopsis here, then ask about
+   *  lunch in the modal before the shift is actually closed. */
+  function askAboutLunch() {
     // Mirror the server-side rule: a real synopsis is required to clock out.
     if (!isValidSynopsis(note)) {
       setError(SYNOPSIS_ERROR);
       return;
     }
-    run(() => clockOutAction(note), 'Could not clock out.', () => setNote(''));
+    setError(null);
+    setLunchMinutes(LUNCH_OPTIONS[0].minutes);
+    setLunchStep('ask');
+  }
+
+  function clockOut(minutes: number) {
+    run(() => clockOutAction(note, minutes), 'Could not clock out.', () => {
+      setNote('');
+    });
+    setLunchStep(null);
   }
 
   function switchJob() {
@@ -108,112 +118,69 @@ export function TimeClock({
       <div className="p-6">
         {active ? (
           <div>
-            <div
-              className={`rounded-xl border p-5 text-center ${
-                active.onBreak
-                  ? 'border-status-progress/40 bg-status-progress/10'
-                  : 'border-brand-green/40 bg-brand-green/10'
-              }`}
-            >
-              {active.onBreak ? (
-                <>
-                  <p className="flex items-center justify-center gap-2 text-sm font-semibold text-amber-700">
-                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-status-progress" /> On Lunch Break
-                  </p>
-                  <p className="mt-3 text-4xl font-bold tabular-nums text-brand-ink">
-                    {duration(active.breakStart ?? active.clockIn, null)}
-                  </p>
-                  <p className="mt-2 text-sm text-brand-gray">Break time isn&apos;t counted toward your hours.</p>
-                </>
-              ) : (
-                <>
-                  <p className="flex items-center justify-center gap-2 text-sm font-semibold text-brand-green-dark">
-                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-brand-green" /> Clocked In
-                  </p>
-                  <p className="mt-3 text-4xl font-bold tabular-nums text-brand-ink">
-                    {duration(active.clockIn, null)}
-                  </p>
-                  <p className="mt-2 font-medium text-brand-ink">
-                    {active.projectName ?? 'General (no specific job)'}
-                  </p>
-                  {active.customer && <p className="text-sm text-brand-gray">{active.customer}</p>}
-                </>
-              )}
+            <div className="rounded-xl border border-brand-green/40 bg-brand-green/10 p-5 text-center">
+              <p className="flex items-center justify-center gap-2 text-sm font-semibold text-brand-green-dark">
+                <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-brand-green" /> Clocked In
+              </p>
+              <p className="mt-3 text-4xl font-bold tabular-nums text-brand-ink">
+                {duration(active.clockIn, null)}
+              </p>
+              <p className="mt-2 font-medium text-brand-ink">
+                {active.projectName ?? 'General (no specific job)'}
+              </p>
+              {active.customer && <p className="text-sm text-brand-gray">{active.customer}</p>}
             </div>
 
-            {/* Lunch break controls */}
-            {active.onBreak ? (
+            {/* Mid-day job switch: closes this segment and keeps the
+                clock running on the new job. */}
+            <div className="mt-5 border-t border-gray-100 pt-4">
+              <label className="label">Switch to a different job</label>
+              <select className="input" value={switchTo} onChange={(e) => setSwitchTo(e.target.value)}>
+                <option value={GENERAL}>
+                  General — no specific job{currentJob === GENERAL ? ' (current)' : ''}
+                </option>
+                {active.projectId !== null && !projects.some((p) => p.id === active.projectId) && (
+                  <option value={String(active.projectId)}>
+                    {active.customer ? `${active.customer} — ` : ''}
+                    {active.projectName ?? 'Current job'} (current)
+                  </option>
+                )}
+                {projects.map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.customer} — {p.name}
+                    {String(p.id) === currentJob ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input mt-3"
+                placeholder="What did you do on this job? (optional)"
+                value={switchNote}
+                onChange={(e) => setSwitchNote(e.target.value)}
+              />
               <button
-                className="btn-primary mt-4 w-full py-3 text-base"
-                onClick={() => run(endBreakAction, 'Could not end break.')}
-                disabled={pending}
+                className="mt-3 w-full rounded-lg border border-brand-green/50 bg-brand-green/10 py-3 text-base font-semibold text-brand-green-dark transition hover:bg-brand-green/20 disabled:opacity-50"
+                onClick={switchJob}
+                disabled={pending || switchTo === currentJob}
               >
-                {pending ? '…' : 'End Lunch Break'}
+                {pending ? '…' : 'Switch Job'}
               </button>
-            ) : (
-              <>
-                <button
-                  className="mt-4 w-full rounded-lg border border-status-progress/50 bg-status-progress/10 py-3 text-base font-semibold text-amber-700 transition hover:bg-status-progress/20 disabled:opacity-50"
-                  onClick={() => run(startBreakAction, 'Could not start break.')}
-                  disabled={pending}
-                >
-                  {pending ? '…' : 'Start Lunch Break'}
-                </button>
-                {/* Mid-day job switch: closes this segment and keeps the
-                    clock running on the new job. */}
-                <div className="mt-5 border-t border-gray-100 pt-4">
-                  <label className="label">Switch to a different job</label>
-                  <select
-                    className="input"
-                    value={switchTo}
-                    onChange={(e) => setSwitchTo(e.target.value)}
-                  >
-                    <option value={GENERAL}>
-                      General — no specific job{currentJob === GENERAL ? ' (current)' : ''}
-                    </option>
-                    {active.projectId !== null && !projects.some((p) => p.id === active.projectId) && (
-                      <option value={String(active.projectId)}>
-                        {active.customer ? `${active.customer} — ` : ''}
-                        {active.projectName ?? 'Current job'} (current)
-                      </option>
-                    )}
-                    {projects.map((p) => (
-                      <option key={p.id} value={String(p.id)}>
-                        {p.customer} — {p.name}
-                        {String(p.id) === currentJob ? ' (current)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    className="input mt-3"
-                    placeholder="What did you do on this job? (optional)"
-                    value={switchNote}
-                    onChange={(e) => setSwitchNote(e.target.value)}
-                  />
-                  <button
-                    className="mt-3 w-full rounded-lg border border-brand-green/50 bg-brand-green/10 py-3 text-base font-semibold text-brand-green-dark transition hover:bg-brand-green/20 disabled:opacity-50"
-                    onClick={switchJob}
-                    disabled={pending || switchTo === currentJob}
-                  >
-                    {pending ? '…' : 'Switch Job'}
-                  </button>
-                </div>
+            </div>
 
-                {/* Clock out — a shift synopsis is required. */}
-                <div className="mt-5 border-t border-gray-100 pt-4">
-                  <label className="label">Shift synopsis — what did you work on? (required)</label>
-                  <input
-                    className="input"
-                    placeholder="e.g. Painted the back hallway and prepped trim"
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                  />
-                  <button className="btn-primary mt-3 w-full py-3 text-base" onClick={clockOut} disabled={pending}>
-                    {pending ? '…' : 'Clock Out'}
-                  </button>
-                </div>
-              </>
-            )}
+            {/* Clock out — a shift synopsis is required, and the lunch prompt
+                opens before the shift is closed. */}
+            <div className="mt-5 border-t border-gray-100 pt-4">
+              <label className="label">Shift synopsis — what did you work on? (required)</label>
+              <input
+                className="input"
+                placeholder="e.g. Painted the back hallway and prepped trim"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+              <button className="btn-primary mt-3 w-full py-3 text-base" onClick={askAboutLunch} disabled={pending}>
+                {pending ? '…' : 'Clock Out'}
+              </button>
+            </div>
           </div>
         ) : (
           <div>
@@ -241,6 +208,79 @@ export function TimeClock({
         )}
         {error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       </div>
+
+      <Modal
+        open={lunchStep !== null}
+        onClose={() => setLunchStep(null)}
+        title={lunchStep === 'length' ? 'How long was your lunch?' : 'Lunch break'}
+      >
+        {lunchStep === 'length' ? (
+          <div className="space-y-4">
+            <p className="text-sm text-brand-gray">
+              Pick how long you were on lunch. It comes off your shift total.
+            </p>
+            <div className="space-y-2">
+              {LUNCH_OPTIONS.map((opt) => (
+                <button
+                  key={opt.minutes}
+                  type="button"
+                  onClick={() => setLunchMinutes(opt.minutes)}
+                  className={`w-full rounded-lg border py-3 text-base font-semibold transition ${
+                    lunchMinutes === opt.minutes
+                      ? 'border-brand-green bg-brand-green/10 text-brand-green-dark'
+                      : 'border-black/10 text-brand-ink hover:bg-black/[0.03]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button
+                type="button"
+                className="flex-1 rounded-lg border border-black/10 py-3 text-sm font-semibold text-brand-gray transition hover:bg-black/5 disabled:opacity-50"
+                onClick={() => setLunchStep('ask')}
+                disabled={pending}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="btn-primary flex-1 py-3 text-sm"
+                onClick={() => clockOut(lunchMinutes)}
+                disabled={pending}
+              >
+                {pending ? '…' : 'Clock Out'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-base font-medium text-brand-ink">Did you take a lunch break?</p>
+            <p className="text-sm text-brand-gray">
+              If you did, we&apos;ll subtract it from today&apos;s hours.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-lg border border-black/10 py-3 text-base font-semibold text-brand-ink transition hover:bg-black/[0.03] disabled:opacity-50"
+                onClick={() => clockOut(0)}
+                disabled={pending}
+              >
+                {pending ? '…' : 'No'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary flex-1 py-3 text-base"
+                onClick={() => setLunchStep('length')}
+                disabled={pending}
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

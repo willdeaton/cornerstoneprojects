@@ -427,9 +427,11 @@ and read-only end to end.
 
 ### Time `/time` and `/timesheets`
 **Time Clock** — clock in (optionally against a job, or "general"), a live
-timer, lunch breaks (`time_breaks`, so hours are net of breaks), switch job
-without clocking out, weekly hours, recent entries, and an *On the Clock Now*
-panel showing who's working and who's on break. Employees don't see that panel.
+timer, switch job without clocking out, weekly hours, recent entries, and an
+*On the Clock Now* panel showing who's working. Employees don't see that panel.
+Clocking out asks whether a lunch break was taken and, if so, how long (30
+minutes, 45 minutes or 1 hour); the answer is written to `time_breaks` and
+deducted from the shift, so hours are net of lunch.
 
 **Timesheets** (admins & managers) — 8 weeks of clocked hours by week and by
 person, with paid/unpaid totals, mark-as-paid (with a check number), manual
@@ -768,10 +770,11 @@ want.
 > bookings, one card per day, with start time, job, address, phase notes and
 > crew notes. Managers can also email each assignee their own dates.
 >
-> **Time Clock** — clock in against a job or as general work, a live timer, lunch
-> breaks so hours are net, switch job without clocking out, weekly hours, and a
-> live "on the clock now" panel (hidden from employees, who only ever see their
-> own time).
+> **Time Clock** — clock in against a job or as general work, a live timer,
+> switch job without clocking out, weekly hours, and a live "on the clock now"
+> panel (hidden from employees, who only ever see their own time). Clock-out
+> asks whether a lunch break was taken and how long (30 minutes, 45 minutes or
+> 1 hour), and subtracts it so hours are net of lunch.
 >
 > **Timesheets** (admins & managers) — 8 weeks of hours by week and person, paid
 > vs unpaid, mark-as-paid with a check number, manual entry and correction of

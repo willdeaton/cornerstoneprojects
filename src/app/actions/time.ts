@@ -4,12 +4,11 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { isValidSynopsis, SYNOPSIS_ERROR } from '@/lib/synopsis';
+import { isValidLunchMinutes, LUNCH_ERROR } from '@/lib/lunch';
 import {
   clockIn,
   clockOut,
   switchJob,
-  startBreak,
-  endBreak,
   setEntryPaid,
   setWeekPaid,
   approveWeek,
@@ -54,13 +53,19 @@ export async function clockInAction(projectId: number | null) {
   return res;
 }
 
-export async function clockOutAction(note?: string) {
+/** Clock out. `lunchMinutes` is what the worker answered in the clock-out
+ *  lunch prompt: 0 for "no lunch", otherwise one of the offered lengths, which
+ *  is deducted from the shift. */
+export async function clockOutAction(note?: string, lunchMinutes?: number) {
   const user = await requireUser();
   // A shift synopsis is required to clock out (also enforced in clockOut).
   if (!isValidSynopsis(note)) {
     return { ok: false, error: SYNOPSIS_ERROR };
   }
-  const res = await clockOut(user.id, note);
+  if (!isValidLunchMinutes(lunchMinutes)) {
+    return { ok: false, error: LUNCH_ERROR };
+  }
+  const res = await clockOut(user.id, note, lunchMinutes);
   revalidatePath('/time');
   revalidatePath('/projects');
   revalidatePath('/', 'layout');
@@ -76,22 +81,6 @@ export async function switchJobAction(projectId: number | null, note?: string) {
   revalidatePath('/time');
   revalidatePath('/projects');
   if (projectId) revalidatePath(`/projects/${projectId}`, 'layout');
-  revalidatePath('/', 'layout');
-  return res;
-}
-
-export async function startBreakAction() {
-  const user = await requireUser();
-  const res = await startBreak(user.id);
-  revalidatePath('/time');
-  revalidatePath('/', 'layout');
-  return res;
-}
-
-export async function endBreakAction() {
-  const user = await requireUser();
-  const res = await endBreak(user.id);
-  revalidatePath('/time');
   revalidatePath('/', 'layout');
   return res;
 }

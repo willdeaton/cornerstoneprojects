@@ -46,6 +46,7 @@ import { billingStage, contractLocked, tallyInvoices, type InvoiceTally } from '
 import { hoursBetween } from './format';
 import { computeSchedule, shiftLabel, timeLabel, workingDaySpan } from './schedule-math';
 import { isValidSynopsis, SYNOPSIS_ERROR } from './synopsis';
+import { isValidLunchMinutes, LUNCH_ERROR } from './lunch';
 import type { MathLine } from './quote-math';
 import { blockTotals, groupQuoteLines } from './quote-math';
 
@@ -1484,23 +1485,19 @@ export interface TimeEntryWithUser extends TimeEntry {
   break_minutes?: number;
 }
 
-/** An open (unclosed) time entry with the current break state, if any. */
+/** An open (unclosed) time entry. Lunch isn't tracked live any more — it's
+ *  reported once at clock-out — so there's no break state to carry here. */
 export interface ActiveEntry extends TimeEntry {
   project_name: string | null;
   customer: string | null;
-  on_break: boolean;
-  break_start: string | null;
 }
 
 /** The user's currently-open time entry, if any. */
 export async function activeEntry(userId: number): Promise<ActiveEntry | undefined> {
   return one<ActiveEntry>(
-    `SELECT t.*, p.name AS project_name, p.customer,
-            b.break_start,
-            (b.id IS NOT NULL) AS on_break
+    `SELECT t.*, p.name AS project_name, p.customer
      FROM time_entries t
      LEFT JOIN projects p ON p.id = t.project_id
-     LEFT JOIN time_breaks b ON b.time_entry_id = t.id AND b.break_end IS NULL
      WHERE t.user_id = $1 AND t.clock_out IS NULL
      ORDER BY t.clock_in DESC LIMIT 1`,
     [userId]
@@ -1539,11 +1536,22 @@ async function lockActiveEntry(
   return rows[0] as { id: number; project_id: number | null } | undefined;
 }
 
-export async function clockOut(userId: number, note?: string): Promise<{ ok: boolean; error?: string }> {
+/** Clock out. `lunchMinutes` is the lunch the worker reports in the clock-out
+ *  prompt (0 / omitted when they took none); it's recorded as a break on the
+ *  shift so every net-hours figure deducts it. */
+export async function clockOut(
+  userId: number,
+  note?: string,
+  lunchMinutes?: number
+): Promise<{ ok: boolean; error?: string }> {
   // A shift synopsis is mandatory on the final clock-out: at least 5
   // non-whitespace characters so "ok" or a stray space can't slip through.
   if (!isValidSynopsis(note)) {
     return { ok: false, error: SYNOPSIS_ERROR };
+  }
+  const lunchMin = Math.max(0, Math.round(lunchMinutes ?? 0));
+  if (!isValidLunchMinutes(lunchMin)) {
+    return { ok: false, error: LUNCH_ERROR };
   }
   const pool = await getDb();
   const client = await pool.connect();
@@ -1554,7 +1562,8 @@ export async function clockOut(userId: number, note?: string): Promise<{ ok: boo
       await client.query('ROLLBACK');
       return { ok: false, error: 'You are not clocked in.' };
     }
-    // Close any lunch break still running so the shift total stays accurate.
+    // Close any lunch break left running by an older shift (the app used to
+    // clock breaks in and out) so the shift total stays accurate.
     await client.query(
       'UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL',
       [entry.id]
@@ -1563,6 +1572,17 @@ export async function clockOut(userId: number, note?: string): Promise<{ ok: boo
       note!.trim(),
       entry.id,
     ]);
+    if (lunchMin > 0) {
+      // Record the reported lunch as one break starting at clock-in, clamped
+      // to the shift itself so a long lunch on a short shift can't push the
+      // net hours below zero.
+      await client.query(
+        `INSERT INTO time_breaks (time_entry_id, break_start, break_end)
+         SELECT id, clock_in, clock_in + LEAST($2::interval, clock_out - clock_in)
+         FROM time_entries WHERE id = $1`,
+        [entry.id, `${lunchMin} minutes`]
+      );
+    }
     await client.query('COMMIT');
     return { ok: true };
   } catch (err) {
@@ -1574,10 +1594,10 @@ export async function clockOut(userId: number, note?: string): Promise<{ ok: boo
   }
 }
 
-/** Switch jobs mid-shift: atomically close the active entry (ending any
- *  running break) and open a new entry on the target job, so the worker's
- *  clock keeps running with no gap. The segment note is optional — the
- *  mandatory-synopsis rule only applies to the final clock-out. */
+/** Switch jobs mid-shift: atomically close the active entry and open a new one
+ *  on the target job, so the worker's clock keeps running with no gap. The
+ *  segment note is optional — the mandatory-synopsis rule only applies to the
+ *  final clock-out. */
 export async function switchJob(
   userId: number,
   projectId: number | null,
@@ -1596,7 +1616,7 @@ export async function switchJob(
       await client.query('ROLLBACK');
       return { ok: false, error: 'You are already clocked in on that job.' };
     }
-    // Close any running lunch break at the switch, mirroring clockOut.
+    // Close any break left running by an older shift, mirroring clockOut.
     await client.query(
       'UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL',
       [entry.id]
@@ -1618,26 +1638,6 @@ export async function switchJob(
   } finally {
     client.release();
   }
-}
-
-/** Start a lunch break on the user's active shift. */
-export async function startBreak(userId: number): Promise<{ ok: boolean; error?: string }> {
-  const entry = await activeEntry(userId);
-  if (!entry) return { ok: false, error: 'Clock in before starting a break.' };
-  if (entry.on_break) return { ok: false, error: 'You are already on a break.' };
-  await q('INSERT INTO time_breaks (time_entry_id, break_start) VALUES ($1, now())', [entry.id]);
-  return { ok: true };
-}
-
-/** End the running lunch break on the user's active shift. */
-export async function endBreak(userId: number): Promise<{ ok: boolean; error?: string }> {
-  const entry = await activeEntry(userId);
-  if (!entry) return { ok: false, error: 'You are not clocked in.' };
-  if (!entry.on_break) return { ok: false, error: 'You are not on a break.' };
-  await q('UPDATE time_breaks SET break_end = now() WHERE time_entry_id = $1 AND break_end IS NULL', [
-    entry.id,
-  ]);
-  return { ok: true };
 }
 
 export async function listProjectTime(projectId: number): Promise<TimeEntryWithUser[]> {
@@ -1676,12 +1676,9 @@ export async function listRecentTime(limit = 25): Promise<TimeEntryWithUser[]> {
 }
 
 /** Everyone currently clocked in (open entries), across all projects. */
-export async function listActiveClockIns(): Promise<(TimeEntryWithUser & { on_break: boolean })[]> {
-  return q<TimeEntryWithUser & { on_break: boolean }>(
-    `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer,
-            EXISTS (
-              SELECT 1 FROM time_breaks b WHERE b.time_entry_id = t.id AND b.break_end IS NULL
-            ) AS on_break
+export async function listActiveClockIns(): Promise<TimeEntryWithUser[]> {
+  return q<TimeEntryWithUser>(
+    `SELECT t.*, u.name AS user_name, p.name AS project_name, p.customer
      FROM time_entries t
      JOIN users u ON u.id = t.user_id
      LEFT JOIN projects p ON p.id = t.project_id
