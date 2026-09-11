@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { Quote } from '@/lib/types';
 import { money, shortDate } from '@/lib/format';
 import { QuoteStatusBadge, EmptyState } from '@/components/ui';
+import { WonCelebration } from '@/components/WonCelebration';
 import { readListFilters, writeListFilters } from '@/lib/list-state';
 import { QuoteActions } from './QuoteActions';
 import {
@@ -84,6 +85,8 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
+  // How many quotes the last bulk sale actually converted; > 0 runs the party.
+  const [soldCount, setSoldCount] = useState(0);
   const selectAllRef = useRef<HTMLInputElement>(null);
 
   const categories = useMemo(
@@ -194,6 +197,12 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
     router.refresh();
   }
 
+  /**
+   * The bulk path can celebrate *after* the fact — unlike the single-quote
+   * conversion it doesn't redirect, so there's nothing to unmount the overlay.
+   * Only a run that actually sold something gets the confetti; a selection the
+   * server skipped (already sold in another tab) reports zero and stays quiet.
+   */
   function bulkMarkSold() {
     if (openSelectedIds.length === 0) return;
     if (
@@ -201,7 +210,10 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
         `Mark ${openSelectedIds.length} quote${openSelectedIds.length === 1 ? '' : 's'} sold and create a project for each?`,
       )
     ) {
-      void runBulk(() => bulkMarkQuotesSoldAction(openSelectedIds));
+      void runBulk(async () => {
+        const res = await bulkMarkQuotesSoldAction(openSelectedIds);
+        if (res?.count) setSoldCount(res.count);
+      });
     }
   }
 
@@ -223,6 +235,11 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
 
   return (
     <div>
+      <WonCelebration
+        open={soldCount > 0}
+        headline={soldCount === 1 ? 'Sold!' : `${soldCount} quotes sold!`}
+        onDone={() => setSoldCount(0)}
+      />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           type="search"
