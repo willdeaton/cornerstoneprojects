@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { QuoteStatus } from '@/lib/types';
 import { DropdownMenu } from '@/components/DropdownMenu';
+import { WonCelebration } from '@/components/WonCelebration';
 import {
   convertQuoteAction,
   markQuoteLostAction,
@@ -15,6 +16,7 @@ import {
 export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [celebrating, setCelebrating] = useState(false);
   const router = useRouter();
 
   /**
@@ -34,8 +36,29 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
     router.refresh();
   }
 
+  /**
+   * Selling is the good news, so it gets the celebration — and gets it *first*.
+   * The conversion redirects to the new project, which would unmount this
+   * component and cut the overlay off mid-air, so the action waits until the
+   * celebration is done (or the user has clicked through it).
+   */
+  function markSold() {
+    setCelebrating(true);
+  }
+
+  function afterCelebration() {
+    setCelebrating(false);
+    void run(() => convertQuoteAction(id));
+  }
+
   return (
     <>
+      <WonCelebration
+        open={celebrating}
+        headline="Sold!"
+        subline="Setting the project up…"
+        onDone={afterCelebration}
+      />
       {error && (
         <p className="mb-1 text-xs font-medium text-red-700" role="alert">
           {error}
@@ -63,7 +86,7 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
                 className="menu-item-accent"
                 onClick={() => {
                   close();
-                  run(() => convertQuoteAction(id));
+                  markSold();
                 }}
               >
                 Mark Sold → Project

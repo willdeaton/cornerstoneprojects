@@ -403,3 +403,93 @@ body {
   animation-timing-function: linear;
   animation-fill-mode: forwards;
 }
+
+/* Quote-won celebration (see components/WonCelebration.tsx). Keyframes rather
+   than transitions here: this one fires and finishes, it is never re-targeted
+   mid-flight, and it wants an overshoot that a transition can't express. */
+@keyframes won-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.won-scrim {
+  animation: won-scrim-in 220ms var(--ease-out) both;
+}
+
+/* Lands with a bounce — the one place in the app where overshoot is the point. */
+@keyframes won-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) translateY(40px);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1.08) translateY(0);
+  }
+  75% {
+    transform: scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.won-pop {
+  animation: won-pop-in 620ms var(--ease-out) both;
+}
+
+/* A couple of hand-waves after it lands, then still. */
+@keyframes won-wiggle {
+  0%,
+  60%,
+  100% {
+    transform: rotate(0deg);
+  }
+  70% {
+    transform: rotate(-2.5deg);
+  }
+  80% {
+    transform: rotate(2.5deg);
+  }
+  90% {
+    transform: rotate(-1.25deg);
+  }
+}
+.won-wiggle {
+  animation: won-wiggle 1700ms var(--ease-in-out) both;
+}
+
+/* Each piece carries its own --won-drift/--won-spin, set inline. */
+@keyframes won-confetti-fall {
+  from {
+    opacity: 1;
+    transform: translate3d(0, -10vh, 0) rotate(0deg);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(var(--won-drift, 0px), 105vh, 0) rotate(var(--won-spin, 360deg));
+  }
+}
+.won-confetti {
+  animation-name: won-confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+/* Reduced motion keeps the moment, drops the movement: the image still arrives,
+   it just fades in, holds still, and the confetti sits this one out. */
+@media (prefers-reduced-motion: reduce) {
+  .won-pop {
+    animation-name: won-scrim-in;
+    animation-duration: 220ms;
+  }
+  .won-wiggle {
+    animation: none;
+  }
+  .won-confetti {
+    display: none;
+  }
+}
