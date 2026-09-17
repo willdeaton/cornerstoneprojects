@@ -56,6 +56,13 @@ export function StatusProgress({
               key={s.key}
               disabled={pending}
               onClick={() => changeStatus(s.key)}
+              // Completing a job completes its schedule with it, which is a big
+              // enough thing to happen to say before it does.
+              title={
+                s.key === 'completed'
+                  ? 'Marks the job complete and every phase on its schedule with it'
+                  : undefined
+              }
               className={`rounded-lg border px-3 py-2 text-sm font-medium transition disabled:opacity-60 ${
                 status === s.key
                   ? 'border-brand-green bg-brand-green text-brand-ink'

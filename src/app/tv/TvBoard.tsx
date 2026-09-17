@@ -59,6 +59,7 @@ export function TvBoard({
   warehouse,
   workers,
   projects,
+  finishedProjects,
   holidays,
   logoSrc,
   serverDay,
@@ -73,6 +74,13 @@ export function TvBoard({
   workers: { id: number; name: string; schedulable: boolean }[];
   /** Every live job, including ones with nothing scheduled yet. */
   projects: TimelineProject[];
+  /**
+   * Jobs on the board that are already finished. Their phases are here so the
+   * weeks they ran in still read right — a job completed on Tuesday must not
+   * take Monday's crew off the board with it — but they are history: nothing
+   * left to staff, no date left to miss, no clash left to resolve.
+   */
+  finishedProjects?: number[];
   holidays: string[];
   logoSrc: string;
   /** Today as the server sees it — what the first paint is drawn from. */
@@ -93,6 +101,7 @@ export function TvBoard({
   const [paused, setPaused] = useState(false);
 
   const calendar = useMemo(() => ({ holidays: new Set(holidays) }), [holidays]);
+  const finished = useMemo(() => new Set(finishedProjects ?? []), [finishedProjects]);
   const { windows } = useMemo(() => computeSchedule(tasks, calendar), [tasks, calendar]);
   const bookings = useMemo(
     () => assigneeBookings(tasks, windows, calendar),
@@ -110,17 +119,20 @@ export function TvBoard({
   );
   const available = useMemo(() => availableCrew(workers, board), [workers, board]);
   const alerts = useMemo(
-    () => boardAlerts(tasks, windows, bookings, calendar, day),
-    [tasks, windows, bookings, calendar, day]
+    () => boardAlerts(tasks, windows, bookings, calendar, day, finished),
+    [tasks, windows, bookings, calendar, day, finished]
   );
   const model = useMemo(
-    () => timelineModel(tasks, projects, windows, calendar, day, weeks),
-    [tasks, projects, windows, calendar, day, weeks]
+    () => timelineModel(tasks, projects, windows, calendar, day, weeks, finished),
+    [tasks, projects, windows, calendar, day, weeks, finished]
   );
   const pages = useMemo(() => paginate(model.rows, ROWS_PER_PAGE), [model]);
+  /** Jobs on the timeline with work still ahead of them — finished ones are on
+   *  screen as the record of the weeks they ran, not as work coming up. */
+  const liveRows = useMemo(() => model.rows.filter((r) => !r.finished).length, [model]);
   const crew = useMemo(
-    () => crewWeekModel(bookings, warehouse, workers, day, CREW_WEEKS),
-    [bookings, warehouse, workers, day]
+    () => crewWeekModel(bookings, warehouse, workers, day, CREW_WEEKS, finished),
+    [bookings, warehouse, workers, day, finished]
   );
   const crewPages = useMemo(() => paginate(crew.rows, CREW_PER_PAGE), [crew]);
 
@@ -282,7 +294,7 @@ export function TvBoard({
             <p className={`${TEXT.eyebrow} text-brand-green`}>Schedule status board</p>
             <p className={`${TEXT.small} truncate text-white/45`}>
               {board.jobs.length} {board.jobs.length === 1 ? 'job' : 'jobs'} on site ·{' '}
-              {model.rows.length} scheduled over the next {weeks}{' '}
+              {liveRows} scheduled over the next {weeks}{' '}
               {weeks === 1 ? 'week' : 'weeks'}
             </p>
           </div>

@@ -263,19 +263,28 @@ export interface BoardAlert {
  * two places, a job whose plan has run past a date it was promised for, and
  * work starting within the week that still has nobody on it. Everything else
  * the Schedule flags is a planning matter and stays on the Schedule.
+ *
+ * A finished job raises none of them. Its phases are on the board so the weeks
+ * they ran in still read right, but there is nothing left to resolve on a job
+ * that is over: no crew to find, no date left to miss, and a clash on a day
+ * already worked is history rather than a warning.
  */
 export function boardAlerts(
   tasks: ScheduleTaskRow[],
   windows: Map<number, ComputedWindow>,
   bookings: AssigneeBooking[],
   cal: WorkCalendar,
-  from: string
+  from: string,
+  finished: Set<number> = new Set()
 ): BoardAlert[] {
   const out: BoardAlert[] = [];
+  const live = tasks.filter((t) => !finished.has(t.project_id));
 
   // Double-bookings, but only ones still ahead of us — a clash on a day that
   // has already been worked is history nobody can fix from here.
-  const clashes = findConflicts(bookings).filter((c) => c.end >= from);
+  const clashes = findConflicts(
+    bookings.filter((b) => !finished.has(b.projectId))
+  ).filter((c) => c.end >= from);
   const clashed = new Map<string, string>();
   for (const c of clashes) if (!clashed.has(c.key)) clashed.set(c.key, `${c.name} (${shortDate(c.start)})`);
   if (clashed.size > 0) {
@@ -290,7 +299,7 @@ export function boardAlerts(
 
   // Jobs whose derived finish has run past the date they must be done by.
   const hardFinish = new Map<number, { name: string; hard: string; end: string }>();
-  for (const t of tasks) {
+  for (const t of live) {
     const hard = t.project_hard_finish_date;
     const w = windows.get(t.id);
     if (!hard || !w) continue;
@@ -311,7 +320,7 @@ export function boardAlerts(
   const soon = addDays(from, 7);
   let phases = 0;
   let crewDays = 0;
-  for (const t of tasks) {
+  for (const t of live) {
     const w = windows.get(t.id);
     if (!w || w.start > soon || w.end < from) continue;
     const budget = crewBudget(t, w, cal);
@@ -369,8 +378,11 @@ export interface TimelineRow {
   lanes: number;
   bars: TimelineBar[];
   phases: number;
-  /** Crew days still to book across the job's phases on screen. */
+  /** Crew days still to book across the job's phases on screen. Always 0 on a
+   *  finished job: work that is over is not work still to staff. */
   toBook: number;
+  /** The job is over — on screen as the record of a week that ran. */
+  finished: boolean;
 }
 
 export interface TimelineModel {
@@ -405,7 +417,8 @@ export function timelineModel(
   windows: Map<number, ComputedWindow>,
   cal: WorkCalendar,
   anchor: string,
-  weeks: number
+  weeks: number,
+  finished: Set<number> = new Set()
 ): TimelineModel {
   const range = weekAlignedRange(anchor, weeks * 7);
   const days: string[] = [];
@@ -423,13 +436,18 @@ export function timelineModel(
   const unscheduled: TimelineModel['unscheduled'] = [];
 
   for (const project of projects) {
+    const over = finished.has(project.id) || project.status === 'completed';
     const phases = (byProject.get(project.id) ?? [])
       .map((t) => ({ task: t, window: windows.get(t.id) }))
       .filter((p): p is { task: ScheduleTaskRow; window: ComputedWindow } => p.window != null)
       .sort((a, b) => a.window.start.localeCompare(b.window.start));
 
     if (phases.length === 0) {
-      unscheduled.push({ projectId: project.id, name: project.name, customer: project.customer });
+      // "Not scheduled yet" is a list of work to plan, so a job that is over is
+      // never on it — it simply has no work left in these weeks.
+      if (!over) {
+        unscheduled.push({ projectId: project.id, name: project.name, customer: project.customer });
+      }
       continue;
     }
 
@@ -450,7 +468,7 @@ export function timelineModel(
       if (lane < 0) lane = laneEnds.push(window.end) - 1;
       else laneEnds[lane] = window.end;
 
-      toBook += crewBudget(task, window, cal).remaining;
+      if (!over) toBook += crewBudget(task, window, cal).remaining;
 
       // One bar per unbroken run of working days: the weekend gap is the point,
       // so a fortnight of work never reads as one continuous stretch.
@@ -492,6 +510,7 @@ export function timelineModel(
       bars,
       phases: phases.length,
       toBook,
+      finished: over,
     });
   }
 
@@ -548,6 +567,8 @@ interface CrewEntry {
   phase: string | null;
   status: TaskStatus | null;
   shift: DayShift;
+  /** The job behind it is over — a record of a week worked, not a plan. */
+  finished: boolean;
 }
 
 /** A run of days one person works the same thing, on the same shift. */
@@ -564,6 +585,8 @@ export interface CrewSpan {
   lane: number;
   /** This card shares a day with another job whose hours collide. */
   clash: boolean;
+  /** The job is over: the card is the record of a week that ran. */
+  finished: boolean;
 }
 
 /** One person's line across the weeks. */
@@ -605,7 +628,8 @@ export function crewWeekModel(
   warehouse: WarehouseDay[],
   workers: { id: number; name: string; schedulable: boolean }[],
   anchor: string,
-  weeks: number
+  weeks: number,
+  finished: Set<number> = new Set()
 ): CrewWeekModel {
   const range = weekAlignedRange(anchor, weeks * 7);
   const allDays: string[] = [];
@@ -644,6 +668,7 @@ export function crewWeekModel(
         phase: b.taskName,
         status: b.taskStatus,
         shift: { startTime: b.startTime, hours: b.hours },
+        finished: finished.has(b.projectId),
       });
     }
   }
@@ -656,6 +681,7 @@ export function crewWeekModel(
       phase: null,
       status: null,
       shift: { startTime: null, hours: null },
+      finished: false,
     });
   }
 
@@ -716,10 +742,12 @@ function crewSpans(
   columns.forEach((day, i) => {
     const entries = days.get(day) ?? [];
     // Only a real double-booking rings a card: two phases of one job, or two
-    // bounded shifts that clear each other, are somebody's ordinary day.
+    // bounded shifts that clear each other, are somebody's ordinary day. A day
+    // on a finished job never counts — it has been worked, so there is nothing
+    // left to resolve, and counting it would ring every week already behind us.
     const clashing = dayIsClashing(
       entries
-        .filter((e) => e.projectId != null)
+        .filter((e) => e.projectId != null && !e.finished)
         .map((e) => ({ projectId: e.projectId as number, shift: e.shift }))
     );
     for (const entry of entries) {
@@ -743,6 +771,7 @@ function crewSpans(
           endIdx: i,
           lane: 0,
           clash: clashing,
+          finished: entry.finished,
         };
         spans.push(started);
         open.set(entry.key, started);
