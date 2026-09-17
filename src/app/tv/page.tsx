@@ -3,7 +3,12 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
 import { listActiveWorkers, listProjects } from '@/lib/data';
 import { getBranding } from '@/lib/branding-store';
-import { listHolidays, listScheduleTasks, listWarehouseDays } from '@/lib/schedule-data';
+import {
+  listHolidays,
+  listScheduleTasks,
+  listSiteDays,
+  listWarehouseDays,
+} from '@/lib/schedule-data';
 import { addDays, today, weekStart } from '@/lib/schedule-math';
 import { TvBoard } from './TvBoard';
 
@@ -60,12 +65,14 @@ export default async function TvPage({
   // Only live jobs: a board on the wall is about work still to do, and the
   // Schedule itself is where a finished week is looked back at.
   const from = weekStart(today());
-  const [tasks, holidays, warehouse, workers, projects, branding] = await Promise.all([
+  const [tasks, holidays, warehouse, sites, workers, projects, branding] = await Promise.all([
     listScheduleTasks(),
     listHolidays(),
     // A fortnight past the timeline's own window, so the "next up" rail still
     // has warehouse days to read when the board is left on over a weekend.
     listWarehouseDays({ from, to: addDays(from, weeks * 7 + 14) }),
+    // The same window for the days somebody is at a site with no job behind it.
+    listSiteDays({ from, to: addDays(from, weeks * 7 + 14) }),
     listActiveWorkers(),
     listProjects(),
     getBranding(),
@@ -75,6 +82,7 @@ export default async function TvPage({
     <TvBoard
       tasks={tasks}
       warehouse={warehouse}
+      sites={sites}
       workers={workers.map((w) => ({ id: w.id, name: w.name, schedulable: w.schedulable }))}
       projects={projects
         .filter((p) => p.status !== 'completed')

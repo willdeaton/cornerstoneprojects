@@ -29,6 +29,7 @@ import type {
   CrewDay,
   DependsType,
   ScheduleTaskRow,
+  SiteDay,
   TaskDayTime,
   TaskStatus,
   WarehouseDay,
@@ -69,8 +70,8 @@ interface EditBase {
 }
 
 /**
- * An edit that belongs to a job — every edit but a warehouse booking, which is
- * standing work with no job behind it.
+ * An edit that belongs to a job — every edit but a warehouse or a site day,
+ * which are standing work with no job behind them.
  */
 interface JobEditBase extends EditBase {
   projectId: number;
@@ -144,6 +145,54 @@ export interface WarehouseUnbookEdit extends EditBase {
   days: string[];
 }
 
+/**
+ * The place a site day is booked against, as an edit carries it.
+ *
+ * `customer_id` is the customer on the books when the site is one, which is
+ * what gives the crew an address; `name` is what the schedule calls it either
+ * way. `address` rides along so the board can draw a pending booking with the
+ * address it will have once it saves.
+ */
+export interface DraftSite {
+  customer_id: number | null;
+  name: string;
+  address: string | null;
+  note: string | null;
+}
+
+/**
+ * The key two site bookings are the same place under: the customer when there
+ * is one — so a renamed customer is still the one site — and the typed name,
+ * case-folded, when there isn't. The same identity the unique indexes on
+ * `site_days` use, so the board and the database agree on what a duplicate is.
+ */
+export function siteKey(site: { customer_id: number | null; name: string }): string {
+  return site.customer_id != null
+    ? `cust:${site.customer_id}`
+    : `name:${site.name.trim().toLowerCase()}`;
+}
+
+/**
+ * Put one person at a site for a run of days. Like a warehouse booking there is
+ * no task and no job behind it — that is the whole point of the card — so an
+ * edit names who, where, and when.
+ */
+export interface SiteBookEdit extends EditBase {
+  kind: 'site-book';
+  userId: number;
+  person: DraftPerson;
+  site: DraftSite;
+  days: string[];
+}
+
+export interface SiteUnbookEdit extends EditBase {
+  kind: 'site-unbook';
+  userId: number;
+  person: DraftPerson;
+  site: DraftSite;
+  days: string[];
+}
+
 export type DraftEdit =
   | TaskSaveEdit
   | TaskDeleteEdit
@@ -151,7 +200,9 @@ export type DraftEdit =
   | CrewUnbookEdit
   | CrewCardEdit
   | WarehouseBookEdit
-  | WarehouseUnbookEdit;
+  | WarehouseUnbookEdit
+  | SiteBookEdit
+  | SiteUnbookEdit;
 
 /** An edit as the queue receives it — the editId is handed out by the queue. */
 export type NewDraftEdit =
@@ -161,7 +212,9 @@ export type NewDraftEdit =
   | Omit<CrewUnbookEdit, 'editId'>
   | Omit<CrewCardEdit, 'editId'>
   | Omit<WarehouseBookEdit, 'editId'>
-  | Omit<WarehouseUnbookEdit, 'editId'>;
+  | Omit<WarehouseUnbookEdit, 'editId'>
+  | Omit<SiteBookEdit, 'editId'>
+  | Omit<SiteUnbookEdit, 'editId'>;
 
 /** True for the placeholder id a phase carries before it has been saved. */
 export function isDraftId(id: number): boolean {
@@ -173,9 +226,9 @@ export function draftProjectIds(edits: DraftEdit[]): number[] {
   return [
     ...new Set(
       edits
-        .filter((e): e is Exclude<DraftEdit, WarehouseBookEdit | WarehouseUnbookEdit> =>
-          e.kind !== 'warehouse-book' && e.kind !== 'warehouse-unbook'
-        )
+        // Everything that isn't standing work: a warehouse day and a site day
+        // both belong to nobody's job, so neither names a project.
+        .filter((e): e is Extract<DraftEdit, { projectId: number }> => 'projectId' in e)
         .map((e) => e.projectId)
     ),
   ];
@@ -318,6 +371,53 @@ export function applyWarehouseDraft(
   }
 
   out.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.name.localeCompare(b.name)));
+  return out;
+}
+
+/**
+ * The site days as they stand with every pending booking applied — the same
+ * replay `applyWarehouseDraft` does, over rows that carry a place as well as a
+ * day.
+ */
+export function applySiteDraft(days: SiteDay[], edits: DraftEdit[]): SiteDay[] {
+  if (edits.length === 0) return days;
+  let out = [...days];
+  let syntheticId = -1;
+
+  const sameSite = (row: SiteDay, site: DraftSite) =>
+    siteKey({ customer_id: row.customer_id, name: row.site_name }) === siteKey(site);
+
+  for (const edit of edits) {
+    if (edit.kind === 'site-book') {
+      for (const day of edit.days) {
+        if (out.some((s) => s.day === day && s.user_id === edit.userId && sameSite(s, edit.site)))
+          continue;
+        out.push({
+          id: syntheticId--,
+          day,
+          user_id: edit.userId,
+          name: edit.person.name,
+          detail: edit.person.detail,
+          customer_id: edit.site.customer_id,
+          site_name: edit.site.name,
+          site_address: edit.site.address,
+          note: edit.site.note,
+        });
+      }
+    } else if (edit.kind === 'site-unbook') {
+      const drop = new Set(edit.days);
+      out = out.filter(
+        (s) => !(drop.has(s.day) && s.user_id === edit.userId && sameSite(s, edit.site))
+      );
+    }
+  }
+
+  out.sort(
+    (a, b) =>
+      (a.day < b.day ? -1 : a.day > b.day ? 1 : 0) ||
+      a.name.localeCompare(b.name) ||
+      a.site_name.localeCompare(b.site_name)
+  );
   return out;
 }
 

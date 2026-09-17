@@ -37,7 +37,13 @@ import {
   type WorkCalendar,
 } from '@/lib/schedule-math';
 import { shortDate } from '@/lib/format';
-import type { ProjectStatus, ScheduleTaskRow, TaskStatus, WarehouseDay } from '@/lib/types';
+import type {
+  ProjectStatus,
+  ScheduleTaskRow,
+  SiteDay,
+  TaskStatus,
+  WarehouseDay,
+} from '@/lib/types';
 
 /* ------------------------------------------------------------- A single day */
 
@@ -85,6 +91,8 @@ export interface DayBoard {
   jobs: DayJob[];
   /** Our own people in the warehouse that day. */
   warehouse: { userId: number; name: string }[];
+  /** Our own people at a site with no job behind it — who, and where. */
+  sites: { userId: number; name: string; site: string }[];
   /** 'user:4' / 'sub:2' for everybody booked on a job that day. */
   booked: Set<string>;
   /** Distinct heads out on jobs — the number the board leads with. */
@@ -104,6 +112,7 @@ export interface DayBoard {
 export function dayBoard(
   bookings: AssigneeBooking[],
   warehouse: WarehouseDay[],
+  sites: SiteDay[],
   day: string
 ): DayBoard {
   const jobs = new Map<number, DayJob>();
@@ -180,6 +189,13 @@ export function dayBoard(
     if (w.day === day) dayWarehouse.set(w.user_id, w.name);
   }
 
+  // A hospital somebody is at with nothing sold behind it. Its own list rather
+  // than a job card: there is no job, and a card that looked like one would put
+  // work on the board that was never quoted.
+  const daySites = sites
+    .filter((s) => s.day === day)
+    .map((s) => ({ userId: s.user_id, name: s.name, site: s.site_name }));
+
   return {
     day,
     // Early starts to the top: the board is read in the morning, and the 6 AM
@@ -192,6 +208,9 @@ export function dayBoard(
     warehouse: [...dayWarehouse]
       .map(([userId, name]) => ({ userId, name }))
       .sort((a, b) => a.name.localeCompare(b.name)),
+    sites: daySites.sort(
+      (a, b) => a.name.localeCompare(b.name) || a.site.localeCompare(b.site)
+    ),
     booked,
     headcount: booked.size,
   };
@@ -205,7 +224,7 @@ function phaseStart(phase: DayPhase): string {
 }
 
 /**
- * Our own people with nothing booked that day — no job, no warehouse.
+ * Our own people with nothing booked that day — no job, no warehouse, no site.
  *
  * Only people who are in scheduling at all: an estimator who clocks in but is
  * never on the crew week isn't "available", they're simply not crew.
@@ -215,8 +234,15 @@ export function availableCrew(
   board: DayBoard
 ): string[] {
   const inWarehouse = new Set(board.warehouse.map((w) => w.userId));
+  const onSite = new Set(board.sites.map((s) => s.userId));
   return workers
-    .filter((w) => w.schedulable && !board.booked.has(`user:${w.id}`) && !inWarehouse.has(w.id))
+    .filter(
+      (w) =>
+        w.schedulable &&
+        !board.booked.has(`user:${w.id}`) &&
+        !inWarehouse.has(w.id) &&
+        !onSite.has(w.id)
+    )
     .map((w) => w.name)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -232,6 +258,7 @@ export function availableCrew(
 export function nextDayWithWork(
   bookings: AssigneeBooking[],
   warehouse: WarehouseDay[],
+  sites: SiteDay[],
   day: string,
   cal: WorkCalendar,
   lookahead = 14
@@ -241,7 +268,9 @@ export function nextDayWithWork(
     const d = addDays(day, i);
     if (fallback == null && isWorkingDay(d, cal)) fallback = d;
     const worked =
-      bookings.some((b) => b.start <= d && b.end >= d) || warehouse.some((w) => w.day === d);
+      bookings.some((b) => b.start <= d && b.end >= d) ||
+      warehouse.some((w) => w.day === d) ||
+      sites.some((s) => s.day === d);
     if (worked) return d;
   }
   return fallback ?? addDays(day, 1);
@@ -540,10 +569,10 @@ export function paginate<T>(items: T[], size: number): T[][] {
 
 /** What somebody is on, on one day — a phase of a job, or the warehouse. */
 interface CrewEntry {
-  /** 'task:12' / 'warehouse' — what a run of days is joined by. */
+  /** 'task:12' / 'warehouse' / 'site:…' — what a run of days is joined by. */
   key: string;
   projectId: number | null;
-  /** The job, or "Warehouse". */
+  /** The job, "Warehouse", or the site somebody is at. */
   label: string;
   phase: string | null;
   status: TaskStatus | null;
@@ -603,6 +632,7 @@ export interface CrewWeekModel {
 export function crewWeekModel(
   bookings: AssigneeBooking[],
   warehouse: WarehouseDay[],
+  sites: SiteDay[],
   workers: { id: number; name: string; schedulable: boolean }[],
   anchor: string,
   weeks: number
@@ -654,6 +684,19 @@ export function crewWeekModel(
       projectId: null,
       label: 'Warehouse',
       phase: null,
+      status: null,
+      shift: { startTime: null, hours: null },
+    });
+  }
+  // A day at a site with no job behind it reads as what it is: the place, and
+  // what they're there for where there's room for it.
+  for (const s of sites) {
+    if (s.day < range.start || s.day > range.end) continue;
+    put(`user:${s.user_id}`, 'user', s.name, s.detail, s.day, {
+      key: `site:${s.customer_id ?? s.site_name.toLowerCase()}`,
+      projectId: null,
+      label: s.site_name,
+      phase: s.note,
       status: null,
       shift: { startTime: null, hours: null },
     });

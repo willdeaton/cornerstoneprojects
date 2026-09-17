@@ -676,6 +676,41 @@ export interface WarehouseDay {
 }
 
 /**
+ * One person at one site for one day, with no job behind it — a hospital we are
+ * asked to look at before there is anything sold to look at it under.
+ *
+ * The third kind of day, after a phase and the warehouse, and it exists for the
+ * same reason the warehouse does: the work is real, but a project invented to
+ * hold it would land on the billing desk and in the dashboard's counts. A
+ * walkthrough, a look at a leak, a meeting with facilities — somebody has to be
+ * there, and the week has to say so.
+ *
+ * `site_name` is what the schedule calls the place. `customer_id` links it to
+ * the customer on the books when it is one, which is what gives the crew an
+ * address to drive to; a site typed by hand simply has neither. `name` and
+ * `detail` are the person, joined for display exactly as `WarehouseDay` carries
+ * them.
+ */
+export interface SiteDay {
+  id: number;
+  /** The day worked, 'YYYY-MM-DD'. */
+  day: string;
+  user_id: number;
+  /** The person's name. */
+  name: string;
+  /** The person's role, for the crew week's row label. */
+  detail: string | null;
+  /** The customer whose site this is, when it is one on the books. */
+  customer_id: number | null;
+  /** Where they are going, as the schedule names it. */
+  site_name: string;
+  /** The address to drive to — the customer's, when it is linked. */
+  site_address: string | null;
+  /** What they are there for, when somebody said. */
+  note: string | null;
+}
+
+/**
  * A message written for the people working a job — gate codes, parking, who to
  * ask for on site. Shown on every assignee's own schedule, unlike the internal
  * job notes in `Note`.

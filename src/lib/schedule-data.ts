@@ -9,6 +9,7 @@ import type {
   SchedulePublication,
   ScheduleTask,
   ScheduleTaskRow,
+  SiteDay,
   Subcontractor,
   TaskStatus,
   WarehouseDay,
@@ -627,6 +628,106 @@ export async function addWarehouseDays(userId: number, days: string[]): Promise<
 /** Take one person out of the warehouse for one day. */
 export async function removeWarehouseDay(userId: number, day: string): Promise<void> {
   await q('DELETE FROM warehouse_days WHERE user_id = $1 AND day = $2', [userId, day]);
+}
+
+/* ------------------------------------------------------------ Site days */
+
+/*
+ * A day at a site with no job behind it — a hospital walked before anything is
+ * sold. The warehouse's rows with a place attached: same shape, same absence of
+ * a window and a budget, plus the site and the address the crew drives to.
+ */
+
+/** What a site day is booked against — a customer on the books, or a name. */
+export interface SiteDayInput {
+  user_id: number;
+  /** The customer whose site it is, when it is one. */
+  customer_id: number | null;
+  site_name: string;
+  note: string | null;
+}
+
+/** Every site day, optionally narrowed to a range or one person. */
+export async function listSiteDays(
+  opts: { from?: string; to?: string; userId?: number } = {}
+): Promise<SiteDay[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.from) {
+    params.push(opts.from);
+    where.push(`s.day >= $${params.length}`);
+  }
+  if (opts.to) {
+    params.push(opts.to);
+    where.push(`s.day <= $${params.length}`);
+  }
+  if (opts.userId != null) {
+    params.push(opts.userId);
+    where.push(`s.user_id = $${params.length}`);
+  }
+  // A linked customer names the site, so a customer renamed in Settings is
+  // renamed everywhere it was ever visited; a site typed by hand keeps the text
+  // it was booked under.
+  return q<SiteDay>(
+    `SELECT s.id, s.day, s.user_id, u.name, u.role AS detail,
+            s.customer_id, COALESCE(c.name, s.site_name) AS site_name,
+            c.address AS site_address, s.note
+       FROM site_days s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN customers c ON c.id = s.customer_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY s.day, u.name, site_name`,
+    params
+  );
+}
+
+/**
+ * Put one person at one site for a run of days. Days they already have there
+ * are left alone rather than failing the run — the same forgiveness the
+ * warehouse and a phase's span booking give — and the number that landed comes
+ * back so the caller can say so.
+ *
+ * A day already booked keeps the note it was booked with: the run being added
+ * is "they're at Baptist East these days", not a rewrite of what was already
+ * agreed for the Tuesday.
+ */
+export async function addSiteDays(input: SiteDayInput, days: string[]): Promise<number> {
+  if (days.length === 0) return 0;
+  const rows = await q<{ id: number }>(
+    `INSERT INTO site_days (user_id, customer_id, site_name, note, day)
+     SELECT $1, $2, $3, $4, d::date FROM unnest($5::text[]) AS d
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
+    [input.user_id, input.customer_id, input.site_name, input.note, days]
+  );
+  return rows.length;
+}
+
+/**
+ * Take one person off one site for one day.
+ *
+ * The site is identified the same way the unique indexes identify it: by the
+ * customer when there is one — so a customer renamed since the booking is still
+ * found — and by the typed name when there isn't.
+ */
+export async function removeSiteDay(
+  userId: number,
+  day: string,
+  site: { customer_id: number | null; site_name: string }
+): Promise<void> {
+  if (site.customer_id != null) {
+    await q(
+      'DELETE FROM site_days WHERE user_id = $1 AND day = $2 AND customer_id = $3',
+      [userId, day, site.customer_id]
+    );
+    return;
+  }
+  await q(
+    `DELETE FROM site_days
+      WHERE user_id = $1 AND day = $2
+        AND customer_id IS NULL AND lower(site_name) = lower($3)`,
+    [userId, day, site.site_name]
+  );
 }
 
 /* ------------------------------------------------------------- Holidays */

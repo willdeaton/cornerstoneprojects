@@ -19,7 +19,7 @@ import {
   weekStart,
   type AssigneeBooking,
 } from '@/lib/schedule-math';
-import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
+import type { CrewNote, ScheduleTaskRow, SiteDay, WarehouseDay } from '@/lib/types';
 import { TASK_STATUS_LABELS } from '@/lib/types';
 import { useScheduleLive } from '@/components/useScheduleLive';
 
@@ -40,6 +40,7 @@ export function MySchedule({
   holidays,
   userId,
   warehouse = [],
+  sites = [],
   crewNotes = [],
 }: {
   tasks: ScheduleTaskRow[];
@@ -47,6 +48,8 @@ export function MySchedule({
   userId: number;
   /** The days this person is in the warehouse rather than out on a job. */
   warehouse?: WarehouseDay[];
+  /** The days they're at a site with no job behind it — a hospital to look at. */
+  sites?: SiteDay[];
   /** Job-specific notes for the crew, for the jobs this person is booked on. */
   crewNotes?: CrewNote[];
 }) {
@@ -67,6 +70,18 @@ export function MySchedule({
     [warehouse, weekDays]
   );
 
+  /** The sites they're at this week, by day — visits with no job behind them. */
+  const siteDays = useMemo(() => {
+    const out = new Map<string, SiteDay[]>();
+    for (const s of sites) {
+      if (!weekDays.includes(s.day)) continue;
+      const list = out.get(s.day);
+      if (list) list.push(s);
+      else out.set(s.day, [s]);
+    }
+    return out;
+  }, [sites, weekDays]);
+
   // Every day this person is booked, this week, with the phase behind it — plus
   // the days they're in the warehouse, which belong to no job at all.
   const { byDay, jobIds, bookedDays } = useMemo(() => {
@@ -80,14 +95,14 @@ export function MySchedule({
     );
     const indexed = bookingsByDay(mine).get(`user:${userId}`) ?? new Map<string, AssigneeBooking[]>();
     const days = weekDays.filter(
-      (d) => (indexed.get(d)?.length ?? 0) > 0 || warehouseDays.has(d)
+      (d) => (indexed.get(d)?.length ?? 0) > 0 || warehouseDays.has(d) || siteDays.has(d)
     );
     return {
       byDay: indexed,
       jobIds: new Set(mine.map((b) => b.projectId)),
       bookedDays: days,
     };
-  }, [tasks, calendar, userId, weekDays, warehouseDays]);
+  }, [tasks, calendar, userId, weekDays, warehouseDays, siteDays]);
 
   const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 
@@ -189,6 +204,31 @@ export function MySchedule({
                       </p>
                     </div>
                   )}
+                  {/* A hospital with no job behind it — a walkthrough, a look
+                      at a leak, a meeting with facilities. Above the jobs like
+                      the warehouse, but with an address, because somewhere is
+                      exactly what it has. */}
+                  {(siteDays.get(day) ?? []).map((s) => (
+                    <div key={`site-${s.id}`} className="min-w-0">
+                      <h4 className="font-semibold text-brand-ink">
+                        {s.site_name}
+                        <span className="font-normal text-brand-gray"> · site visit</span>
+                      </h4>
+                      {s.site_address && (
+                        <a
+                          href={mapsUrl(s.site_address)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-0.5 block text-sm font-medium text-brand-green-dark hover:underline"
+                        >
+                          {s.site_address}
+                        </a>
+                      )}
+                      <p className="mt-0.5 text-sm text-brand-gray">
+                        {s.note ?? 'No job on this one — check with your manager what you need.'}
+                      </p>
+                    </div>
+                  ))}
                   {items.map((b) => {
                     const task = taskById.get(b.taskId);
                     // Who else is on this phase at all — not only today, so the
@@ -282,7 +322,8 @@ export function MySchedule({
 
       <p className="text-xs text-brand-gray">
         One card per day you&apos;re booked, with the time you start and the address to drive to.
-        A day in the warehouse shows the same way, without an address.
+        A day in the warehouse shows the same way, without an address, and a site
+        visit with no job behind it shows with one.
         Dates can shift as jobs move — check with your manager before making plans around them.
       </p>
     </div>

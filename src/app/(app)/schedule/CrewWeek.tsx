@@ -27,8 +27,9 @@ import {
   type ComputedWindow,
   type DayShift,
 } from '@/lib/schedule-math';
-import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
-import type { DraftPerson } from '@/lib/schedule-draft';
+import type { CrewNote, ScheduleTaskRow, SiteDay, WarehouseDay } from '@/lib/types';
+import { siteKey, type DraftPerson, type DraftSite } from '@/lib/schedule-draft';
+import { Combobox } from '@/components/Combobox';
 import type { ScheduleDraft } from './useScheduleDraft';
 import { CrewJobCard, type CardFocus } from './CrewJobCard';
 import { DayOffControl } from './DayOffControl';
@@ -36,15 +37,15 @@ import type { SubOption, WorkerOption } from './TaskModal';
 import type { PublishedInfo } from './PublishBar';
 
 /**
- * One thing a person is on for one day: a phase of a job, or a day in the
- * warehouse.
+ * One thing a person is on for one day: a phase of a job, a day in the
+ * warehouse, or a day at a site with no job behind it.
  *
  * On a phase, `shift` is when they're there and for how long — all day unless
  * the job card put hours on it, which is what lets two of these share a day —
  * and `contracted` days come from the phase being subcontracted rather than
  * from a crew-day booking, so they're read-only. A `finished` day is a record
- * of work already done: still editable, but only behind a confirmation. A
- * warehouse day carries none of that: it is standing work, all day, never
+ * of work already done: still editable, but only behind a confirmation. The
+ * other two carry none of that: they are standing work, all day, never
  * contracted and never history.
  */
 type DayEntry =
@@ -56,11 +57,15 @@ type DayEntry =
       /** The job is finished: the day is a record of what was worked, not a booking. */
       finished: boolean;
     }
-  | { kind: 'warehouse' };
+  | { kind: 'warehouse' }
+  | { kind: 'site'; site: SiteDay };
 
-/** Which of the two a day entry is, for de-duplicating a cell's contents. */
+/** Which of the three a day entry is, for de-duplicating a cell's contents. */
 function entryKey(e: DayEntry): string {
-  return e.kind === 'warehouse' ? 'warehouse' : `task:${e.task.id}`;
+  if (e.kind === 'warehouse') return 'warehouse';
+  if (e.kind === 'site')
+    return `site:${siteKey({ customer_id: e.site.customer_id, name: e.site.site_name })}`;
+  return `task:${e.task.id}`;
 }
 
 /**
@@ -111,7 +116,7 @@ function buildSpans(
         run != null &&
         run.endIdx === i - 1 &&
         weekStart(columns[run.endIdx]) === weekStart(day) &&
-        (entry.kind === 'warehouse' ||
+        (entry.kind !== 'phase' ||
           (run.entry.kind === 'phase' && sameShift(run.entry.shift, entry.shift)));
       if (joins) run!.endIdx = i;
       else {
@@ -157,8 +162,26 @@ const DRAG_TYPE = 'application/x-cornerstone-phase';
  */
 const WAREHOUSE = 'warehouse' as const;
 
-/** What the grid is booking right now: one job phase, or the warehouse. */
-type Target = number | typeof WAREHOUSE;
+/**
+ * The site-visit card.
+ *
+ * The other card that isn't a job: somebody has to walk the hospital before
+ * there is anything sold to walk it under. Unlike the warehouse it needs to be
+ * told WHERE — pick the hospital in the strip above the grid and it books like
+ * any other, a day at a time — and unlike a phase it has no window, no budget
+ * and nothing to publish.
+ */
+const SITE = 'site' as const;
+
+/** What the grid is booking right now: a job phase, the warehouse, or a site. */
+type Target = number | typeof WAREHOUSE | typeof SITE;
+
+/** A hospital or customer site the visit card can be pointed at. */
+export interface SiteOption {
+  id: number;
+  name: string;
+  address: string | null;
+}
 
 /** A phase card, as both the work band and the grid need it. */
 interface PhaseCard {
@@ -239,6 +262,8 @@ interface RangeDrag {
 export function CrewWeek({
   tasks,
   warehouse,
+  sites,
+  siteOptions = [],
   workers,
   subs,
   holidays,
@@ -251,6 +276,10 @@ export function CrewWeek({
   tasks: ScheduleTaskRow[];
   /** Who is in the warehouse on which day — the standing card's bookings. */
   warehouse: WarehouseDay[];
+  /** Who is at which site on which day, for the days with no job behind them. */
+  sites: SiteDay[];
+  /** The hospitals and customers the site card offers, for the picker. */
+  siteOptions?: SiteOption[];
   workers: WorkerOption[];
   subs: SubOption[];
   holidays: string[];
@@ -289,6 +318,12 @@ export function CrewWeek({
   const [search, setSearch] = useState('');
   /** The card picked by click, for booking without a mouse drag. */
   const [picked, setPicked] = useState<Target | null>(null);
+  /**
+   * Where the site card is currently pointed. Null until a hospital is picked —
+   * a visit to nowhere isn't a booking, so the card can't be dragged until it
+   * has somewhere to send somebody.
+   */
+  const [site, setSite] = useState<DraftSite | null>(null);
   /** The card currently being dragged. */
   const [dragging, setDragging] = useState<Target | null>(null);
   /** The cell or name the drag is over: `person|day`, or `person|row`. */
@@ -351,6 +386,8 @@ export function CrewWeek({
   const activeCard = typeof active === 'number' ? cardByTask.get(active) : undefined;
   /** True while the standing warehouse card is the one being booked. */
   const activeWarehouse = active === WAREHOUSE;
+  /** True while the site card — pointed at a hospital — is the one being booked. */
+  const activeSite = active === SITE;
   const openedCard = opened != null ? cardByTask.get(opened.taskId) : undefined;
 
   /** The job notes to hand a card, indexed by job. */
@@ -418,10 +455,16 @@ export function CrewWeek({
       if (w.day < rangeFrom || w.day > rangeTo) continue;
       add(`user:${w.user_id}`, w.day, { kind: 'warehouse' });
     }
+    // Site days likewise: a morning at a hospital with nothing sold yet is a
+    // day of somebody's week, and the week has to show it.
+    for (const s of sites) {
+      if (s.day < rangeFrom || s.day > rangeTo) continue;
+      add(`user:${s.user_id}`, s.day, { kind: 'site', site: s });
+    }
     return out;
-  }, [cards, warehouse, rangeFrom, rangeTo]);
+  }, [cards, warehouse, sites, rangeFrom, rangeTo]);
 
-  /** How many people are booked on each day in view — job days and warehouse. */
+  /** How many people are booked each day in view — jobs, warehouse and sites. */
   const bookedByDay = useMemo(() => {
     const out = new Map<string, number>();
     for (const days of byPerson.values()) {
@@ -522,6 +565,16 @@ export function CrewWeek({
   const understaffed = cards.filter((c) => !c.finished && c.budget.remaining > 0).length;
   /** Warehouse days booked inside the weeks on screen, for the standing card. */
   const warehouseInView = warehouse.filter((w) => w.day >= rangeFrom && w.day <= rangeTo).length;
+  /** Days at the picked site inside the weeks on screen, for the visit card. */
+  const siteInView =
+    site == null
+      ? 0
+      : sites.filter(
+          (s) =>
+            s.day >= rangeFrom &&
+            s.day <= rangeTo &&
+            siteKey({ customer_id: s.customer_id, name: s.site_name }) === siteKey(site)
+        ).length;
   const needle = search.trim().toLowerCase();
   const bandCards = cards
     // "Still needing crew" is a list of work to do, so a job that is over is
@@ -629,12 +682,26 @@ export function CrewWeek({
     );
   }
 
+  /** Is this person at THIS site that day — the one the card is pointed at? */
+  function atSite(day: string, person: Person, which: DraftSite | null = site): boolean {
+    if (which == null || person.kind !== 'user') return false;
+    const key = siteKey(which);
+    return sites.some(
+      (s) =>
+        s.day === day &&
+        s.user_id === person.refId &&
+        siteKey({ customer_id: s.customer_id, name: s.site_name }) === key
+    );
+  }
+
   /**
-   * Is this person already on whatever is being booked, that day? The warehouse
-   * and a phase answer it from different rows, so every caller asks here.
+   * Is this person already on whatever is being booked, that day? A phase, the
+   * warehouse and a site all answer it from different rows, so every caller
+   * asks here.
    */
   function isOn(target: Target, day: string, person: Person): boolean {
     if (target === WAREHOUSE) return inWarehouse(day, person);
+    if (target === SITE) return atSite(day, person);
     const card = cardByTask.get(target);
     return !!card && isBooked(card, day, person);
   }
@@ -642,16 +709,21 @@ export function CrewWeek({
   /**
    * Can this be booked on that person's day at all?
    *
-   * A phase answers with its window and its budget. The warehouse answers with
-   * two rules: our own people only — subs are contracted to a job's phase on the
-   * timeline, and the warehouse is not a job — and not on a day marked off,
-   * because a shutdown day shuts the warehouse as well.
+   * A phase answers with its window and its budget. The warehouse and a site
+   * answer with the same two rules: our own people only — subs are contracted to
+   * a job's phase on the timeline, and neither of these is a job — and not on a
+   * day marked off, because a shutdown day is a day nobody works, wherever they
+   * would have been. A site answers no at all until it has been pointed at one.
    */
   function takesDay(target: Target, day: string, person: Person): boolean {
     // A day marked off closes the warehouse too — but somebody already in there
     // that day can still be taken back out.
     if (target === WAREHOUSE) {
       return person.kind === 'user' && (!isDayOff(day) || inWarehouse(day, person));
+    }
+    if (target === SITE) {
+      if (site == null || person.kind !== 'user') return false;
+      return !isDayOff(day) || atSite(day, person);
     }
     const card = cardByTask.get(target);
     return !!card && canTake(card, day, person);
@@ -664,10 +736,11 @@ export function CrewWeek({
    * booked against the wrong person, has to be fixable without reopening the
    * whole job — but their days are the record of work already done and probably
    * already paid. So every edit to one is confirmed, and there is no unlocked
-   * mode to forget you left on. The warehouse is not a job: nothing to confirm.
+   * mode to forget you left on. The warehouse and a site visit are not jobs:
+ * nothing to confirm.
    */
   function agreedToChangeFinished(target: Target): boolean {
-    if (target === WAREHOUSE) return true;
+    if (target === WAREHOUSE || target === SITE) return true;
     const card = cardByTask.get(target);
     if (!card?.finished) return true;
     return confirm(
@@ -680,6 +753,7 @@ export function CrewWeek({
   function bookDays(target: Target, person: Person, days: string[]) {
     if (!agreedToChangeFinished(target)) return;
     if (target === WAREHOUSE) return bookWarehouse(person, days);
+    if (target === SITE) return bookSite(person, days);
     const card = cardByTask.get(target);
     if (card) bookSpan(card, person, days);
   }
@@ -688,6 +762,7 @@ export function CrewWeek({
   function unbookDays(target: Target, person: Person, days: string[]) {
     if (!agreedToChangeFinished(target)) return;
     if (target === WAREHOUSE) return unbookWarehouse(person, days);
+    if (target === SITE) return site && unbookSite(person, days, site);
     const task = tasks.find((t) => t.id === target);
     if (task) unbook(task, person, days);
   }
@@ -727,6 +802,58 @@ export function CrewWeek({
       person: draftPerson(person),
       days,
     });
+  }
+
+  /**
+   * Send one person to the picked site for a run of days. The same short list of
+   * rules the warehouse has — no window, no budget, our own people only — with
+   * the one thing a site adds: somewhere to go, picked above the grid first.
+   */
+  function bookSite(person: Person, days: string[]) {
+    setError(null);
+    if (site == null) {
+      setError('Pick the hospital or site first, in the Site visit strip above the grid.');
+      return;
+    }
+    const bookable = days.filter((d) => !atSite(d, person) && !isDayOff(d));
+    if (bookable.length === 0) {
+      setError(
+        days.some((d) => isDayOff(d))
+          ? `${person.name} is already at ${site.name} on those days, or they are marked off.`
+          : `${person.name} is already at ${site.name} on those days.`
+      );
+      return;
+    }
+    draft.queue({
+      kind: 'site-book',
+      userId: person.refId,
+      label: `${person.name} at ${site.name}`,
+      person: draftPerson(person),
+      site,
+      days: bookable,
+    });
+  }
+
+  /** Take one person off a site for the given days. */
+  function unbookSite(person: Person, days: string[], which: DraftSite) {
+    draft.queue({
+      kind: 'site-unbook',
+      userId: person.refId,
+      label: `${person.name} off ${which.name}`,
+      person: draftPerson(person),
+      site: which,
+      days,
+    });
+  }
+
+  /** A booked site day, as an edit names the place it was booked against. */
+  function siteOf(row: SiteDay): DraftSite {
+    return {
+      customer_id: row.customer_id,
+      name: row.site_name,
+      address: row.site_address,
+      note: row.note,
+    };
   }
 
   /** The person, as the draft records a booking against them. */
@@ -801,18 +928,20 @@ export function CrewWeek({
    */
   function dropOnPerson(target: Target, person: Person) {
     setError(null);
-    // The warehouse has no window of its own, so "the whole card" means every
-    // working day on screen — a weekend is only ever worked deliberately.
+    // Neither standing card has a window of its own, so "the whole card" means
+    // every working day on screen — a weekend is only ever worked deliberately.
     const span =
-      target === WAREHOUSE
-        ? rangeDays.filter((d) => isWorkingDay(d, calendar))
-        : (cardByTask.get(target)?.days ?? []);
+      typeof target === 'number'
+        ? (cardByTask.get(target)?.days ?? [])
+        : rangeDays.filter((d) => isWorkingDay(d, calendar));
     const days = span.filter((d) => !isOn(target, d, person));
     if (days.length === 0) {
       setError(
         target === WAREHOUSE
           ? `${person.name} is already in the warehouse every day in view.`
-          : `${person.name} is already on every day of ${cardByTask.get(target)?.task.name} in view.`
+          : target === SITE
+            ? `${person.name} is already at ${site?.name ?? 'that site'} every day in view.`
+            : `${person.name} is already on every day of ${cardByTask.get(target)?.task.name} in view.`
       );
       return;
     }
@@ -893,7 +1022,7 @@ export function CrewWeek({
       setRange(null);
       const person = people.find((p) => p.key === drag.personKey);
       if (!person) return;
-      if (drag.target !== WAREHOUSE && !cardByTask.has(drag.target)) return;
+      if (typeof drag.target === 'number' && !cardByTask.has(drag.target)) return;
       const covered = rangeDaysCovered(drag);
       if (covered.length < 2) return;
       const days = covered.filter(
@@ -903,9 +1032,13 @@ export function CrewWeek({
         setError(
           drag.target === WAREHOUSE
             ? `Nothing to book there — ${person.name} is already in the warehouse on those days.`
-            : `Nothing to book there — ${person.name} is already on those days of ${
-                cardByTask.get(drag.target)?.task.name
-              }, or the phase doesn't run then.`
+            : drag.target === SITE
+              ? `Nothing to book there — ${person.name} is already at ${
+                  site?.name ?? 'that site'
+                } on those days.`
+              : `Nothing to book there — ${person.name} is already on those days of ${
+                  cardByTask.get(drag.target)?.task.name
+                }, or the phase doesn't run then.`
         );
         return;
       }
@@ -1030,6 +1163,20 @@ export function CrewWeek({
         </label>
       </div>
 
+      {/* Where the Site visit card is pointed. Its own strip above the grid so
+          the customer list has room to open — see SitePicker. */}
+      <SitePicker
+        options={siteOptions}
+        site={site}
+        onSite={(next) => {
+          setSite(next);
+          setError(null);
+          // Pointing the card somewhere is what you do when you are about to
+          // book it, so the card picks itself up.
+          setPicked(next ? SITE : picked === SITE ? null : picked);
+        }}
+      />
+
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -1069,6 +1216,17 @@ export function CrewWeek({
                   booked={warehouseInView}
                   onPick={() => setPicked(picked === WAREHOUSE ? null : WAREHOUSE)}
                   onDragStart={(e) => startDrag(e, WAREHOUSE, 'Warehouse')}
+                  onDragEnd={endDrag}
+                />
+                {/* The other card that isn't a job: a hospital somebody has to
+                    be at before there is anything sold to be there under. */}
+                <SiteTile
+                  site={site}
+                  picked={picked === SITE}
+                  dragging={dragging === SITE}
+                  booked={siteInView}
+                  onPick={() => site && setPicked(picked === SITE ? null : SITE)}
+                  onDragStart={(e) => site && startDrag(e, SITE, site.name)}
                   onDragEnd={endDrag}
                 />
               </div>
@@ -1231,7 +1389,7 @@ export function CrewWeek({
                     const rowTakes =
                       active != null &&
                       dragging != null &&
-                      (activeWarehouse
+                      (activeWarehouse || activeSite
                         ? p.kind === 'user'
                         : !!activeCard && activeCard.days.some((d) => canTake(activeCard, d, p)));
                     return (
@@ -1267,7 +1425,9 @@ export function CrewWeek({
                               ? undefined
                               : activeWarehouse
                                 ? `Put ${p.name} in the warehouse for every working day on screen`
-                                : `Put ${p.name} on ${activeCard!.task.name} for every working day of it on screen`
+                                : activeSite
+                                  ? `Send ${p.name} to ${site?.name} for every working day on screen`
+                                  : `Put ${p.name} on ${activeCard!.task.name} for every working day of it on screen`
                           }
                         >
                           <p className="flex items-baseline justify-between gap-1">
@@ -1397,6 +1557,12 @@ export function CrewWeek({
                                           : `Put ${p.name} in the warehouse${
                                               off ? ' (a non-working day)' : ''
                                             }\nDrag sideways to book a run of days`
+                                        : activeSite
+                                          ? on
+                                            ? `Take ${p.name} off ${site?.name} that day`
+                                            : `Send ${p.name} to ${site?.name}${
+                                                off ? ' (a non-working day)' : ''
+                                              }\nNo job behind it\nDrag sideways to book a run of days`
                                         : on
                                           ? `Take ${p.name} off ${activeCard!.task.name}${finishedHint(activeCard!)}`
                                           : `Book ${p.name} on ${activeCard!.task.project_name} — ${activeCard!.task.name}${
@@ -1486,6 +1652,60 @@ export function CrewWeek({
                                     }`}
                                     onRemove={() =>
                                       unbookDays(WAREHOUSE, p, columns.slice(s.startIdx, s.endIdx + 1))
+                                    }
+                                  />
+                                </div>
+                              ) : entry.kind === 'site' ? (
+                                <div className="group relative">
+                                  <button
+                                    // Grabbing the day points the card at THIS
+                                    // site and stretches it, so a visit booked
+                                    // for Monday becomes Monday to Wednesday
+                                    // without going back to the card first.
+                                    onMouseDown={(e) => {
+                                      if (e.button !== 0) return;
+                                      e.stopPropagation();
+                                      setSite(siteOf(entry.site));
+                                      setPicked(SITE);
+                                      setRange({
+                                        personKey: p.key,
+                                        target: SITE,
+                                        from: dayUnder(e, s),
+                                        to: dayUnder(e, s),
+                                      });
+                                    }}
+                                    title={`${entry.site.site_name} · ${span}\nSite visit — no job behind it${
+                                      entry.site.note ? `\n${entry.site.note}` : ''
+                                    }${
+                                      entry.site.site_address ? `\n${entry.site.site_address}` : ''
+                                    }\nDrag sideways to send ${p.name} for more days, or press × to take the ${
+                                      days === 1 ? 'day' : 'days'
+                                    } off`}
+                                    className={`block w-full rounded border-l-[3px] py-0.5 pl-1 pr-4 text-left text-[10px] leading-tight ${SITE_CHIP} ${
+                                      off ? 'ring-1 ring-amber-300' : ''
+                                    }`}
+                                    style={{ borderLeftColor: SITE_TINT }}
+                                  >
+                                    <span className="block truncate font-semibold">
+                                      {entry.site.site_name}
+                                      {days > 1 && (
+                                        <span className="font-normal opacity-70"> · {days}d</span>
+                                      )}
+                                    </span>
+                                    <span className="block truncate opacity-80">
+                                      {entry.site.note || 'Site visit'}
+                                    </span>
+                                  </button>
+                                  <RemoveButton
+                                    label={`Take ${p.name} off ${entry.site.site_name}${
+                                      days > 1 ? ` for ${span}` : ''
+                                    }`}
+                                    onRemove={() =>
+                                      unbookSite(
+                                        p,
+                                        columns.slice(s.startIdx, s.endIdx + 1),
+                                        siteOf(entry.site)
+                                      )
                                     }
                                   />
                                 </div>
@@ -1842,6 +2062,179 @@ function WarehouseTile({
 }
 
 /**
+ * The site-visit card: the hospital that is picked, and the days somebody is at
+ * it.
+ *
+ * It sits beside the warehouse for the same reason — neither is filed under a
+ * week, because neither starts in one — and books exactly the same way: drag it
+ * onto a day, onto a name for every working day on screen, or pick it and click.
+ * The one thing it needs first is somewhere to go, which is chosen above the
+ * grid rather than on the card: this column is 150px wide, and a searchable list
+ * of every customer does not open inside a grid that scrolls sideways.
+ */
+function SiteTile({
+  site,
+  picked,
+  dragging,
+  booked,
+  onPick,
+  onDragStart,
+  onDragEnd,
+}: {
+  /** Where the card is pointed, or null until somebody picks. */
+  site: DraftSite | null;
+  picked: boolean;
+  dragging: boolean;
+  /** Days booked at this site across the weeks on screen. */
+  booked: number;
+  onPick: () => void;
+  onDragStart: (e: DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+}) {
+  const ready = site != null;
+  return (
+    <div
+      draggable={ready}
+      onDragStart={ready ? onDragStart : undefined}
+      onDragEnd={ready ? onDragEnd : undefined}
+      onClick={ready ? onPick : undefined}
+      role={ready ? 'button' : undefined}
+      tabIndex={ready ? 0 : undefined}
+      aria-pressed={ready ? picked : undefined}
+      onKeyDown={
+        ready
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onPick();
+              }
+            }
+          : undefined
+      }
+      title={
+        ready
+          ? `${site!.name}\nA day at a site with no job behind it${
+              site!.note ? `\n${site!.note}` : ''
+            }\n${
+              booked === 0
+                ? 'Nobody there in these weeks'
+                : `${booked} ${booked === 1 ? 'day' : 'days'} booked in these weeks`
+            }\nDrag onto a day, or onto a name for every working day on screen`
+          : 'Pick the hospital or site above, then drag this onto somebody’s day'
+      }
+      className={`min-w-0 rounded-md border border-l-[3px] bg-white p-1.5 text-left transition-shadow ${
+        ready ? 'cursor-grab active:cursor-grabbing' : 'cursor-default border-dashed opacity-75'
+      } ${picked ? 'border-brand-green ring-1 ring-brand-green' : 'border-black/10 hover:shadow-sm'} ${
+        dragging ? 'opacity-50' : ''
+      }`}
+      style={{ borderLeftColor: picked ? undefined : SITE_TINT }}
+    >
+      <p className="truncate text-[11px] font-semibold leading-tight text-brand-ink">
+        {ready ? site!.name : 'Site visit'}
+      </p>
+      <p className="truncate text-[10px] leading-tight text-brand-gray">
+        {ready ? site!.note || 'Site visit — no job' : 'No job — just a day there'}
+      </p>
+      <p className="truncate text-[10px] leading-tight text-brand-gray/80">
+        {!ready
+          ? 'pick a site above'
+          : booked === 0
+            ? 'nobody there in these weeks'
+            : `${booked} ${booked === 1 ? 'day' : 'days'} booked`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Where the site card is pointed, and what for.
+ *
+ * Above the grid rather than on the card itself: the list is every customer on
+ * the books, searchable, and a list that long cannot open inside a column 150px
+ * wide in a grid that scrolls sideways. A hospital that isn't a customer yet is
+ * typed straight in — the day is still a real day, and nobody should have to
+ * open Settings to book it.
+ */
+function SitePicker({
+  options,
+  site,
+  onSite,
+}: {
+  options: SiteOption[];
+  site: DraftSite | null;
+  onSite: (site: DraftSite | null) => void;
+}) {
+  const value = site == null ? '' : site.customer_id != null ? String(site.customer_id) : `typed:${site.name}`;
+  const choices = [
+    ...options.map((o) => ({
+      value: String(o.id),
+      label: o.name,
+      detail: o.address ?? undefined,
+    })),
+    // A site typed by hand is offered back as itself, so the field can show what
+    // the card is pointed at without the name being in the catalog.
+    ...(site != null && site.customer_id == null
+      ? [{ value: `typed:${site.name}`, label: site.name, detail: 'typed in' }]
+      : []),
+  ];
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-black/10 bg-black/[.02] px-3 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-gray">
+        Site visit
+      </p>
+      <div className="w-full max-w-[260px]">
+        <Combobox
+          options={choices}
+          value={value}
+          onSelect={(v) => {
+            const chosen = options.find((o) => String(o.id) === v);
+            if (chosen)
+              onSite({
+                customer_id: chosen.id,
+                name: chosen.name,
+                address: chosen.address,
+                note: site?.note ?? null,
+              });
+            else if (v.startsWith('typed:'))
+              onSite({ customer_id: null, name: v.slice(6), address: null, note: site?.note ?? null });
+          }}
+          onAddNew={(typed) =>
+            onSite({ customer_id: null, name: typed, address: null, note: site?.note ?? null })
+          }
+          addNewLabel={(typed) => `Send them to “${typed}”`}
+          placeholder="Hospital or site…"
+          emptyText="No customer by that name — type it to use it anyway"
+        />
+      </div>
+      <input
+        className="input h-9 w-full max-w-[240px] py-1 text-sm"
+        placeholder="What for? (optional)"
+        value={site?.note ?? ''}
+        disabled={site == null}
+        onChange={(e) =>
+          site && onSite({ ...site, note: e.target.value.trim() === '' ? null : e.target.value })
+        }
+      />
+      {site != null && (
+        <button
+          onClick={() => onSite(null)}
+          className="text-sm font-medium text-brand-gray hover:text-brand-ink"
+          title="Clear the site"
+        >
+          Clear
+        </button>
+      )}
+      <p className="text-xs text-brand-gray">
+        {site == null
+          ? 'For a day at a hospital with no job behind it — pick where, then drag the Site visit card onto a day.'
+          : 'Drag the Site visit card onto a day, or onto a name for the whole week on screen.'}
+      </p>
+    </div>
+  );
+}
+
+/**
  * A day's live entries as the clash rules want them: a job id and a shift.
  *
  * Days on a finished job are dropped: they're a record of a week already
@@ -1986,6 +2379,15 @@ const WAREHOUSE_TINT = '#475569';
 
 const WAREHOUSE_CHIP =
   'bg-slate-100 text-slate-700 hover:bg-red-100 hover:text-red-700';
+
+/**
+ * A site visit's own colour, out of the job palette for the same reason the
+ * warehouse is: it is a day at a customer's place with no job behind it, and it
+ * should never be mistaken on the grid for work that was sold.
+ */
+const SITE_TINT = '#0e7490';
+
+const SITE_CHIP = 'bg-cyan-50 text-cyan-900 hover:bg-red-100 hover:text-red-700';
 
 /**
  * A day on a job that is over. Muted rather than tinted by status: it reads as

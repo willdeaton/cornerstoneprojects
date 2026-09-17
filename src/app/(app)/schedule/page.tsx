@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth';
-import { listProjects, listActiveWorkers } from '@/lib/data';
+import { listProjects, listActiveWorkers, listCustomers } from '@/lib/data';
 import {
   listScheduleTasks,
   listCompletedJobTasks,
@@ -11,6 +11,7 @@ import {
   countScheduleChanges,
   listScheduleDrafts,
   listWarehouseDays,
+  listSiteDays,
   HISTORY_WEEKS,
 } from '@/lib/schedule-data';
 import { addDays, today, weekStart } from '@/lib/schedule-math';
@@ -55,8 +56,12 @@ export default async function SchedulePage() {
 
   if (me.role !== 'admin' && me.role !== 'manager') {
     // Their own warehouse days, so the week shows the days they're in there
-    // alongside the days they're on a job.
-    const myWarehouse = await listWarehouseDays({ userId: me.id });
+    // alongside the days they're on a job — and the same for the days they're
+    // at a site with no job behind it.
+    const [myWarehouse, mySites] = await Promise.all([
+      listWarehouseDays({ userId: me.id }),
+      listSiteDays({ userId: me.id }),
+    ]);
     // Crew notes for the jobs they could be booked on, so the week view can show
     // the job-specific instructions alongside each day.
     const crewNotes = await listCrewNotesForProjects([
@@ -75,6 +80,7 @@ export default async function SchedulePage() {
         <MySchedule
           tasks={tasks}
           warehouse={myWarehouse}
+          sites={mySites}
           holidays={holidayDays}
           userId={me.id}
           crewNotes={crewNotes}
@@ -83,7 +89,18 @@ export default async function SchedulePage() {
     );
   }
 
-  const [projects, workers, subs, publications, changeCounts, draftJobs, warehouse, crewNotes] =
+  const [
+    projects,
+    workers,
+    subs,
+    publications,
+    changeCounts,
+    draftJobs,
+    warehouse,
+    sites,
+    customers,
+    crewNotes,
+  ] =
     await Promise.all([
       listProjects(),
       listActiveWorkers(),
@@ -92,6 +109,10 @@ export default async function SchedulePage() {
       countScheduleChanges(),
       listScheduleDrafts(),
       listWarehouseDays(),
+      listSiteDays(),
+      // The hospitals the site card can be pointed at: every customer on the
+      // books, plus whatever gets typed on the day.
+      listCustomers(),
       // The crew-facing notes for every job with work on screen, so a job card
       // opened off the crew week reads the same instructions the crew will.
       listCrewNotesForProjects([...new Set(tasks.map((t) => t.project_id))]),
@@ -139,6 +160,12 @@ export default async function SchedulePage() {
       <ScheduleViews
         tasks={tasks}
         warehouse={warehouse}
+        sites={sites}
+        siteOptions={customers.map((c) => ({
+          id: c.id,
+          name: c.name,
+          address: c.address,
+        }))}
         // Live jobs, plus the finished ones whose work is in the history that
         // was loaded — a finished job's phases need its row to hang off.
         projects={projects

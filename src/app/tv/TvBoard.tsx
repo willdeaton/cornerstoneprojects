@@ -9,7 +9,7 @@ import {
   fromDay,
   today as todayNow,
 } from '@/lib/schedule-math';
-import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
+import type { ScheduleTaskRow, SiteDay, WarehouseDay } from '@/lib/types';
 import {
   availableCrew,
   boardAlerts,
@@ -57,6 +57,7 @@ type Slide = { kind: 'day' } | { kind: 'crew'; page: number } | { kind: 'timelin
 export function TvBoard({
   tasks,
   warehouse,
+  sites,
   workers,
   projects,
   holidays,
@@ -69,6 +70,8 @@ export function TvBoard({
 }: {
   tasks: ScheduleTaskRow[];
   warehouse: WarehouseDay[];
+  /** Days somebody is at a site with no job behind it. */
+  sites: SiteDay[];
   /** Everybody active, so the board can say who has nothing booked. */
   workers: { id: number; name: string; schedulable: boolean }[];
   /** Every live job, including ones with nothing scheduled yet. */
@@ -99,14 +102,17 @@ export function TvBoard({
     [tasks, windows, calendar]
   );
 
-  const board = useMemo(() => dayBoard(bookings, warehouse, day), [bookings, warehouse, day]);
+  const board = useMemo(
+    () => dayBoard(bookings, warehouse, sites, day),
+    [bookings, warehouse, sites, day]
+  );
   const nextDay = useMemo(
-    () => nextDayWithWork(bookings, warehouse, day, calendar),
-    [bookings, warehouse, day, calendar]
+    () => nextDayWithWork(bookings, warehouse, sites, day, calendar),
+    [bookings, warehouse, sites, day, calendar]
   );
   const nextBoard = useMemo(
-    () => dayBoard(bookings, warehouse, nextDay),
-    [bookings, warehouse, nextDay]
+    () => dayBoard(bookings, warehouse, sites, nextDay),
+    [bookings, warehouse, sites, nextDay]
   );
   const available = useMemo(() => availableCrew(workers, board), [workers, board]);
   const alerts = useMemo(
@@ -119,8 +125,8 @@ export function TvBoard({
   );
   const pages = useMemo(() => paginate(model.rows, ROWS_PER_PAGE), [model]);
   const crew = useMemo(
-    () => crewWeekModel(bookings, warehouse, workers, day, CREW_WEEKS),
-    [bookings, warehouse, workers, day]
+    () => crewWeekModel(bookings, warehouse, sites, workers, day, CREW_WEEKS),
+    [bookings, warehouse, sites, workers, day]
   );
   const crewPages = useMemo(() => paginate(crew.rows, CREW_PER_PAGE), [crew]);
 
