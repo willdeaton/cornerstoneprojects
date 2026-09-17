@@ -155,7 +155,12 @@ function JobRow({
 }) {
   return (
     <div
-      className="grid flex-1 border-b border-white/[0.06] last:border-0"
+      // A finished job keeps its row — paging past a week whose work is done
+      // should show the work that ran, not a gap where the job used to be — but
+      // it sits behind the jobs still to come.
+      className={`grid flex-1 border-b border-white/[0.06] last:border-0 ${
+        row.finished ? 'opacity-55' : ''
+      }`}
       style={{
         gridTemplateColumns: template,
         gridTemplateRows: `repeat(${row.lanes}, minmax(0, 1fr))`,
@@ -172,6 +177,7 @@ function JobRow({
           </span>
         </div>
         <span className={`${TEXT.micro} truncate pl-4 text-white/45`}>
+          {row.finished ? 'Finished · ' : ''}
           {row.phases} {row.phases === 1 ? 'phase' : 'phases'} · {mondayLabel(row.start)} –{' '}
           {mondayLabel(row.end)}
         </span>

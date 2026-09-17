@@ -30,6 +30,14 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   per-job **time clock**. It is tabbed: Overview, Schedule, Billing, Time,
   **Notes & Files** — what was said about the job and the paperwork that came
   with it, since they are looked at in the same visit — and Receipts.
+  - **Completing a job completes its schedule** — marking a job **Completed**
+    marks every phase on its schedule complete with it, and tells every open
+    Schedule and TV board to re-read. A finished job whose phases still read
+    "in progress" says two different things about the same week, and it is the
+    schedule that the crew, the status board and the history all read. Only
+    ever forwards: reopening a job leaves its phases where they are, since
+    which phase is actually back in progress isn't something the job's status
+    can answer.
 - **Billing** — the desk between "the work is finished" and "the money is in",
   and a page that stands on its own: **opening a job's row bills it right
   there** — its invoice ledger, its stage decisions, all of it inline — so a
@@ -263,6 +271,12 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     over the next few weeks. Anything worth interrupting a room for sits across
     the top: a double-booking, a job planned past its hard finish date, crew days
     still to book on work starting within the week.
+  - **The same fortnight the Schedule shows** — the board loads the finished
+    jobs whose work ran inside the weeks on screen, exactly as the Schedule
+    does, so a job completed on Tuesday doesn't take Monday's crew off the wall
+    with it. Those phases are history: dimmed, counted out of "still to book",
+    and never raising a clash or a hard-finish alert — a day already worked has
+    nothing left to resolve.
   - **Reading it from across the room** — every job on today gets a card,
     always: as the day fills up the grid divides and the cards shed the detail
     that stops fitting (the status word, then the address), so nothing is ever
