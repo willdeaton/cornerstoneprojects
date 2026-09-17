@@ -170,9 +170,11 @@ function PersonRow({
             gridRow: span.lane + 1,
             gridColumn: `${span.startIdx + 2} / ${span.endIdx + 3}`,
           }}
+          // A finished job's card is history: still on the fortnight so the
+          // week it ran in reads right, but sunk behind the work still to do.
           className={`z-10 my-[2px] flex min-w-0 flex-col justify-center self-center overflow-hidden rounded px-2 py-1 ${
             span.status ? PHASE_TINT[span.status] : 'border border-dashed border-white/25 text-white/70'
-          } ${span.clash ? 'ring-2 ring-red-500' : ''}`}
+          } ${span.finished ? 'opacity-50' : ''} ${span.clash ? 'ring-2 ring-red-500' : ''}`}
         >
           <span className={`${TEXT.micro} truncate font-semibold leading-tight`}>{span.label}</span>
           {(span.phase || span.shift) && (

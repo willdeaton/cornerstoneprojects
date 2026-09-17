@@ -285,6 +285,30 @@ export async function updateScheduleTask(
   ]);
 }
 
+/**
+ * Mark every phase of a job complete, and report how many actually changed.
+ *
+ * A job is finished when the work is finished, so a job marked complete whose
+ * schedule still reads "in progress" is saying two different things about the
+ * same week — and it is the schedule that the crew, the TV board and the
+ * history all read. Completing the job settles it in one write rather than
+ * leaving somebody to tick off the phases by hand and forget the last one.
+ *
+ * Only ever forwards: reopening a job leaves its phases where they are, because
+ * which phase is actually back in progress is a judgement nobody can make from
+ * the job's status alone.
+ */
+export async function completeScheduleForProject(projectId: number): Promise<number> {
+  const rows = await q<{ id: number }>(
+    `UPDATE schedule_tasks
+        SET status = 'complete', updated_at = now()
+      WHERE project_id = $1 AND status <> 'complete'
+      RETURNING id`,
+    [projectId]
+  );
+  return rows.length;
+}
+
 export async function deleteScheduleTask(id: number): Promise<void> {
   await q('DELETE FROM schedule_tasks WHERE id = $1', [id]);
 }

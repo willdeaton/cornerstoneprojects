@@ -19,6 +19,7 @@ import {
   deleteProjectInvoice,
   deleteInvoiceFile,
 } from '@/lib/data';
+import { completeScheduleForProject } from '@/lib/schedule-data';
 import { queueJobCompletedDigest } from '@/lib/email/digest-queue';
 
 async function requireUser() {
@@ -71,15 +72,26 @@ export async function setProjectStatusAction(id: number, status: ProjectStatus) 
   await requireUser();
   const progress = status === 'completed' ? 100 : status === 'not_started' ? 0 : undefined;
   await updateProject(id, progress != null ? { status, progress } : { status });
-  // Queue it for the daily completed-jobs digest when a job is marked complete;
-  // must not block the status update.
-  if (status === 'completed') await queueJobCompletedDigest(id);
+  if (status === 'completed') {
+    // The job being done means the work is done: every phase of it goes
+    // complete with it, so the schedule, the crew week and the status board
+    // stop showing a finished job as still running. Nobody has to go and tick
+    // twelve phases off by hand, and nobody can forget the last one.
+    await completeScheduleForProject(id);
+    // Queue it for the daily completed-jobs digest; must not block the update.
+    await queueJobCompletedDigest(id);
+  }
   revalidatePath(`/projects/${id}`, 'layout');
   revalidatePath('/projects');
   revalidatePath('/dashboard');
   // Completing a job is what puts it on the billing desk, so the desk is stale
   // the moment this lands.
   revalidatePath('/billing');
+  // The schedule just changed underneath everyone looking at it — the phases
+  // went complete, and a finished job reads differently on every schedule view.
+  revalidatePath('/schedule');
+  revalidatePath('/tv');
+  void announceScheduleChange(id);
 }
 
 /**
