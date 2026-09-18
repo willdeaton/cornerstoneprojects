@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import type { CrewNote, ScheduleTaskRow, WarehouseDay } from '@/lib/types';
+import type { CrewNote, ScheduleTaskRow, SiteDay, WarehouseDay } from '@/lib/types';
 import { ScheduleBoard, type BoardProject } from './ScheduleBoard';
-import { CrewWeek } from './CrewWeek';
+import { CrewWeek, type SiteOption } from './CrewWeek';
 import { ScheduleSaveBar } from './ScheduleSaveBar';
 import { useScheduleDraft } from './useScheduleDraft';
 import { useScheduleLive } from '@/components/useScheduleLive';
@@ -50,6 +50,8 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
 export function ScheduleViews({
   tasks,
   warehouse,
+  sites,
+  siteOptions = [],
   projects,
   workers,
   subs,
@@ -65,6 +67,10 @@ export function ScheduleViews({
   tasks: ScheduleTaskRow[];
   /** Who is in the warehouse on which day — the crew week's standing card. */
   warehouse: WarehouseDay[];
+  /** Days somebody is at a site with no job behind it — the visit card. */
+  sites: SiteDay[];
+  /** The hospitals and customers that card can be pointed at. */
+  siteOptions?: SiteOption[];
   /**
    * Every live job, so the timeline can list the unplanned ones too, plus the
    * finished ones with work in the loaded history.
@@ -94,7 +100,7 @@ export function ScheduleViews({
   finishedProjects?: number[];
 }) {
   const [view, setView] = useState<View>('timeline');
-  const draft = useScheduleDraft(tasks, holidays, warehouse);
+  const draft = useScheduleDraft(tasks, holidays, warehouse, sites);
   // Somebody else saving reaches this board without anybody reloading it. Held
   // off while this board is mid-save, so the two don't cross; pending edits
   // survive the re-read either way, because the draft is replayed over
@@ -136,6 +142,8 @@ export function ScheduleViews({
         <CrewWeek
           tasks={draft.tasks}
           warehouse={draft.warehouse}
+          sites={draft.sites}
+          siteOptions={siteOptions}
           workers={workers}
           subs={subs}
           holidays={holidays}

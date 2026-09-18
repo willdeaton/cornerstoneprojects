@@ -50,6 +50,10 @@ export function TvDay({
             <Stat label="Jobs" value={board.jobs.length} />
             <Stat label="Crew out" value={board.headcount} accent />
             <Stat label="Warehouse" value={board.warehouse.length} />
+            {/* Days at a hospital with nothing sold behind them. Counted apart
+                from the jobs on purpose: it is somebody's day, but it is not
+                work that was quoted. */}
+            {board.sites.length > 0 && <Stat label="Site visits" value={board.sites.length} />}
             <Stat label="Not booked" value={available.length} />
           </div>
         </div>
@@ -80,7 +84,7 @@ export function TvDay({
         <section className={`${CARD} flex min-h-0 flex-1 flex-col p-[1vw]`}>
           <p className={`${TEXT.eyebrow} text-brand-green`}>Next up</p>
           <p className={`${TEXT.body} mt-0.5 font-semibold text-white`}>{longDay(next.day)}</p>
-          {next.jobs.length === 0 && next.warehouse.length === 0 ? (
+          {next.jobs.length === 0 && next.warehouse.length === 0 && next.sites.length === 0 ? (
             <p className={`${TEXT.small} mt-3 text-white/40`}>Nothing booked yet.</p>
           ) : (
             <ul className="mt-3 min-h-0 flex-1 space-y-2.5 overflow-hidden">
@@ -103,6 +107,11 @@ export function TvDay({
                   Warehouse: {next.warehouse.map((w) => w.name).join(', ')}
                 </li>
               )}
+              {next.sites.length > 0 && (
+                <li className={`${TEXT.micro} border-l-2 border-white/15 pl-2.5 text-white/45`}>
+                  Site visits: {next.sites.map((s) => `${s.name} — ${s.site}`).join(', ')}
+                </li>
+              )}
             </ul>
           )}
         </section>
@@ -115,6 +124,22 @@ export function TvDay({
               : board.warehouse.map((w) => w.name).join(', ')}
           </p>
         </section>
+
+        {/* Out at a hospital with no job behind it — a walkthrough, a look at a
+            leak. Nobody on this list is "not booked", which is the whole reason
+            it is on the board. */}
+        {board.sites.length > 0 && (
+          <section className={`${CARD} p-[1vw]`}>
+            <p className={`${TEXT.eyebrow} text-white/45`}>Site visits today</p>
+            <ul className="mt-1.5 space-y-1">
+              {board.sites.map((s) => (
+                <li key={`${s.userId}-${s.site}`} className={`${TEXT.small} truncate text-white/85`}>
+                  {s.name} <span className="text-white/45">— {s.site}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className={`${CARD} p-[1vw]`}>
           <p className={`${TEXT.eyebrow} text-white/45`}>Not booked today</p>

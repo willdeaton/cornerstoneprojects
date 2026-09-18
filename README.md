@@ -194,6 +194,21 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     time or phase notes of its own, and it isn't part of publishing: there are
     no customer dates to baseline, and the employee sees it on their own week
     as soon as it's saved.
+  - **The Site visit card** — the other card that isn't a job: a day at a
+    hospital when there's nothing sold to book it under. A walkthrough, a look
+    at a leak, a meeting with facilities — real work at a real address, and no
+    project, because there's nothing to bill and a project invented to hold it
+    would land on the billing desk and in the dashboard's counts. Pick where
+    they're going in the **Site visit** strip above the grid — any customer on
+    the books, with its address, or type a hospital that isn't one yet — add
+    what they're there for, and the card books exactly like every other: drag it
+    onto a day, onto a name for every working day on screen, pick it and click
+    days, or drag sideways along a row. Our own people only, never on a day
+    marked off, and nothing about it publishes or emails: the person sees it on
+    their own week, with the address to drive to and the reason, as soon as it's
+    saved. Somebody out on one is counted as booked — on the crew week, and on
+    the TV board, where they're on the **Site visits today** list rather than
+    among the people with nothing on.
   - **Every job on the board** — jobs with nothing scheduled are listed too,
     with their status, so it's obvious which ones haven't been planned yet.
     Each job is its own block: a colour of its own down the left edge and washed
@@ -264,7 +279,8 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
     Full-bleed and dark, with no sidebar and nothing to click. It rotates between
     three screens: **today** — every job with somebody on it, the time they
     start, the crew by name, the site address, plus the next day with work,
-    who's in the warehouse and who isn't booked; the **crew week** — one row per
+    who's in the warehouse, who's out on a site visit with no job behind it and
+    who isn't booked; the **crew week** — one row per
     person over the fortnight, so "where is everybody" is answered in the shape
     the question comes in, with the days somebody is free left blank; and the
     **job timeline**, the same phase bars the Schedule draws, one row per job
@@ -297,7 +313,8 @@ Built with Next.js 15 (App Router) + TypeScript, Tailwind CSS, PostgreSQL
   - **My Schedule** — employees get their own week: one card per day they're
     booked, showing the start time, the job, the address, the phase notes and
     the crew notes, with arrows to step through the weeks. A day in the
-    warehouse shows the same way, with no address to drive to.
+    warehouse shows the same way, with no address to drive to; a site visit with
+    no job behind it shows with one, plus what they're going for.
 - **Time Clock** — crew clock in/out of jobs, a live timer, weekly hours, "my
   recent time," and a live "on the clock now" panel.
 - **Users & Auth** — email/password login, sign out, and user management

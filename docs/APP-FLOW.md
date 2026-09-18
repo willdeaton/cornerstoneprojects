@@ -330,6 +330,20 @@ available. It books through the same draft (`warehouse-book` /
 takes our own people only, and is outside publishing — nothing about it
 baselines a job's dates or emails a crew.
 
+The **Site visit** card is the second: `site_days` is one row per person per
+site per day, with no window, no budget and no project, for a day at a hospital
+before there is anything sold to book it under. `customer_id` links it to the
+customer on the books — which is what gives the crew an address — and
+`site_name` is what the schedule calls it either way, so a hospital typed on the
+spot still reads as somewhere; a note says what they're there for. It is pointed
+at a site in the strip above the grid (the customer list can't open inside a
+column 150px wide in a grid that scrolls sideways) and then books through the
+same draft (`site-book` / `site-unbook` edits, replayed by
+`bookSiteDaysAction`), takes our own people only, and is outside publishing.
+Two of these can share a day — two hospitals in a morning is an ordinary day —
+so the unique indexes are per site, by customer id when it is linked and by
+case-folded name when it isn't.
+
 Rules that fall out of this model:
 
 - **Weekends** stay off the grid until you press *Show weekends* or somebody is
@@ -341,10 +355,11 @@ Rules that fall out of this model:
   label ("Thanksgiving") — writing the same `schedule_holidays` row the
   Non-Working Days calendar under Settings does (`setDayOffAction`), so every
   duration skips it, every projected date shifts around it, and every open board
-  re-reads. A day marked off is **blocked, not discouraged**: no phase and no
-  warehouse day can be booked on one, in the grid or at the server
-  (`assignCrewDayAction`, `assignCrewSpanAction`, `bookWarehouseDaysAction`),
-  which is what separates it from a weekend. Bookings made *before* the day was
+  re-reads. A day marked off is **blocked, not discouraged**: no phase, no
+  warehouse day and no site visit can be booked on one, in the grid or at the
+  server (`assignCrewDayAction`, `assignCrewSpanAction`,
+  `bookWarehouseDaysAction`, `bookSiteDaysAction`), which is what separates it
+  from a weekend. Bookings made *before* the day was
   closed are left alone and the header marks the day "worked", so nobody's day
   quietly disappears; clicking the date again opens it back up.
 - **Subcontracted phases** — the sub is chosen on the *timeline*, because that's
@@ -402,7 +417,8 @@ its own width skipped everything between — and **This Week** returns to today.
 bookings — one card per day, with the shift ("All day", or "8:00 AM – 12:00 PM ·
 4h" on a split day), job, address, phase notes and crew notes, and arrows to
 step weeks. Their warehouse days appear on the same day cards, above the jobs
-and without an address.
+and without an address, and their site visits appear there too — with the
+address, and what they're going for.
 
 **Status board** `/tv` is the same rows for a wall screen. Deliberately outside
 the `(app)` group — the sidebar, the "view as" switcher and the backup reminder

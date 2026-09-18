@@ -1150,6 +1150,7 @@ Your City, ST 00000',
   await migrateCrewDays(pool);
   await migrateSubcontractedPhases(pool);
   await migrateWarehouseDays(pool);
+  await migrateSiteDays(pool);
   await migrateReceipts(pool);
 }
 
@@ -1182,6 +1183,56 @@ async function migrateWarehouseDays(pool: Pool) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouse_days_person
       ON warehouse_days(day, user_id);
     CREATE INDEX IF NOT EXISTS idx_warehouse_days_user ON warehouse_days(user_id, day);
+  `);
+}
+
+/* ====================================================================
+ * Site days — a hospital with no job behind it.
+ *
+ * The warehouse card exists because not every day of work is a job.
+ * Neither is every day OFF the warehouse: somebody is asked to walk a
+ * hospital before there is anything sold, to look at a leak, to sit in
+ * a meeting with facilities. Real work, at a real address, with a real
+ * person's day spent on it — and no project, because there is nothing
+ * to bill and a project invented to hold it would land on the billing
+ * desk and in the dashboard's counts.
+ *
+ * So: the warehouse table with a place attached. One row per person
+ * per site per day. `customer_id` links the site to the customer on
+ * the books when it is one, which is what gives the crew an address to
+ * drive to; `site_name` is what the schedule calls it either way, so a
+ * site typed by hand still reads as somewhere. A note carries what
+ * they are there for.
+ *
+ * Unlike the warehouse, a person can have more than one of these in a
+ * day — two hospitals in a morning is an ordinary day — so the unique
+ * index is per SITE, not per day: the same site twice is a click that
+ * landed twice.
+ * ==================================================================== */
+async function migrateSiteDays(pool: Pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_days (
+      id          SERIAL PRIMARY KEY,
+      day         DATE NOT NULL,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      -- The customer whose site this is, when it is one on the books. Left
+      -- behind rather than taking the day with it if the customer is deleted:
+      -- the day was still worked, and site_name still says where.
+      customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+      site_name   TEXT NOT NULL,
+      note        TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    -- One person, one site, one day — booking somebody who is already at that
+    -- site that day is a click that landed twice, not a second visit. A linked
+    -- customer is identified by its id, so the site is still the same site
+    -- after it is renamed in Settings; a site typed by hand is matched on its
+    -- name, case and all ("Baptist East" and "baptist east" are one place).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_site_days_customer
+      ON site_days(day, user_id, customer_id) WHERE customer_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_site_days_named
+      ON site_days(day, user_id, lower(site_name)) WHERE customer_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_site_days_user ON site_days(user_id, day);
   `);
 }
 

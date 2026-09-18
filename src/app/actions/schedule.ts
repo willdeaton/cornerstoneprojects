@@ -43,6 +43,8 @@ import {
   type Holiday,
   addWarehouseDays,
   removeWarehouseDay,
+  addSiteDays,
+  removeSiteDay,
   type CrewDayInput,
   type DayTimeInput,
 } from '@/lib/schedule-data';
@@ -758,6 +760,90 @@ export async function unbookWarehouseDaysAction(
   return { ok: true };
 }
 
+/* ------------------------------------------------------------ Site days */
+
+/** Putting somebody at a site with no job behind it, or taking them off it. */
+export interface SiteDaysFields {
+  user_id: number;
+  /** The customer whose site it is, when it is one on the books. */
+  customer_id: number | null;
+  /** What the schedule calls the place — required, linked or not. */
+  site_name: string;
+  /** What they are there for, when somebody said. Ignored on an unbooking. */
+  note?: string | null;
+  /** The days to book; anything that isn't a date is dropped. */
+  days: string[];
+}
+
+/**
+ * Put one person at a site for a run of days.
+ *
+ * The warehouse card's rules, with a place attached: no window, no crew budget
+ * and no dependency chain, because there is no job — that is the whole reason
+ * the card exists. Any day is a legitimate day to be at a hospital, weekends
+ * included, and a site can never be over-staffed. The one exception is a day the
+ * office has marked off: a shutdown day is a day nobody works, wherever they
+ * would have been. Days somebody already has at that site are skipped rather
+ * than failing the run.
+ *
+ * Nothing here touches a job's publish state — there is no job to baseline and
+ * no crew to re-email about a phase that moved. The person sees it on their own
+ * week as soon as it saves.
+ */
+export async function bookSiteDaysAction(input: SiteDaysFields): Promise<ActionResult> {
+  await requireManager();
+  if (!Number.isInteger(input.user_id) || input.user_id <= 0) {
+    return { ok: false, error: 'Pick somebody to send.' };
+  }
+  const siteName = (input.site_name ?? '').trim();
+  if (siteName === '') return { ok: false, error: 'Pick the hospital or site they are going to.' };
+  const customerId =
+    Number.isInteger(input.customer_id) && (input.customer_id as number) > 0
+      ? (input.customer_id as number)
+      : null;
+  const asked = cleanDays(input.days);
+  if (asked.length === 0) return { ok: false, error: 'Pick a day.' };
+
+  const calendar = await loadWorkCalendar();
+  const days = asked.filter((d) => !calendar.holidays.has(d));
+  if (days.length === 0) {
+    return {
+      ok: false,
+      error:
+        asked.length === 1
+          ? `${shortDate(asked[0])} is marked off — nobody is out that day.`
+          : 'Those days are all marked off — nobody is out on them.',
+    };
+  }
+
+  const note = (input.note ?? '')?.toString().trim() || null;
+  const booked = await addSiteDays(
+    { user_id: input.user_id, customer_id: customerId, site_name: siteName, note },
+    days
+  );
+  revalidateSchedule();
+  if (booked === 0) {
+    return { ok: false, error: `They are already at ${siteName} on every one of those days.` };
+  }
+  return { ok: true };
+}
+
+/** Take one person off a site for the given days. */
+export async function unbookSiteDaysAction(input: SiteDaysFields): Promise<ActionResult> {
+  await requireManager();
+  const siteName = (input.site_name ?? '').trim();
+  if (siteName === '') return { ok: true };
+  const customerId =
+    Number.isInteger(input.customer_id) && (input.customer_id as number) > 0
+      ? (input.customer_id as number)
+      : null;
+  for (const day of cleanDays(input.days)) {
+    await removeSiteDay(input.user_id, day, { customer_id: customerId, site_name: siteName });
+  }
+  revalidateSchedule();
+  return { ok: true };
+}
+
 /* -------------------------------------------------------- Crew job cards */
 
 /**
@@ -1266,6 +1352,25 @@ export async function saveScheduleDraftAction(edits: DraftEdit[]): Promise<Draft
           : await unbookWarehouseDaysAction({ user_id: edit.userId, days: edit.days });
       if (res.ok) applied++;
       else fail(res.error ?? 'Could not save those warehouse days.');
+      continue;
+    }
+
+    // A day at a site with no job behind it — same story, and no task id to
+    // resolve either.
+    if (edit.kind === 'site-book' || edit.kind === 'site-unbook') {
+      const fields = {
+        user_id: edit.userId,
+        customer_id: edit.site.customer_id,
+        site_name: edit.site.name,
+        note: edit.site.note,
+        days: edit.days,
+      };
+      const res =
+        edit.kind === 'site-book'
+          ? await bookSiteDaysAction(fields)
+          : await unbookSiteDaysAction(fields);
+      if (res.ok) applied++;
+      else fail(res.error ?? 'Could not save those site days.');
       continue;
     }
 

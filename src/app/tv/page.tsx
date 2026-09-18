@@ -7,6 +7,7 @@ import {
   listCompletedJobTasks,
   listHolidays,
   listScheduleTasks,
+  listSiteDays,
   listWarehouseDays,
 } from '@/lib/schedule-data';
 import { addDays, today, weekStart } from '@/lib/schedule-math';
@@ -65,7 +66,7 @@ export default async function TvPage({
   // The board opens on the Monday of the current week and never pages back, so
   // that Monday is the earliest day anything on screen can be drawn on.
   const from = weekStart(today());
-  const [liveTasks, finishedTasks, holidays, warehouse, workers, projects, branding] =
+  const [liveTasks, finishedTasks, holidays, warehouse, sites, workers, projects, branding] =
     await Promise.all([
       listScheduleTasks(),
       // The same history the Schedule loads, clipped to the weeks this board
@@ -78,6 +79,8 @@ export default async function TvPage({
       // A fortnight past the timeline's own window, so the "next up" rail still
       // has warehouse days to read when the board is left on over a weekend.
       listWarehouseDays({ from, to: addDays(from, weeks * 7 + 14) }),
+      // The same window for the days somebody is at a site with no job behind it.
+      listSiteDays({ from, to: addDays(from, weeks * 7 + 14) }),
       listActiveWorkers(),
       listProjects(),
       getBranding(),
@@ -91,6 +94,7 @@ export default async function TvPage({
     <TvBoard
       tasks={tasks}
       warehouse={warehouse}
+      sites={sites}
       workers={workers.map((w) => ({ id: w.id, name: w.name, schedulable: w.schedulable }))}
       // Live jobs, plus the finished ones whose work ran inside the weeks on
       // screen — a finished job's phases need its row to hang off.

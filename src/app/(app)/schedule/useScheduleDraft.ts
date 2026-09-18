@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   applyDraft,
+  applySiteDraft,
   applyWarehouseDraft,
   type DraftEdit,
   type NewDraftEdit,
 } from '@/lib/schedule-draft';
 import { saveScheduleDraftAction } from '@/app/actions/schedule';
-import type { ScheduleTaskRow, WarehouseDay } from '@/lib/types';
+import type { ScheduleTaskRow, SiteDay, WarehouseDay } from '@/lib/types';
 
 /** How often an untouched draft writes itself out. */
 export const AUTOSAVE_MS = 10_000;
@@ -20,6 +21,8 @@ export interface ScheduleDraft {
   tasks: ScheduleTaskRow[];
   /** The standing warehouse card's days, likewise with pending bookings applied. */
   warehouse: WarehouseDay[];
+  /** Days booked at a site with no job behind it, pending bookings and all. */
+  sites: SiteDay[];
   /** Edits made and not yet written. */
   edits: DraftEdit[];
   saving: boolean;
@@ -58,7 +61,8 @@ export interface ScheduleDraft {
 export function useScheduleDraft(
   serverTasks: ScheduleTaskRow[],
   holidays: string[],
-  serverWarehouse: WarehouseDay[] = []
+  serverWarehouse: WarehouseDay[] = [],
+  serverSites: SiteDay[] = []
 ): ScheduleDraft {
   const router = useRouter();
   const [edits, setEdits] = useState<DraftEdit[]>([]);
@@ -86,6 +90,11 @@ export function useScheduleDraft(
   const warehouse = useMemo(
     () => applyWarehouseDraft(serverWarehouse, [...settling, ...edits]),
     [serverWarehouse, settling, edits]
+  );
+
+  const sites = useMemo(
+    () => applySiteDraft(serverSites, [...settling, ...edits]),
+    [serverSites, settling, edits]
   );
 
   const queue = useCallback((edit: NewDraftEdit) => {
@@ -176,6 +185,7 @@ export function useScheduleDraft(
   return {
     tasks,
     warehouse,
+    sites,
     edits,
     saving,
     savedAt,
