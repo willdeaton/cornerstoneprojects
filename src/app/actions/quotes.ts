@@ -12,7 +12,7 @@ import {
   getQuote,
   nextAvailableQuoteNumber,
 } from '@/lib/data';
-import type { QuoteDocInput } from '@/lib/types';
+import { quoteUndecided, type QuoteDocInput } from '@/lib/types';
 import { quoteNumberBase } from '@/lib/quote-number';
 import { safeListHref } from '@/lib/list-state';
 import { queueNewProjectDigest } from '@/lib/email/digest-queue';
@@ -180,6 +180,23 @@ export async function markQuoteLostAction(id: number) {
   revalidatePath('/dashboard');
 }
 
+/**
+ * The quote has gone out to the customer and is waiting on their answer. Only
+ * an open quote can move here: a sold or lost quote has already been decided,
+ * and the route back for those is Reopen.
+ */
+export async function markQuoteAwaitingResponseAction(id: number) {
+  await requireUser();
+  const quote = await getQuote(id);
+  if (!quote) return { error: 'That quote no longer exists.' };
+  if (quote.status !== 'open') {
+    return { error: 'Only an open quote can be marked awaiting response.' };
+  }
+  await updateQuoteStatus(id, 'awaiting_response');
+  revalidatePath('/quotes');
+  revalidatePath('/dashboard');
+}
+
 export async function reopenQuoteAction(id: number) {
   await requireUser();
   await updateQuoteStatus(id, 'open');
@@ -197,17 +214,17 @@ export async function deleteQuoteAction(id: number) {
 /**
  * Convert a quote into a sold project and jump to it.
  *
- * Guarded on the quote still being open, the same way the bulk action is. The
- * menu only offers this on an open quote, but a quote can be reopened and sold
- * again — and a second conversion would leave two jobs, two schedules and two
- * billing records behind one quote, with nothing downstream able to say which
- * of them the quote is the source of.
+ * Guarded on the quote still being undecided (open or awaiting response), the
+ * same way the bulk action is. The menu only offers this on such a quote, but a
+ * quote can be reopened and sold again — and a second conversion would leave
+ * two jobs, two schedules and two billing records behind one quote, with
+ * nothing downstream able to say which of them the quote is the source of.
  */
 export async function convertQuoteAction(id: number) {
   await requireUser();
   const quote = await getQuote(id);
   if (!quote) return { error: 'That quote no longer exists.' };
-  if (quote.status !== 'open') {
+  if (!quoteUndecided(quote.status)) {
     return { error: 'That quote has already been marked sold or lost. Reopen it first.' };
   }
   const projectId = await convertQuoteToProject(id);
@@ -230,13 +247,13 @@ export async function bulkDeleteQuotesAction(ids: number[]) {
   return { count: ids.length };
 }
 
-/** Mark several open quotes as lost. Non-open quotes are skipped. */
+/** Mark several undecided quotes as lost. Already-decided quotes are skipped. */
 export async function bulkMarkQuotesLostAction(ids: number[]) {
   await requireUser();
   let count = 0;
   for (const id of ids) {
     const quote = await getQuote(id);
-    if (quote && quote.status === 'open') {
+    if (quote && quoteUndecided(quote.status)) {
       await updateQuoteStatus(id, 'lost');
       count++;
     }
@@ -246,16 +263,32 @@ export async function bulkMarkQuotesLostAction(ids: number[]) {
   return { count };
 }
 
+/** Mark several open quotes as awaiting the customer's response. Others are skipped. */
+export async function bulkMarkQuotesAwaitingResponseAction(ids: number[]) {
+  await requireUser();
+  let count = 0;
+  for (const id of ids) {
+    const quote = await getQuote(id);
+    if (quote && quote.status === 'open') {
+      await updateQuoteStatus(id, 'awaiting_response');
+      count++;
+    }
+  }
+  revalidatePath('/quotes');
+  revalidatePath('/dashboard');
+  return { count };
+}
+
 /**
- * Mark several open quotes as sold, converting each into a project. Quotes that
- * aren't currently open are skipped so we never create a duplicate project.
+ * Mark several undecided quotes as sold, converting each into a project. Quotes
+ * already sold or lost are skipped so we never create a duplicate project.
  */
 export async function bulkMarkQuotesSoldAction(ids: number[]) {
   await requireUser();
   let count = 0;
   for (const id of ids) {
     const quote = await getQuote(id);
-    if (quote && quote.status === 'open') {
+    if (quote && quoteUndecided(quote.status)) {
       const projectId = await convertQuoteToProject(id);
       // One digest line per converted quote — they all land in one email.
       if (projectId) await queueNewProjectDigest(projectId);

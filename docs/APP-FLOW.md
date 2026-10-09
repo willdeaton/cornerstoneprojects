@@ -118,8 +118,14 @@ name, category, bid value, and a site address taken from the quote's project
 location or the customer's address), flips the quote to `sold`, and commits. It
 also queues the job for that day's sold-work digest. This is the *only* bridge
 between the two halves of the app. Conversion is guarded on the quote still
-being open, so a quote reopened and sold a second time can't leave two jobs
-behind it.
+being undecided (open or awaiting response), so a quote reopened and sold a
+second time can't leave two jobs behind it.
+
+**Quote stages**: `open` (being worked up) → `awaiting_response` (sent to the
+customer, waiting on their answer) → `sold` or `lost`. Open and awaiting
+response are both live pipeline and both count toward the dashboard's open
+pipeline; only sold and lost are decisions. Awaiting response can step back to
+open, and sold or lost can be reopened.
 
 **Revising a sold quote** (`src/lib/quote-sync.ts`). Editing a quote *after* it
 sold is the one case where the quote and the job it became can disagree — and
@@ -662,7 +668,8 @@ want.
 > win rate (sold ÷ (sold + open)), quote value by week for 8 weeks,
 > sold-by-status, pipeline by customer, and quotes decided in the last 14 days.
 >
-> **Quotes** — the prospective pipeline, tabbed Open / Sold / Lost / All. Each
+> **Quotes** — the prospective pipeline, tabbed Open / Awaiting Response /
+> Sold / Lost / All. Each
 > quote is both a pipeline record *and* optionally a full customer-facing
 > document. Line items come in three kinds: customer-facing lines printed on the
 > PDF; an internal cost worksheet never shown to the customer; and lines

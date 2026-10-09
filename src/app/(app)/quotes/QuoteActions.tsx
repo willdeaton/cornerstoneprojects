@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { QuoteStatus } from '@/lib/types';
+import { quoteUndecided, type QuoteStatus } from '@/lib/types';
 import { DropdownMenu } from '@/components/DropdownMenu';
 import { WonCelebration } from '@/components/WonCelebration';
 import {
   convertQuoteAction,
+  markQuoteAwaitingResponseAction,
   markQuoteLostAction,
   reopenQuoteAction,
   deleteQuoteAction,
@@ -51,6 +52,8 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
     void run(() => convertQuoteAction(id));
   }
 
+  const undecided = quoteUndecided(status);
+
   return (
     <>
       <WonCelebration
@@ -83,6 +86,17 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
             </Link>
             {status === 'open' && (
               <button
+                className="menu-item"
+                onClick={() => {
+                  close();
+                  run(() => markQuoteAwaitingResponseAction(id));
+                }}
+              >
+                Mark Awaiting Response
+              </button>
+            )}
+            {undecided && (
+              <button
                 className="menu-item-accent"
                 onClick={() => {
                   close();
@@ -92,7 +106,7 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
                 Mark Sold → Project
               </button>
             )}
-            {status === 'open' && (
+            {undecided && (
               <button
                 className="menu-item"
                 onClick={() => {
@@ -103,7 +117,18 @@ export function QuoteActions({ id, status }: { id: number; status: QuoteStatus }
                 Mark Lost
               </button>
             )}
-            {status !== 'open' && (
+            {status === 'awaiting_response' && (
+              <button
+                className="menu-item"
+                onClick={() => {
+                  close();
+                  run(() => reopenQuoteAction(id));
+                }}
+              >
+                Back to Open
+              </button>
+            )}
+            {!undecided && (
               <button
                 className="menu-item"
                 onClick={() => {

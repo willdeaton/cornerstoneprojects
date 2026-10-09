@@ -1,5 +1,5 @@
 import { shortDate } from '@/lib/format';
-import type { ProjectStatus, QuoteStatus } from '@/lib/types';
+import { QUOTE_STATUS_LABELS, type ProjectStatus, type QuoteStatus } from '@/lib/types';
 import { BILLING_STAGE_LABELS, type BillingStage, type BillingUrgency } from '@/lib/billing';
 
 export function PageHeader({
@@ -108,21 +108,22 @@ export function OnHoldBadge({
 
 const QUOTE_BADGE: Record<QuoteStatus, string> = {
   open: 'bg-blue-500/10 text-blue-700',
+  awaiting_response: 'bg-amber-100 text-amber-900',
   sold: 'bg-brand-green/15 text-brand-green-dark',
   lost: 'bg-brand-gray/10 text-brand-gray',
 };
 const QUOTE_DOT: Record<QuoteStatus, string> = {
   open: 'bg-blue-500',
+  awaiting_response: 'bg-amber-500',
   sold: 'bg-brand-green',
   lost: 'bg-brand-gray',
 };
 
 export function QuoteStatusBadge({ status }: { status: QuoteStatus }) {
-  const label = status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <span className={`badge ${QUOTE_BADGE[status]}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${QUOTE_DOT[status]}`} />
-      {label}
+      {QUOTE_STATUS_LABELS[status]}
     </span>
   );
 }
