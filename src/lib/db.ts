@@ -107,7 +107,7 @@ async function migrate(pool: Pool) {
       project_name  TEXT,
       category      TEXT,
       bid_value     DOUBLE PRECISION NOT NULL DEFAULT 0,
-      status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','sold','lost')),
+      status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','awaiting_response','sold','lost')),
       date_received DATE,
       week_of       DATE,
       source        TEXT NOT NULL DEFAULT 'manual',
@@ -400,6 +400,15 @@ Your City, ST 00000',
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('admin','manager','employee'));
+  `);
+
+  // Quote stages gained 'awaiting_response' (sent to the customer, waiting on
+  // their answer). Same story as the role set: the CHECK lives inside CREATE
+  // TABLE IF NOT EXISTS, so existing databases need the constraint rebuilt.
+  await pool.query(`
+    ALTER TABLE quotes DROP CONSTRAINT IF EXISTS quotes_status_check;
+    ALTER TABLE quotes ADD CONSTRAINT quotes_status_check
+      CHECK (status IN ('open','awaiting_response','sold','lost'));
   `);
 
   // Crew can now clock in without picking a specific job, and admins can

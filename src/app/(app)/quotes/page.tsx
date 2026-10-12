@@ -11,6 +11,7 @@ export const dynamic = 'force-dynamic';
 
 const TABS: { key: string; label: string }[] = [
   { key: 'open', label: 'Open' },
+  { key: 'awaiting_response', label: 'Awaiting Response' },
   { key: 'sold', label: 'Sold' },
   { key: 'lost', label: 'Lost' },
   { key: 'all', label: 'All' },

@@ -1,4 +1,19 @@
-export type QuoteStatus = 'open' | 'sold' | 'lost';
+export type QuoteStatus = 'open' | 'awaiting_response' | 'sold' | 'lost';
+
+/**
+ * The stages a quote can sit in before anyone has said yes or no. 'open' is a
+ * quote being worked up; 'awaiting_response' is one that has gone out to the
+ * customer and is waiting on their answer. Both are live pipeline: they count
+ * toward open pipeline on the dashboard, and both can still be marked sold or
+ * lost. Everything that gates on "the quote is still undecided" goes through
+ * `quoteUndecided` so a new pre-decision stage only has to be added here.
+ */
+export const QUOTE_UNDECIDED_STATUSES: readonly QuoteStatus[] = ['open', 'awaiting_response'];
+
+export function quoteUndecided(status: QuoteStatus): boolean {
+  return QUOTE_UNDECIDED_STATUSES.includes(status);
+}
+
 export type ProjectStatus = 'not_started' | 'in_progress' | 'completed';
 
 export interface Quote {
@@ -781,6 +796,7 @@ export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
 
 export const QUOTE_STATUS_LABELS: Record<QuoteStatus, string> = {
   open: 'Open',
+  awaiting_response: 'Awaiting Response',
   sold: 'Sold',
   lost: 'Lost',
 };

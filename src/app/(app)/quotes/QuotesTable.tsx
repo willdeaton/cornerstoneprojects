@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Quote } from '@/lib/types';
+import { quoteUndecided, type Quote } from '@/lib/types';
 import { money, shortDate } from '@/lib/format';
 import { QuoteStatusBadge, EmptyState } from '@/components/ui';
 import { WonCelebration } from '@/components/WonCelebration';
@@ -10,6 +10,7 @@ import { readListFilters, writeListFilters } from '@/lib/list-state';
 import { QuoteActions } from './QuoteActions';
 import {
   bulkDeleteQuotesAction,
+  bulkMarkQuotesAwaitingResponseAction,
   bulkMarkQuotesLostAction,
   bulkMarkQuotesSoldAction,
 } from '@/app/actions/quotes';
@@ -24,7 +25,12 @@ type SortKey =
   | 'status';
 type SortDir = 'asc' | 'desc';
 
-const STATUS_ORDER: Record<Quote['status'], number> = { open: 0, sold: 1, lost: 2 };
+const STATUS_ORDER: Record<Quote['status'], number> = {
+  open: 0,
+  awaiting_response: 1,
+  sold: 2,
+  lost: 3,
+};
 
 const COLUMNS: { key: SortKey; label: string; align?: 'right' }[] = [
   { key: 'quote_number', label: 'Quote #' },
@@ -168,7 +174,10 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
 
   const selectedQuotes = filtered.filter((q) => selected.has(q.id));
   const selectedIds = selectedQuotes.map((q) => q.id);
-  const openSelectedIds = selectedQuotes.filter((q) => q.status === 'open').map((q) => q.id);
+  // Sold / Lost apply to anything not yet decided; Awaiting Response only to
+  // quotes still open (a quote already waiting on the customer stays put).
+  const openSelectedIds = selectedQuotes.filter((q) => quoteUndecided(q.status)).map((q) => q.id);
+  const awaitableSelectedIds = selectedQuotes.filter((q) => q.status === 'open').map((q) => q.id);
   const allSelected = filtered.length > 0 && selected.size === filtered.length;
   const someSelected = selected.size > 0 && !allSelected;
 
@@ -220,6 +229,11 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
   function bulkMarkLost() {
     if (openSelectedIds.length === 0) return;
     void runBulk(() => bulkMarkQuotesLostAction(openSelectedIds));
+  }
+
+  function bulkMarkAwaiting() {
+    if (awaitableSelectedIds.length === 0) return;
+    void runBulk(() => bulkMarkQuotesAwaitingResponseAction(awaitableSelectedIds));
   }
 
   function bulkDelete() {
@@ -277,15 +291,23 @@ export function QuotesTable({ quotes }: { quotes: Quote[] }) {
               className="btn-secondary text-sm disabled:opacity-50"
               onClick={bulkMarkSold}
               disabled={busy || openSelectedIds.length === 0}
-              title={openSelectedIds.length === 0 ? 'Only open quotes can be marked sold' : undefined}
+              title={openSelectedIds.length === 0 ? 'Only undecided quotes can be marked sold' : undefined}
             >
               Mark Sold{openSelectedIds.length ? ` (${openSelectedIds.length})` : ''}
             </button>
             <button
               className="btn-secondary text-sm disabled:opacity-50"
+              onClick={bulkMarkAwaiting}
+              disabled={busy || awaitableSelectedIds.length === 0}
+              title={awaitableSelectedIds.length === 0 ? 'Only open quotes can be marked awaiting response' : undefined}
+            >
+              Awaiting Response{awaitableSelectedIds.length ? ` (${awaitableSelectedIds.length})` : ''}
+            </button>
+            <button
+              className="btn-secondary text-sm disabled:opacity-50"
               onClick={bulkMarkLost}
               disabled={busy || openSelectedIds.length === 0}
-              title={openSelectedIds.length === 0 ? 'Only open quotes can be marked lost' : undefined}
+              title={openSelectedIds.length === 0 ? 'Only undecided quotes can be marked lost' : undefined}
             >
               Mark Lost{openSelectedIds.length ? ` (${openSelectedIds.length})` : ''}
             </button>

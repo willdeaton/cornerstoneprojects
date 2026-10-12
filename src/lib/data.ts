@@ -2467,20 +2467,20 @@ export async function getDashboard(): Promise<DashboardData> {
     }>(
       `SELECT
          (SELECT COALESCE(SUM(bid_value),0) FROM quotes) AS total_pipeline,
-         (SELECT COALESCE(SUM(bid_value),0) FROM quotes WHERE status = 'open') AS open_pipeline,
+         (SELECT COALESCE(SUM(bid_value),0) FROM quotes WHERE status IN ('open','awaiting_response')) AS open_pipeline,
          (SELECT COALESCE(SUM(value),0) FROM projects) AS sold_total,
          (SELECT COUNT(*) FROM quotes) AS proposal_count,
-         (SELECT COUNT(*) FROM quotes WHERE status = 'open') AS open_quote_count,
+         (SELECT COUNT(*) FROM quotes WHERE status IN ('open','awaiting_response')) AS open_quote_count,
          (SELECT COUNT(*) FROM projects WHERE status != 'completed') AS active_project_count`
     ),
     q<QuoteLite>(
       `SELECT id, quote_number, customer, project_name, bid_value, status
-       FROM quotes WHERE status = 'open' ORDER BY bid_value DESC`
+       FROM quotes WHERE status IN ('open','awaiting_response') ORDER BY bid_value DESC`
     ),
     q<ProjectLite>('SELECT id, name, customer, value, status FROM projects'),
     q<{ category: string; value: number }>(
       `SELECT COALESCE(category,'Uncategorized') AS category, SUM(bid_value) AS value
-       FROM quotes WHERE status = 'open' GROUP BY category ORDER BY value DESC`
+       FROM quotes WHERE status IN ('open','awaiting_response') GROUP BY category ORDER BY value DESC`
     ),
     q<{ week_start: string }>(
       `SELECT to_char(gs, 'YYYY-MM-DD') AS week_start
