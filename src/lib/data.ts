@@ -3072,6 +3072,15 @@ export async function nextAvailableQuoteNumber(
   }
 }
 
+/** True when some quote already carries this number (case-insensitive). */
+export async function quoteNumberExists(quoteNumber: string): Promise<boolean> {
+  const row = await one<{ id: number }>(
+    'SELECT id FROM quotes WHERE upper(trim(quote_number)) = upper(trim($1)) LIMIT 1',
+    [quoteNumber]
+  );
+  return !!row;
+}
+
 /* -------------------------------------------------------------- Customers */
 
 export interface CustomerInput {
@@ -3090,6 +3099,15 @@ export async function listCustomers(): Promise<Customer[]> {
 
 export async function getCustomer(id: number): Promise<Customer | undefined> {
   return one<Customer>('SELECT * FROM customers WHERE id = $1', [id]);
+}
+
+/**
+ * The saved customer a quote's stored customer name refers to, matched the way
+ * the builder matches it (trimmed, case-insensitive). Undefined when the quote
+ * names a customer that was never saved to the list.
+ */
+export async function getCustomerByName(name: string): Promise<Customer | undefined> {
+  return one<Customer>('SELECT * FROM customers WHERE lower(trim(name)) = lower(trim($1))', [name]);
 }
 
 /** Every customer with its contacts, for the quote builder + settings editor. */

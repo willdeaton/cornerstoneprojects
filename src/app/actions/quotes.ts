@@ -10,10 +10,14 @@ import {
   createQuoteWithItems,
   updateQuoteWithItems,
   getQuote,
+  getQuoteWithItems,
+  getCustomerByName,
   nextAvailableQuoteNumber,
+  quoteNumberExists,
 } from '@/lib/data';
 import { quoteUndecided, type QuoteDocInput } from '@/lib/types';
 import { quoteNumberBase } from '@/lib/quote-number';
+import { addDays, today } from '@/lib/schedule-math';
 import { safeListHref } from '@/lib/list-state';
 import { queueNewProjectDigest } from '@/lib/email/digest-queue';
 import { quoteSyncStateAction } from './quote-sync';
@@ -115,6 +119,89 @@ export async function updateQuoteDocAction(
 
   if (after === 'stay') return { ok: true, saved, sent: doc.items.length };
   redirect(next);
+}
+
+/**
+ * Copy a quote into a brand-new open quote and return the new quote's id.
+ *
+ * Everything the user typed comes across — customer and contact details, the
+ * job description, every worksheet, base and option line, terms, notes, tax
+ * and markup — but the copy is a new estimate, not a snapshot: it is issued
+ * today (Valid Until moves with it, 60 days out like any new quote), it starts
+ * as Open regardless of what the original became, and it carries its own
+ * quote number.
+ *
+ * The number is generated the same way a new quote's is: the customer's code
+ * plus today's date, made unique with `-2`, `-3`, … if that number is already
+ * taken. A quote whose customer has no code falls back to the original number
+ * with the same suffix (`ABC123-2`), so the copy is still distinguishable from
+ * its source. Only a quote with no number at all leaves the copy's blank for
+ * the user to fill in.
+ *
+ * Supporting files are not copied — they belong to the original quote.
+ */
+export async function duplicateQuoteAction(id: number) {
+  await requireUser();
+  const source = await getQuoteWithItems(id);
+  if (!source) return { error: 'That quote no longer exists.' };
+
+  const issueDate = today();
+  const customer = await getCustomerByName(source.customer);
+  const base =
+    quoteNumberBase(customer?.abbreviation, issueDate) ??
+    (await fallbackNumberBase(source.quote_number));
+  const quote_number = base ? await nextAvailableQuoteNumber(base) : null;
+
+  const doc = sanitizeDoc({
+    quote_number,
+    customer: source.customer,
+    customer_contact: source.customer_contact,
+    customer_email: source.customer_email,
+    customer_phone: source.customer_phone,
+    customer_address: source.customer_address,
+    project_name: source.project_name,
+    project_location: source.project_location,
+    category: source.category,
+    issue_date: issueDate,
+    valid_until: addDays(issueDate, 60),
+    tax_rate: Number(source.tax_rate ?? 0),
+    markup_rate: Number(source.markup_rate ?? 0),
+    terms: source.terms,
+    notes: source.notes,
+    prepared_by: source.prepared_by,
+    internal_notes: source.internal_notes,
+    items: source.line_items.map((it) => ({
+      kind: it.kind,
+      description: it.description,
+      quantity: Number(it.quantity ?? 0),
+      unit: it.unit,
+      unit_price: Number(it.unit_price ?? 0),
+      amount: it.amount == null ? null : Number(it.amount),
+      markup_rate: Number(it.markup_rate ?? 0),
+      cost_type: it.cost_type,
+      option_group: it.option_group,
+    })),
+  });
+  const { id: newId } = await createQuoteWithItems(doc);
+  revalidatePath('/quotes');
+  revalidatePath('/dashboard');
+  return { ok: true as const, id: newId, quote_number };
+}
+
+/**
+ * The stem to number a copy from when the customer has no code. Normally the
+ * original's own number, so the copy becomes `Q-2602-2`. A copy of a copy
+ * (`Q-2602-2`) is traced back to its stem first, so it becomes `Q-2602-3`
+ * rather than `Q-2602-2-2` — but only when that stem is a real quote number,
+ * since a hand-typed `Q-2602` ends in digits too and must not be cut to `Q`.
+ * Null when the original has no number at all.
+ */
+async function fallbackNumberBase(quoteNumber: string | null): Promise<string | null> {
+  const trimmed = (quoteNumber ?? '').trim();
+  if (!trimmed) return null;
+  const stem = trimmed.replace(/-\d+$/, '');
+  if (stem && stem !== trimmed && (await quoteNumberExists(stem))) return stem;
+  return trimmed;
 }
 
 /** Trim strings, coerce numbers, and drop blank line items before persisting. */

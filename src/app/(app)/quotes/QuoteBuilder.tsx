@@ -28,6 +28,7 @@ import {
   createQuoteDocAction,
   updateQuoteDocAction,
   suggestQuoteNumberAction,
+  duplicateQuoteAction,
 } from '@/app/actions/quotes';
 import type { QuoteSyncState } from '@/lib/quote-sync';
 import { QuoteRevisionDialog } from '@/components/quotes/QuoteRevisionDialog';
@@ -393,6 +394,10 @@ export function QuoteBuilder({
   // can tell whether anything has changed since.
   const [hasSavedInPlace, setHasSavedInPlace] = useState(initialSaved);
   const [closePrompt, setClosePrompt] = useState(false);
+  // Duplicate copies the quote as it is *saved*, so the button asks first and
+  // stays off while there are unsaved edits that the copy wouldn't carry.
+  const [duplicatePrompt, setDuplicatePrompt] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
   const initialIssueDate = quote?.issue_date ?? new Date().toISOString().slice(0, 10);
   const [header, setHeader] = useState({
@@ -1176,6 +1181,31 @@ export function QuoteBuilder({
     router.push(listHref);
   }
 
+  /**
+   * Copy this quote into a new one and open it. The server hands the copy its
+   * own quote number (customer code + today's date, `-2` if that's taken), so
+   * nothing here touches the number field — the new edit page loads it saved.
+   */
+  async function duplicate() {
+    if (!quote) return;
+    setDuplicating(true);
+    setError(null);
+    try {
+      const res = await duplicateQuoteAction(quote.id);
+      if (!('ok' in res)) {
+        setError(res.error ?? 'Could not duplicate the quote.');
+        setDuplicatePrompt(false);
+        return;
+      }
+      router.push(`/quotes/${res.id}/edit?saved=1`);
+    } catch {
+      setError('Could not duplicate the quote. Please try again.');
+      setDuplicatePrompt(false);
+    } finally {
+      setDuplicating(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Unsaved work found from a previous visit. Offered, never applied on its
@@ -1847,8 +1877,24 @@ export function QuoteBuilder({
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {quote && hasSavedInPlace && !dirty && !saving && (
-          <span className="mr-auto text-sm font-medium text-brand-green">Saved ✓</span>
+        {quote && (
+          <div className="mr-auto flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setDuplicatePrompt(true)}
+              disabled={saving || duplicating || dirty}
+              title={dirty ? 'Save your changes first — the copy is made from the saved quote.' : 'Copy this quote into a new one with its own quote number'}
+            >
+              {duplicating ? 'Duplicating…' : 'Duplicate'}
+            </button>
+            {hasSavedInPlace && !dirty && !saving && (
+              <span className="text-sm font-medium text-brand-green">Saved ✓</span>
+            )}
+            {dirty && !saving && (
+              <span className="text-xs text-brand-gray">Save before duplicating</span>
+            )}
+          </div>
         )}
         {quote ? (
           <>
@@ -1878,6 +1924,44 @@ export function QuoteBuilder({
           </>
         )}
       </div>
+
+      {duplicatePrompt && quote && (
+        <Modal
+          open
+          onClose={() => {
+            if (!duplicating) setDuplicatePrompt(false);
+          }}
+          title="Duplicate this quote?"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-brand-gray">
+              A new open quote will be created with the same customer, description, line items,
+              options, terms and notes
+              {quote.quote_number ? (
+                <>
+                  {' '}
+                  as <strong className="text-brand-ink">{quote.quote_number}</strong>
+                </>
+              ) : null}
+              . It gets its own quote number, is dated today, and opens for editing. The
+              original is left as it is.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setDuplicatePrompt(false)}
+                disabled={duplicating}
+              >
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void duplicate()} disabled={duplicating}>
+                {duplicating ? 'Duplicating…' : 'Duplicate quote'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {closePrompt && (
         <Modal open onClose={() => setClosePrompt(false)} title="Save changes before closing?">
