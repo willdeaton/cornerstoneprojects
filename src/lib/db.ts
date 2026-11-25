@@ -1,6 +1,7 @@
 import 'server-only';
 import { Client, Pool, types } from 'pg';
 import { ensureSeed } from './seed';
+import { ensureAdminAccount } from './admin-account';
 import { computeSchedule, eachDay, isWorkingDay } from './schedule-math';
 import type { DependsType } from './types';
 
@@ -58,7 +59,7 @@ export function createListenerClient(): Client {
   });
 }
 
-/** Get the shared pool, running migrations + seed exactly once per process. */
+/** Get the shared pool, running migrations + seed + admin bootstrap exactly once per process. */
 export async function getDb(): Promise<Pool> {
   if (!g.__cspg) {
     const pool = createPool();
@@ -67,6 +68,7 @@ export async function getDb(): Promise<Pool> {
       try {
         await migrate(pool);
         await ensureSeed(pool);
+        await ensureAdminAccount(pool);
       } catch (err) {
         // If init fails (e.g. the DB wasn't reachable yet), reset so the next
         // call retries instead of caching a permanently-rejected promise.
