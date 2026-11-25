@@ -353,7 +353,26 @@ If `DATABASE_URL` is unset, the app falls back to
 Connections to non-local hosts use SSL automatically (set `PGSSL=false` to
 disable, or `PGSSL=true` to force it).
 
-### Default logins (change these!)
+### Admin login (staging / production)
+
+Set the admin account on the app service with environment variables (see
+`.env.example`):
+
+| Variable         | Required | Meaning                                                   |
+| ---------------- | -------- | --------------------------------------------------------- |
+| `ADMIN_EMAIL`    | yes      | Login email (the username on the sign-in screen)          |
+| `ADMIN_PASSWORD` | yes      | Login password, at least 6 characters                     |
+| `ADMIN_NAME`     | no       | Display name for the account (default `Administrator`)    |
+
+On every boot the app makes sure this account exists as an active admin: it is
+created on a fresh database, and on an already-seeded database the password is
+reset to `ADMIN_PASSWORD` and the role forced to admin. The env vars are the
+source of truth, so a password changed in the UI only lasts until the next
+restart — change the variable instead. Leave both unset to skip this entirely.
+
+### Default logins (local dev only — change these!)
+
+Used when `ADMIN_EMAIL` / `ADMIN_PASSWORD` are not set at first run:
 
 | Role     | Email                    | Password         |
 | -------- | ------------------------ | ---------------- |
@@ -381,7 +400,8 @@ is needed. Railway auto-detects the `Dockerfile` and uses it; the app listens on
 `$PORT` automatically.
 
 **Set `DATABASE_URL`** to your Postgres connection string (Railway → add a
-PostgreSQL plugin, then reference its `DATABASE_URL` on the app service). The
+PostgreSQL plugin, then reference its `DATABASE_URL` on the app service), and
+**`ADMIN_EMAIL` / `ADMIN_PASSWORD`** for the admin login (see above). The
 schema is created and seeded automatically on first connection, and the data
 lives in Postgres, so it survives redeploys with no volume to manage. Serverless
 platforms (e.g. Vercel) work too, as long as `DATABASE_URL` points at a hosted

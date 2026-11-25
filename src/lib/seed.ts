@@ -1,6 +1,7 @@
 import 'server-only';
 import type { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
+import { adminAccountFromEnv } from './admin-account';
 
 /**
  * Seed the database on first run only (when there are no users).
@@ -29,7 +30,15 @@ export async function ensureSeed(pool: Pool) {
       ).rows[0].id as number;
 
     // ---- Users ------------------------------------------------------------
-    const adminId = await insertUser('Will Deaton', 'wdeaton@dlomgroup.com', 'cornerstone2026', 'admin');
+    // The admin comes from ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME when set
+    // (see admin-account.ts); the hard-coded login below is the local-dev
+    // fallback only.
+    const admin = adminAccountFromEnv() ?? {
+      name: 'Will Deaton',
+      email: 'wdeaton@dlomgroup.com',
+      password: 'cornerstone2026',
+    };
+    const adminId = await insertUser(admin.name, admin.email, admin.password, 'admin');
     const mikeId = await insertUser('Mike Johnson', 'mike@dlomgroup.com', 'welcome123', 'employee');
     const daveId = await insertUser('Dave Smith', 'dave@dlomgroup.com', 'welcome123', 'employee');
 
@@ -146,7 +155,7 @@ export async function ensureSeed(pool: Pool) {
         'INSERT INTO notes (project_id, user_id, author_name, body, created_at) VALUES ($1,$2,$3,$4,$5)',
         [pid, uid, author, body, at]
       );
-    await insertNote(corbin, adminId, 'Will Deaton', 'Demo delayed one day — waiting on tile delivery from supplier.', isoTime(new Date(Date.now() - 4 * 864e5)));
+    await insertNote(corbin, adminId, admin.name, 'Demo delayed one day — waiting on tile delivery from supplier.', isoTime(new Date(Date.now() - 4 * 864e5)));
     await insertNote(corbin, mikeId, 'Mike Johnson', 'Framing and plumbing rough-in complete. Starting tile Thursday.', isoTime(new Date(Date.now() - 2 * 864e5)));
     await insertNote(bluegrass, daveId, 'Dave Smith', 'Furniture moved and subfloor prepped in the east lobby.', isoTime(new Date(Date.now() - 1 * 864e5)));
 
